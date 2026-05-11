@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import {
   renderScore,
@@ -6,7 +6,7 @@ import {
   DEFAULT_RENDER_OPTIONS,
   type MeasureLayout,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Note } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType } from '@shared/score'
 import {
   DURATION_UNITS,
   dottedUnits,
@@ -20,6 +20,83 @@ import {
 } from '@shared/musicUtils'
 
 const LINE_SPACING_PX = 10
+const BARLINE_HIT_RADIUS = 8
+
+// ── BarlinePicker ─────────────────────────────────────────────────────────────
+
+const BARLINE_OPTIONS: { label: string; value: BarlineType }[] = [
+  { label: 'Single',       value: 'single'       },
+  { label: 'Double',       value: 'double'       },
+  { label: 'Repeat Start', value: 'repeat-start' },
+  { label: 'Repeat End',   value: 'repeat-end'   },
+  { label: 'Final',        value: 'final'        },
+]
+
+interface BarlinePickerProps {
+  measureId: string
+  partId: string
+  staffId: string
+  isLastMeasure: boolean
+  screenX: number
+  screenY: number
+  onClose: () => void
+  onSelect: (measureId: string, partId: string, staffId: string, barline: BarlineType) => void
+}
+
+function BarlinePicker({
+  measureId, partId, staffId, isLastMeasure,
+  screenX, screenY, onClose, onSelect,
+}: BarlinePickerProps): JSX.Element {
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const handleOutside = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-barline-picker]')) onClose()
+    }
+    window.addEventListener('keydown', handleKey)
+    const timer = setTimeout(() => window.addEventListener('mousedown', handleOutside), 0)
+    return () => {
+      window.removeEventListener('keydown', handleKey)
+      clearTimeout(timer)
+      window.removeEventListener('mousedown', handleOutside)
+    }
+  }, [onClose])
+
+  return (
+    <div
+      data-barline-picker=""
+      style={{
+        position: 'fixed', left: screenX, top: screenY,
+        background: '#fff', border: '1px solid #ccc', borderRadius: 4,
+        padding: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+        zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 120,
+      }}
+    >
+      {isLastMeasure && (
+        <div style={{ fontSize: 11, color: '#888', marginBottom: 4, padding: '0 4px' }}>
+          Final barline is locked
+        </div>
+      )}
+      {BARLINE_OPTIONS.map(({ label, value }) => {
+        const disabled = isLastMeasure && value !== 'final'
+        return (
+          <button
+            key={value}
+            disabled={disabled}
+            onClick={() => { if (!disabled) onSelect(measureId, partId, staffId, value) }}
+            style={{
+              padding: '3px 8px', fontSize: 12, textAlign: 'left',
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              opacity: disabled ? 0.4 : 1,
+              background: 'none', border: '1px solid transparent', borderRadius: 3,
+            }}
+          >
+            {label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -62,8 +139,18 @@ function findClickedLayout(
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+interface PickerState {
+  measureId: string
+  partId: string
+  staffId: string
+  isLastMeasure: boolean
+  screenX: number
+  screenY: number
+}
+
 export function ScoreCanvas(): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [pickerState, setPickerState] = useState<PickerState | null>(null)
 
   const {
     score, zoom, inputMode,
@@ -73,7 +160,7 @@ export function ScoreCanvas(): JSX.Element {
     dispatch, setInputMode,
     setSelectedDuration, toggleDot, setPrimedAccidental,
     setCursor, setLastEnteredPitch,
-    setSelectedNote,
+    setSelectedNote, setSelectedBarline,
     moveCursorToFirstAvailable,
   } = useAppStore()
 
@@ -442,12 +529,61 @@ export function ScoreCanvas(): JSX.Element {
     }
 
     if (inputMode === 'select') {
-      // Find if a note was clicked (approximate: check if click X is within note area)
-      // For now, select the measure and deselect any note
+      const STAVE_HEIGHT = 4 * LINE_SPACING_PX
+
+      // Check if click is near any measure's right barline
+      for (const l of layouts) {
+        const barlineCanvasX = l.x + l.width
+        if (
+          Math.abs(canvasX - barlineCanvasX) <= BARLINE_HIT_RADIUS &&
+          canvasY >= l.staveTopY - 30 &&
+          canvasY <= l.staveTopY + STAVE_HEIGHT + 30
+        ) {
+          const part  = score.parts.find(p => p.id === l.partId)
+          const staff = part?.staves.find(s => s.id === l.staffId)
+          const isLastMeasure = staff?.measures[staff.measures.length - 1]?.id === l.measureId
+          const rect = canvas.getBoundingClientRect()
+          setSelectedBarline(l.measureId)
+          setPickerState({
+            measureId: l.measureId,
+            partId: l.partId,
+            staffId: l.staffId,
+            isLastMeasure: isLastMeasure ?? false,
+            screenX: rect.left + barlineCanvasX + 4,
+            screenY: rect.top  + l.staveTopY,
+          })
+          return
+        }
+      }
+
+      // No barline hit — close picker and deselect
+      setSelectedBarline(null)
+      setPickerState(null)
       setSelectedNote(null)
-      // A future improvement: hit-test individual note heads via VexFlow positions
     }
   }
+
+  // ── Barline picker handlers ─────────────────────────────────────────────────
+
+  const closePicker = useCallback(() => {
+    setPickerState(null)
+    setSelectedBarline(null)
+  }, [setSelectedBarline])
+
+  const handleBarlineSelect = useCallback((
+    measureId: string, partId: string, staffId: string, barline: BarlineType
+  ) => {
+    dispatch({ type: 'SET_BARLINE', partId, staffId, measureId, barline })
+    setPickerState(null)
+    setSelectedBarline(null)
+  }, [dispatch, setSelectedBarline])
+
+  // Close picker when leaving select mode
+  useEffect(() => {
+    if (inputMode !== 'select') {
+      setPickerState(null)
+    }
+  }, [inputMode])
 
   // ── Cursor style per mode ───────────────────────────────────────────────────
 
@@ -458,17 +594,31 @@ export function ScoreCanvas(): JSX.Element {
     : 'default'
 
   return (
-    <div style={{
-      background: '#ffffff',
-      borderRadius: 4,
-      display: 'inline-block',
-      minWidth: '100%',
-    }}>
-      <canvas
-        ref={canvasRef}
-        onClick={handleCanvasClick}
-        style={{ cursor: cursorStyle, display: 'block' }}
-      />
-    </div>
+    <>
+      <div style={{
+        background: '#ffffff',
+        borderRadius: 4,
+        display: 'inline-block',
+        minWidth: '100%',
+      }}>
+        <canvas
+          ref={canvasRef}
+          onClick={handleCanvasClick}
+          style={{ cursor: cursorStyle, display: 'block' }}
+        />
+      </div>
+      {pickerState && (
+        <BarlinePicker
+          measureId={pickerState.measureId}
+          partId={pickerState.partId}
+          staffId={pickerState.staffId}
+          isLastMeasure={pickerState.isLastMeasure}
+          screenX={pickerState.screenX}
+          screenY={pickerState.screenY}
+          onClose={closePicker}
+          onSelect={handleBarlineSelect}
+        />
+      )}
+    </>
   )
 }

@@ -21,6 +21,7 @@ export interface AppState {
   // Editor state
   selectedNoteId: string | null
   selectedMeasureId: string | null
+  selectedBarlineId: string | null   // measure ID whose right barline is selected
   inputMode: InputMode
   zoom: number
 
@@ -48,6 +49,7 @@ export interface AppState {
   setZoom: (zoom: number) => void
   setSelectedNote: (noteId: string | null) => void
   setSelectedMeasure: (measureId: string | null) => void
+  setSelectedBarline: (measureId: string | null) => void
   setPlaying: (playing: boolean) => void
   setSelectedDuration: (duration: Duration) => void
   toggleDot: () => void
@@ -55,6 +57,7 @@ export interface AppState {
   setCursor: (measureId: string | null, beatPosition: number) => void
   setLastEnteredPitch: (pitch: Pitch | null) => void
   moveCursorToFirstAvailable: () => void
+  checkAndAutoAddBar: () => void
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -68,6 +71,7 @@ export const useAppStore = create<AppState>()(
     redoStack: [],
     selectedNoteId: null,
     selectedMeasureId: null,
+    selectedBarlineId: null,
     inputMode: 'note',
     zoom: 1.0,
 
@@ -91,6 +95,9 @@ export const useAppStore = create<AppState>()(
         state.score = next as any
         state.isDirty = true
       })
+      if (command.type === 'ADD_NOTE') {
+        get().checkAndAutoAddBar()
+      }
     },
 
     undo: () => {
@@ -124,6 +131,7 @@ export const useAppStore = create<AppState>()(
         state.cursorBeatPosition = 0
         state.lastEnteredPitch = null
         state.selectedNoteId = null
+        state.selectedBarlineId = null
       })
     },
 
@@ -138,6 +146,7 @@ export const useAppStore = create<AppState>()(
         state.cursorBeatPosition = 0
         state.lastEnteredPitch = null
         state.selectedNoteId = null
+        state.selectedBarlineId = null
       })
     },
 
@@ -168,6 +177,7 @@ export const useAppStore = create<AppState>()(
       set(s => {
         s.inputMode = mode
         s.primedAccidental = null
+        s.selectedBarlineId = null
         if (mode !== 'note' && mode !== 'rest') {
           s.cursorMeasureId = null
           s.cursorBeatPosition = 0
@@ -182,6 +192,7 @@ export const useAppStore = create<AppState>()(
     setZoom: (zoom) => set(s => { s.zoom = Math.max(0.25, Math.min(4, zoom)) }),
     setSelectedNote: (id) => set(s => { s.selectedNoteId = id }),
     setSelectedMeasure: (id) => set(s => { s.selectedMeasureId = id }),
+    setSelectedBarline: (id) => set(s => { s.selectedBarlineId = id }),
     setPlaying: (playing) => set(s => { s.isPlaying = playing }),
     setSelectedDuration: (duration) => set(s => { s.selectedDuration = duration }),
     toggleDot: () => set(s => { s.isDotted = !s.isDotted }),
@@ -212,6 +223,58 @@ export const useAppStore = create<AppState>()(
         }
         state.cursorMeasureId = null
         state.cursorBeatPosition = 0
+      })
+    },
+
+    checkAndAutoAddBar: () => {
+      const score = get().score
+      const firstPart = score.parts[0]
+      if (!firstPart) return
+      const firstStaff = firstPart.staves[0]
+      if (!firstStaff) return
+
+      const measures = firstStaff.measures
+      const lastMeasure = measures[measures.length - 1]
+      if (!lastMeasure) return
+
+      const voice = lastMeasure.voices[0]
+      const timeSig = lastMeasure.timeSignature ?? score.timeSignature
+      if (usedUnits(voice?.events ?? []) < measureCapacityUnits(timeSig)) return
+
+      // Atomically: add measure + fix barlines (single undo step)
+      set(state => {
+        const prev = state.score as Score
+        let s = prev
+
+        s = applyCommand(s, {
+          type:           'ADD_MEASURE',
+          partId:         firstPart.id,
+          staffId:        firstStaff.id,
+          afterMeasureId: lastMeasure.id,
+        })
+
+        const updatedMeasures = s.parts[0]!.staves[0]!.measures
+        const newLast  = updatedMeasures[updatedMeasures.length - 1]
+        const prevLast = updatedMeasures[updatedMeasures.length - 2]
+
+        if (prevLast) {
+          s = applyCommand(s, {
+            type: 'SET_BARLINE', partId: firstPart.id, staffId: firstStaff.id,
+            measureId: prevLast.id, barline: 'single',
+          })
+        }
+        if (newLast) {
+          s = applyCommand(s, {
+            type: 'SET_BARLINE', partId: firstPart.id, staffId: firstStaff.id,
+            measureId: newLast.id, barline: 'final',
+          })
+        }
+
+        state.undoStack.push(prev as any)
+        if (state.undoStack.length > 100) state.undoStack.shift()
+        state.redoStack = []
+        state.score = s as any
+        state.isDirty = true
       })
     },
   }))

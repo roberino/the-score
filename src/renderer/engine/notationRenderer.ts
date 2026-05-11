@@ -13,6 +13,7 @@ import {
   Formatter,
   Beam,
   Accidental as VexAccidental,
+  BarlineType,
   type RenderContext
 } from 'vexflow'
 
@@ -30,7 +31,16 @@ const DURATION_MAP: Record<Duration, string> = {
   '64th':  '64'
 }
 
-// ── Pitch → VexFlow key string  e.g. { noteName: 'C', octave: 4 } → "c/4" ───
+// ── Barline mapping: our model → VexFlow BarlineType ─────────────────────────
+
+const END_BARLINE_MAP: Record<string, number> = {
+  single:        BarlineType.SINGLE,
+  double:        BarlineType.DOUBLE,
+  final:         BarlineType.END,
+  'repeat-end':  BarlineType.REPEAT_END,
+}
+
+// ── Pitch → VexFlow key string ────────────────────────────────────────────────
 
 function pitchToVexKey(pitch: { noteName: string; octave: number; accidental: string | null }): string {
   return `${pitch.noteName.toLowerCase()}/${pitch.octave}`
@@ -54,9 +64,7 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean): StaveNote {
           : 'bb'
         staveNote.addModifier(new VexAccidental(acc), 0)
       }
-      if (selected) {
-        staveNote.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
-      }
+      if (selected) staveNote.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
       return staveNote
     }
     case 'rest': {
@@ -65,9 +73,7 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean): StaveNote {
         keys: ['b/4'],
         duration: DURATION_MAP[r.duration] + (r.dots > 0 ? 'd'.repeat(r.dots) : '') + 'r'
       })
-      if (selected) {
-        staveNote.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
-      }
+      if (selected) staveNote.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
       return staveNote
     }
     case 'chord': {
@@ -101,7 +107,6 @@ export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
 }
 
 // ── Layout ────────────────────────────────────────────────────────────────────
-// Pure function: computes bounding positions for each measure without rendering.
 
 export interface MeasureLayout {
   measureId: string
@@ -111,12 +116,11 @@ export interface MeasureLayout {
   clef: ClefType
   x: number
   staveTopY: number   // y of the actual top staff LINE (not VexFlow stave.y)
-  staveY: number      // raw y passed to new Stave() — needed for the renderer
+  staveY: number      // raw y passed to new Stave()
   width: number
 }
 
 // VexFlow 5 default: spaceAboveStaffLn = 4, spacingBetweenLinesPx = 10
-// So the top staff line sits 40px below the stave.y parameter.
 const VEXFLOW_HEADROOM_PX = 40
 
 export function computeLayout(score: Score, options: RenderOptions): MeasureLayout[] {
@@ -139,8 +143,8 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
           voiceId:   measure.voices[0]?.id ?? '',
           clef:      staff.clef,
           x,
-          staveTopY: y + VEXFLOW_HEADROOM_PX,   // actual top staff line
-          staveY:    y,                           // raw VexFlow stave.y
+          staveTopY: y + VEXFLOW_HEADROOM_PX,
+          staveY:    y,
           width:     staveWidth,
         })
       })
@@ -154,8 +158,8 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
 
 export interface RenderCursorOptions {
   cursorMeasureId: string | null
-  cursorBeatPosition: number          // in 64th-note units
-  totalCapacityUnits: number          // 64th-note units per measure
+  cursorBeatPosition: number
+  totalCapacityUnits: number
 }
 
 export function renderScore(
@@ -212,53 +216,77 @@ function renderStaff(
   const rowHeight = staveHeight * totalParts + 40
 
   staff.measures.forEach((measure, measureIndex) => {
-    const lineIndex  = Math.floor(measureIndex / measuresPerLine)
-    const colIndex   = measureIndex % measuresPerLine
-
+    const lineIndex = Math.floor(measureIndex / measuresPerLine)
+    const colIndex  = measureIndex % measuresPerLine
     const x = marginX + colIndex * staveWidth
     const y = marginY + lineIndex * rowHeight + partIndex * staveHeight
 
-    renderMeasure(ctx, measure, staff.clef, x, y, staveWidth, measureIndex === 0, selectedNoteId)
+    const prevMeasure = staff.measures[measureIndex - 1]
+    renderMeasure(ctx, measure, prevMeasure, staff.clef, x, y, staveWidth, measureIndex, selectedNoteId)
   })
 }
 
 function renderMeasure(
   ctx: RenderContext,
   measure: Measure,
+  prevMeasure: Measure | undefined,
   clefType: string,
   x: number,
   y: number,
   width: number,
-  isFirstMeasure: boolean,
+  measureIndex: number,
   selectedNoteId: string | null
 ): void {
   const stave = new Stave(x, y, width)
 
-  if (isFirstMeasure) {
+  if (measureIndex === 0) {
     stave.addClef(clefType)
     stave.addTimeSignature('4/4')
   }
 
+  // Apply end barline type
+  if (measure.barline && measure.barline !== 'repeat-start') {
+    stave.setEndBarType(END_BARLINE_MAP[measure.barline] ?? BarlineType.SINGLE)
+  }
+
+  // Apply repeat-begin to this stave's left edge when the previous bar had repeat-start
+  if (prevMeasure?.barline === 'repeat-start') {
+    stave.setBegBarType(BarlineType.REPEAT_BEGIN)
+  }
+
   stave.setContext(ctx).draw()
 
+  // Bar numbers: show above the first measure of each new line (but not bar 1)
+  if (measureIndex > 0 && measureIndex % 4 === 0) {
+    const nativeCtx: CanvasRenderingContext2D | null =
+      typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
+    if (nativeCtx) {
+      nativeCtx.save()
+      nativeCtx.font = '11px sans-serif'
+      nativeCtx.fillStyle = '#555'
+      nativeCtx.fillText(String(measureIndex + 1), x + 2, y + VEXFLOW_HEADROOM_PX - 4)
+      nativeCtx.restore()
+    }
+  }
+
   const voice0 = measure.voices[0]
-  if (!voice0 || voice0.events.length === 0) return
+  const events = voice0?.events ?? []
 
-  const staveNotes = voice0.events.map(e => noteEventToStaveNote(e, e.id === selectedNoteId))
+  if (events.length === 0) {
+    // Whole rest for empty bar (display-only, not stored)
+    const wholeRest = new StaveNote({ keys: ['b/4'], duration: 'wr' })
+    const vexVoice = new VexVoice({ numBeats: 4, beatValue: 4 }).setStrict(false)
+    vexVoice.addTickables([wholeRest])
+    new Formatter().joinVoices([vexVoice]).format([vexVoice], width - 40)
+    vexVoice.draw(ctx, stave)
+    return
+  }
 
-  const vexVoice = new VexVoice({
-    numBeats: 4,
-    beatValue: 4
-  }).setStrict(false)
-
+  const staveNotes = events.map(e => noteEventToStaveNote(e, e.id === selectedNoteId))
+  const vexVoice = new VexVoice({ numBeats: 4, beatValue: 4 }).setStrict(false)
   vexVoice.addTickables(staveNotes)
-
   const beams = Beam.generateBeams(staveNotes)
-
-  new Formatter()
-    .joinVoices([vexVoice])
-    .format([vexVoice], width - 40)
-
+  new Formatter().joinVoices([vexVoice]).format([vexVoice], width - 40)
   vexVoice.draw(ctx, stave)
   beams.forEach(b => b.setContext(ctx).draw())
 }
@@ -266,7 +294,7 @@ function renderMeasure(
 // ── Cursor overlay ────────────────────────────────────────────────────────────
 
 const LINE_SPACING_PX = 10
-const STAVE_HEIGHT_PX = 4 * LINE_SPACING_PX  // 40px
+const STAVE_HEIGHT_PX = 4 * LINE_SPACING_PX
 
 function drawCursor(
   canvas: HTMLCanvasElement,

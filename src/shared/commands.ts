@@ -10,7 +10,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { produce } from 'immer'
-import type { Score, NoteEvent, Duration, ClefType, KeySignature, TimeSignature } from './score'
+import { createMeasure } from './score'
+import type { Score, NoteEvent, Duration, ClefType, KeySignature, TimeSignature, BarlineType } from './score'
 
 // ── Command discriminated union ───────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ export type Command =
   | { type: 'SET_NOTE_DURATION'; partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; duration: Duration; dots?: 0 | 1 | 2 }
   | { type: 'ADD_MEASURE';      partId: string; staffId: string; afterMeasureId: string }
   | { type: 'DELETE_MEASURE';   partId: string; staffId: string; measureId: string }
+  | { type: 'SET_BARLINE';      partId: string; staffId: string; measureId: string; barline: BarlineType }
   | { type: 'SET_CLEF';         partId: string; staffId: string; measureId: string; clef: ClefType }
   | { type: 'SET_KEY';          partId: string; staffId: string; measureId: string; key: KeySignature }
   | { type: 'SET_TIME';         partId: string; staffId: string; measureId: string; time: TimeSignature }
@@ -85,6 +87,35 @@ export function applyCommand(score: Score, command: Command): Score {
           ;(event as any).duration = command.duration
           if (command.dots !== undefined) (event as any).dots = command.dots
         }
+        break
+      }
+
+      case 'ADD_MEASURE': {
+        const part  = draft.parts.find(p => p.id === command.partId)
+        const staff = part?.staves.find(s => s.id === command.staffId)
+        if (!staff) break
+        const measures = staff.measures as typeof staff.measures extends readonly (infer T)[] ? T[] : never[]
+        const afterIdx = measures.findIndex(m => m.id === command.afterMeasureId)
+        if (afterIdx === -1) break
+        const newNumber = measures[afterIdx].number + 1
+        const newMeasure = createMeasure(newNumber, 'single')
+        // Renumber all measures after insertion point
+        measures.splice(afterIdx + 1, 0, newMeasure as any)
+        for (let i = afterIdx + 2; i < measures.length; i++) {
+          ;(measures[i] as any).number = i + 1
+        }
+        break
+      }
+
+      case 'SET_BARLINE': {
+        const part    = draft.parts.find(p => p.id === command.partId)
+        const staff   = part?.staves.find(s => s.id === command.staffId)
+        const measure = staff?.measures.find(m => m.id === command.measureId)
+        if (!measure) break
+        // Guard: never override the final barline of the last measure via this command
+        const isLast = staff!.measures[staff!.measures.length - 1].id === command.measureId
+        if (isLast && command.barline !== 'final') break
+        ;(measure as any).barline = command.barline
         break
       }
 

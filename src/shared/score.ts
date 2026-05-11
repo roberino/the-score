@@ -11,6 +11,7 @@ export type Accidental = 'sharp' | 'flat' | 'natural' | 'doubleSharp' | 'doubleF
 export type Duration =
   | 'whole' | 'half' | 'quarter' | 'eighth'
   | '16th' | '32nd' | '64th'
+export type BarlineType = 'single' | 'double' | 'final' | 'repeat-start' | 'repeat-end'
 
 export type ClefType = 'treble' | 'bass' | 'alto' | 'tenor' | 'percussion'
 
@@ -88,7 +89,7 @@ export interface Measure {
   readonly keySignature?: KeySignature
   readonly timeSignature?: TimeSignature
   readonly tempo?: number            // BPM — set when tempo changes
-  readonly barline?: 'single' | 'double' | 'final' | 'repeat-start' | 'repeat-end'
+  readonly barline?: BarlineType
 }
 
 export interface Staff {
@@ -163,19 +164,21 @@ export function createPart(name: string, shortName: string, midiProgram: number)
   }
 }
 
+const INITIAL_MEASURE_COUNT = 8
+
 export function createStaff(clef: ClefType): Staff {
-  return {
-    id: uuid(),
-    clef,
-    measures: [createMeasure(1)]
-  }
+  const measures = Array.from({ length: INITIAL_MEASURE_COUNT }, (_, i) =>
+    createMeasure(i + 1, i === INITIAL_MEASURE_COUNT - 1 ? 'final' : 'single')
+  )
+  return { id: uuid(), clef, measures }
 }
 
-export function createMeasure(number: number): Measure {
+export function createMeasure(number: number, barline: BarlineType = 'single'): Measure {
   return {
     id: uuid(),
     number,
-    voices: [{ id: uuid(), events: [] }]
+    voices: [{ id: uuid(), events: [] }],
+    barline,
   }
 }
 
