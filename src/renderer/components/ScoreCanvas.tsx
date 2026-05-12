@@ -6,7 +6,7 @@ import {
   DEFAULT_RENDER_OPTIONS,
   type MeasureLayout,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature } from '@shared/score'
 import {
   DURATION_UNITS,
   dottedUnits,
@@ -17,7 +17,10 @@ import {
   yToStep,
   KEY_TO_DURATION,
   remainingUnits,
+  resolveTimeSig,
+  timeSigsEqual,
 } from '@shared/musicUtils'
+import { TimeSignaturePicker } from './TimeSignaturePicker'
 
 const LINE_SPACING_PX = 10
 const BARLINE_HIT_RADIUS = 8
@@ -148,9 +151,19 @@ interface PickerState {
   screenY: number
 }
 
+interface TimeSigPickerState {
+  measureId: string | null   // null = score-level global
+  partId: string | null
+  staffId: string | null
+  current: TimeSignature
+  screenX: number
+  screenY: number
+}
+
 export function ScoreCanvas(): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [pickerState, setPickerState] = useState<PickerState | null>(null)
+  const [timeSigPickerState, setTimeSigPickerState] = useState<TimeSigPickerState | null>(null)
 
   const {
     score, zoom, inputMode,
@@ -530,6 +543,41 @@ export function ScoreCanvas(): JSX.Element {
 
     if (inputMode === 'select') {
       const STAVE_HEIGHT = 4 * LINE_SPACING_PX
+      const options = getRenderOptions(zoom)
+
+      // Check if click is on a displayed time signature (left preamble area of stave)
+      for (const l of layouts) {
+        if (
+          canvasX >= l.x && canvasX <= l.x + 70 &&
+          canvasY >= l.staveTopY - 30 && canvasY <= l.staveTopY + STAVE_HEIGHT + 30
+        ) {
+          const part  = score.parts.find(p => p.id === l.partId)
+          const staff = part?.staves.find(s => s.id === l.staffId)
+          if (!staff) continue
+
+          const mIdx = staff.measures.findIndex(m => m.id === l.measureId)
+          const effectiveSig = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
+          const prevSig = mIdx > 0 ? resolveTimeSig(staff.measures, mIdx - 1, score.timeSignature) : null
+          const isNewSystem = mIdx > 0 && mIdx % options.measuresPerLine === 0
+
+          const displaysTimeSig = mIdx === 0
+            || (prevSig !== null && !timeSigsEqual(effectiveSig, prevSig))
+            || (isNewSystem && !timeSigsEqual(effectiveSig, score.timeSignature))
+
+          if (!displaysTimeSig) continue
+
+          const rect = canvas.getBoundingClientRect()
+          setTimeSigPickerState({
+            measureId: l.measureId,
+            partId: l.partId,
+            staffId: l.staffId,
+            current: effectiveSig,
+            screenX: rect.left + l.x,
+            screenY: rect.top  + l.staveTopY + STAVE_HEIGHT + 10,
+          })
+          return
+        }
+      }
 
       // Check if click is near any measure's right barline
       for (const l of layouts) {
@@ -578,10 +626,26 @@ export function ScoreCanvas(): JSX.Element {
     setSelectedBarline(null)
   }, [dispatch, setSelectedBarline])
 
-  // Close picker when leaving select mode
+  // ── Time sig picker handlers ────────────────────────────────────────────────
+
+  const closeTimeSigPicker = useCallback(() => setTimeSigPickerState(null), [])
+
+  const handleTimeSigSelect = useCallback((sig: TimeSignature) => {
+    const s = timeSigPickerState
+    if (!s) return
+    if (s.measureId && s.partId && s.staffId) {
+      dispatch({ type: 'SET_TIME', partId: s.partId, staffId: s.staffId, measureId: s.measureId, time: sig })
+    } else {
+      dispatch({ type: 'SET_SCORE_TIME', time: sig })
+    }
+    setTimeSigPickerState(null)
+  }, [timeSigPickerState, dispatch])
+
+  // Close pickers when leaving select mode
   useEffect(() => {
     if (inputMode !== 'select') {
       setPickerState(null)
+      setTimeSigPickerState(null)
     }
   }, [inputMode])
 
@@ -617,6 +681,15 @@ export function ScoreCanvas(): JSX.Element {
           screenY={pickerState.screenY}
           onClose={closePicker}
           onSelect={handleBarlineSelect}
+        />
+      )}
+      {timeSigPickerState && (
+        <TimeSignaturePicker
+          current={timeSigPickerState.current}
+          screenX={timeSigPickerState.screenX}
+          screenY={timeSigPickerState.screenY}
+          onClose={closeTimeSigPicker}
+          onSelect={handleTimeSigSelect}
         />
       )}
     </>

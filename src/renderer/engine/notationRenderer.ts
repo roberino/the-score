@@ -17,7 +17,8 @@ import {
   type RenderContext
 } from 'vexflow'
 
-import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType } from '@shared/score'
+import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature } from '@shared/score'
+import { resolveTimeSig, timeSigsEqual } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
 
@@ -184,7 +185,7 @@ export function renderScore(
   const ctx = renderer.getContext()
   ctx.clear()
 
-  renderParts(ctx, score.parts, options, selectedNoteId)
+  renderParts(ctx, score.parts, score.timeSignature, options, selectedNoteId)
 
   if (cursor?.cursorMeasureId) {
     drawCursor(canvas, score, options, cursor)
@@ -194,12 +195,13 @@ export function renderScore(
 function renderParts(
   ctx: RenderContext,
   parts: readonly Part[],
+  scoreTimeSig: TimeSignature,
   options: RenderOptions,
   selectedNoteId: string | null
 ): void {
   parts.forEach((part, partIndex) => {
     part.staves.forEach((staff) => {
-      renderStaff(ctx, staff, partIndex, parts.length, options, selectedNoteId)
+      renderStaff(ctx, staff, partIndex, parts.length, scoreTimeSig, options, selectedNoteId)
     })
   })
 }
@@ -209,6 +211,7 @@ function renderStaff(
   staff: Staff,
   partIndex: number,
   totalParts: number,
+  scoreTimeSig: TimeSignature,
   options: RenderOptions,
   selectedNoteId: string | null
 ): void {
@@ -221,8 +224,17 @@ function renderStaff(
     const x = marginX + colIndex * staveWidth
     const y = marginY + lineIndex * rowHeight + partIndex * staveHeight
 
+    const effectiveSig  = resolveTimeSig(staff.measures, measureIndex, scoreTimeSig)
+    const prevSig       = measureIndex > 0
+      ? resolveTimeSig(staff.measures, measureIndex - 1, scoreTimeSig)
+      : null
+
     const prevMeasure = staff.measures[measureIndex - 1]
-    renderMeasure(ctx, measure, prevMeasure, staff.clef, x, y, staveWidth, measureIndex, selectedNoteId)
+    renderMeasure(
+      ctx, measure, prevMeasure,
+      effectiveSig, prevSig, scoreTimeSig,
+      staff.clef, x, y, staveWidth, measuresPerLine, measureIndex, selectedNoteId
+    )
   })
 }
 
@@ -230,19 +242,27 @@ function renderMeasure(
   ctx: RenderContext,
   measure: Measure,
   prevMeasure: Measure | undefined,
+  effectiveSig: TimeSignature,
+  prevSig: TimeSignature | null,
+  scoreTimeSig: TimeSignature,
   clefType: string,
   x: number,
   y: number,
   width: number,
+  measuresPerLine: number,
   measureIndex: number,
   selectedNoteId: string | null
 ): void {
   const stave = new Stave(x, y, width)
 
-  if (measureIndex === 0) {
-    stave.addClef(clefType)
-    stave.addTimeSignature('4/4')
-  }
+  const isNewSystem   = measureIndex > 0 && measureIndex % measuresPerLine === 0
+  const sigChanged    = prevSig !== null && !timeSigsEqual(effectiveSig, prevSig)
+  const showTimeSig   = measureIndex === 0
+    || sigChanged
+    || (isNewSystem && !timeSigsEqual(effectiveSig, scoreTimeSig))
+
+  if (measureIndex === 0) stave.addClef(clefType)
+  if (showTimeSig) stave.addTimeSignature(`${effectiveSig.numerator}/${effectiveSig.denominator}`)
 
   // Apply end barline type
   if (measure.barline && measure.barline !== 'repeat-start') {
@@ -275,7 +295,10 @@ function renderMeasure(
   if (events.length === 0) {
     // Whole rest for empty bar (display-only, not stored)
     const wholeRest = new StaveNote({ keys: ['b/4'], duration: 'wr' })
-    const vexVoice = new VexVoice({ numBeats: 4, beatValue: 4 }).setStrict(false)
+    const vexVoice = new VexVoice({
+      numBeats: effectiveSig.numerator,
+      beatValue: effectiveSig.denominator,
+    }).setStrict(false)
     vexVoice.addTickables([wholeRest])
     new Formatter().joinVoices([vexVoice]).format([vexVoice], width - 40)
     vexVoice.draw(ctx, stave)
@@ -283,7 +306,10 @@ function renderMeasure(
   }
 
   const staveNotes = events.map(e => noteEventToStaveNote(e, e.id === selectedNoteId))
-  const vexVoice = new VexVoice({ numBeats: 4, beatValue: 4 }).setStrict(false)
+  const vexVoice = new VexVoice({
+    numBeats: effectiveSig.numerator,
+    beatValue: effectiveSig.denominator,
+  }).setStrict(false)
   vexVoice.addTickables(staveNotes)
   const beams = Beam.generateBeams(staveNotes)
   new Formatter().joinVoices([vexVoice]).format([vexVoice], width - 40)

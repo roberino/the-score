@@ -35,6 +35,21 @@ export function remainingUnits(events: readonly NoteEvent[], timeSig: TimeSignat
   return measureCapacityUnits(timeSig) - usedUnits(events)
 }
 
+export function resolveTimeSig(
+  measures: readonly { timeSignature?: TimeSignature }[],
+  idx: number,
+  scoreDefault: TimeSignature
+): TimeSignature {
+  for (let i = idx; i >= 0; i--) {
+    if (measures[i].timeSignature) return measures[i].timeSignature!
+  }
+  return scoreDefault
+}
+
+export function timeSigsEqual(a: TimeSignature, b: TimeSignature): boolean {
+  return a.numerator === b.numerator && a.denominator === b.denominator
+}
+
 // ── Octave proximity ──────────────────────────────────────────────────────────
 // Given a target note name and the last entered pitch, choose the octave that
 // produces the smallest interval (preferring upward on ties).

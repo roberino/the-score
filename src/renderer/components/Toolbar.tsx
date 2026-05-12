@@ -1,6 +1,8 @@
+import { useState, useRef } from 'react'
 import { useAppStore, type InputMode } from '../store/appStore'
-import { DURATION_LABELS, KEY_TO_DURATION } from '@shared/musicUtils'
-import type { Duration } from '@shared/score'
+import { DURATION_LABELS, KEY_TO_DURATION, resolveTimeSig } from '@shared/musicUtils'
+import type { Duration, TimeSignature } from '@shared/score'
+import { TimeSignaturePicker } from './TimeSignaturePicker'
 
 const MODES: { mode: InputMode; label: string; key: string }[] = [
   { mode: 'select', label: 'Select', key: 'S' },
@@ -20,7 +22,36 @@ export function Toolbar(): JSX.Element {
     undoStack, redoStack,
     selectedDuration, setSelectedDuration,
     isDotted, toggleDot,
+    score, cursorMeasureId, dispatch,
   } = useAppStore()
+
+  const [timeSigPickerPos, setTimeSigPickerPos] = useState<{ x: number; y: number } | null>(null)
+  const timeSigBtnRef = useRef<HTMLButtonElement>(null)
+
+  // Resolve the display time sig: cursor measure's effective sig, else score default
+  const displayTimeSig: TimeSignature = (() => {
+    if (!cursorMeasureId) return score.timeSignature
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        const idx = staff.measures.findIndex(m => m.id === cursorMeasureId)
+        if (idx !== -1) return resolveTimeSig(staff.measures, idx, score.timeSignature)
+      }
+    }
+    return score.timeSignature
+  })()
+
+  const handleTimeSigClick = () => {
+    const btn = timeSigBtnRef.current
+    if (!btn) return
+    if (timeSigPickerPos) { setTimeSigPickerPos(null); return }
+    const rect = btn.getBoundingClientRect()
+    setTimeSigPickerPos({ x: rect.left, y: rect.bottom + 4 })
+  }
+
+  const handleTimeSigSelect = (sig: TimeSignature) => {
+    dispatch({ type: 'SET_SCORE_TIME', time: sig })
+    setTimeSigPickerPos(null)
+  }
 
   const showDurationRow = inputMode === 'note' || inputMode === 'rest' || inputMode === 'select'
 
@@ -77,7 +108,32 @@ export function Toolbar(): JSX.Element {
           label={isPlaying ? '⏹ Stop' : '▶ Play'}
           accent={isPlaying}
         />
+
+        <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
+
+        <button
+          ref={timeSigBtnRef}
+          onClick={handleTimeSigClick}
+          title="Time signature"
+          style={{
+            padding: '4px 10px', fontSize: 12, borderRadius: 3, border: 'none',
+            cursor: 'pointer', background: timeSigPickerPos ? '#0e639c' : 'transparent',
+            color: timeSigPickerPos ? '#fff' : '#9d9d9d',
+          }}
+        >
+          {displayTimeSig.numerator}/{displayTimeSig.denominator}
+        </button>
       </div>
+
+      {timeSigPickerPos && (
+        <TimeSignaturePicker
+          current={displayTimeSig}
+          screenX={timeSigPickerPos.x}
+          screenY={timeSigPickerPos.y}
+          onClose={() => setTimeSigPickerPos(null)}
+          onSelect={handleTimeSigSelect}
+        />
+      )}
 
       {/* ── Duration row ── */}
       {showDurationRow && (

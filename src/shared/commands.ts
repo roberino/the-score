@@ -12,6 +12,7 @@
 import { produce } from 'immer'
 import { createMeasure } from './score'
 import type { Score, NoteEvent, Duration, ClefType, KeySignature, TimeSignature, BarlineType } from './score'
+import { measureCapacityUnits, eventDurationUnits } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
 
@@ -26,9 +27,61 @@ export type Command =
   | { type: 'SET_CLEF';         partId: string; staffId: string; measureId: string; clef: ClefType }
   | { type: 'SET_KEY';          partId: string; staffId: string; measureId: string; key: KeySignature }
   | { type: 'SET_TIME';         partId: string; staffId: string; measureId: string; time: TimeSignature }
+  | { type: 'SET_SCORE_TIME';   time: TimeSignature }
   | { type: 'SET_TEMPO';        measureId: string; bpm: number }
   | { type: 'SET_TITLE';        title: string }
   | { type: 'SET_COMPOSER';     composer: string }
+
+// ── Spill-over helper ────────────────────────────────────────────────────────
+// Moves events that overflow each measure's capacity forward into the next
+// measure, starting from the measure identified by startMeasureId.
+
+function spillOverFrom(
+  measures: any[],
+  startMeasureId: string | undefined,
+  scoreTimeSig: TimeSignature
+): void {
+  if (!startMeasureId) return
+  const startIdx = measures.findIndex((m: any) => m.id === startMeasureId)
+  if (startIdx === -1) return
+
+  for (let i = startIdx; i < measures.length; i++) {
+    const voice = measures[i].voices?.[0]
+    if (!voice) continue
+
+    // Resolve effective time sig: walk back to nearest explicit override
+    let timeSig: TimeSignature = scoreTimeSig
+    for (let k = i; k >= 0; k--) {
+      if (measures[k].timeSignature) { timeSig = measures[k].timeSignature; break }
+    }
+
+    const capacity = measureCapacityUnits(timeSig)
+    const events: NoteEvent[] = voice.events
+
+    let used = 0
+    let splitIdx = events.length
+    for (let j = 0; j < events.length; j++) {
+      const units = eventDurationUnits(events[j])
+      if (used + units > capacity) { splitIdx = j; break }
+      used += units
+    }
+
+    if (splitIdx === events.length) break  // no overflow — done
+
+    const overflow = events.splice(splitIdx)
+
+    // Ensure a next measure exists
+    if (i + 1 >= measures.length) {
+      const prevLast = measures[measures.length - 1]
+      prevLast.barline = 'single'
+      const newMeasure = createMeasure(prevLast.number + 1, 'final') as any
+      measures.push(newMeasure)
+    }
+
+    const nextVoice = measures[i + 1].voices?.[0]
+    if (nextVoice) nextVoice.events.unshift(...overflow)
+  }
+}
 
 // ── Command executor ─────────────────────────────────────────────────────────
 // Applies a command to a Score and returns the new Score (immutably, via Immer).
@@ -128,6 +181,27 @@ export function applyCommand(score: Score, command: Command): Score {
       case 'SET_COMPOSER': {
         draft.metadata.composer = command.composer
         draft.metadata.updatedAt = new Date().toISOString()
+        break
+      }
+
+      case 'SET_TIME': {
+        const part  = draft.parts.find(p => p.id === command.partId)
+        const staff = part?.staves.find(s => s.id === command.staffId)
+        if (!staff) break
+        const measure = (staff.measures as any[]).find(m => m.id === command.measureId)
+        if (!measure) break
+        measure.timeSignature = command.time
+        spillOverFrom(staff.measures as any[], command.measureId, draft.timeSignature as TimeSignature)
+        break
+      }
+
+      case 'SET_SCORE_TIME': {
+        draft.timeSignature = command.time as any
+        for (const part of draft.parts) {
+          for (const staff of part.staves) {
+            spillOverFrom(staff.measures as any[], (staff.measures as any[])[0]?.id, command.time)
+          }
+        }
         break
       }
 
