@@ -26,6 +26,7 @@ export type Command =
   | { type: 'SET_BARLINE';      partId: string; staffId: string; measureId: string; barline: BarlineType }
   | { type: 'SET_CLEF';         partId: string; staffId: string; measureId: string; clef: ClefType }
   | { type: 'SET_KEY';          partId: string; staffId: string; measureId: string; key: KeySignature }
+  | { type: 'SET_SCORE_KEY';    key: KeySignature }
   | { type: 'SET_TIME';         partId: string; staffId: string; measureId: string; time: TimeSignature }
   | { type: 'SET_SCORE_TIME';   time: TimeSignature }
   | { type: 'SET_TEMPO';        measureId: string; bpm: number }
@@ -80,6 +81,46 @@ function spillOverFrom(
 
     const nextVoice = measures[i + 1].voices?.[0]
     if (nextVoice) nextVoice.events.unshift(...overflow)
+  }
+}
+
+// ── Accidental stripping helper ───────────────────────────────────────────────
+// When a key signature changes, remove explicit accidentals on notes that are
+// now implied by the new key.
+
+const SHARPS_ORDER = ['F', 'C', 'G', 'D', 'A', 'E', 'B']
+const FLATS_ORDER  = ['B', 'E', 'A', 'D', 'G', 'C', 'F']
+
+function stripAccidentalsFrom(
+  measures: any[],
+  startId: string,
+  key: KeySignature
+): void {
+  const implied = new Map<string, 'sharp' | 'flat'>()
+  if (key.fifths > 0) {
+    for (let i = 0; i < Math.min(key.fifths, 7); i++) implied.set(SHARPS_ORDER[i], 'sharp')
+  } else if (key.fifths < 0) {
+    for (let i = 0; i < Math.min(-key.fifths, 7); i++) implied.set(FLATS_ORDER[i], 'flat')
+  }
+  if (implied.size === 0) return
+
+  const startIdx = measures.findIndex((m: any) => m.id === startId)
+  if (startIdx === -1) return
+
+  for (let i = startIdx; i < measures.length; i++) {
+    for (const voice of measures[i].voices ?? []) {
+      for (const event of voice.events ?? []) {
+        if (event.type === 'note') {
+          const acc = implied.get(event.pitch.noteName)
+          if (acc && event.pitch.accidental === acc) event.pitch.accidental = null
+        } else if (event.type === 'chord') {
+          for (const pitch of event.pitches ?? []) {
+            const acc = implied.get(pitch.noteName)
+            if (acc && pitch.accidental === acc) pitch.accidental = null
+          }
+        }
+      }
+    }
   }
 }
 
@@ -181,6 +222,28 @@ export function applyCommand(score: Score, command: Command): Score {
       case 'SET_COMPOSER': {
         draft.metadata.composer = command.composer
         draft.metadata.updatedAt = new Date().toISOString()
+        break
+      }
+
+      case 'SET_KEY': {
+        const part  = draft.parts.find(p => p.id === command.partId)
+        const staff = part?.staves.find(s => s.id === command.staffId)
+        if (!staff) break
+        const measure = (staff.measures as any[]).find(m => m.id === command.measureId)
+        if (!measure) break
+        measure.keySignature = command.key
+        stripAccidentalsFrom(staff.measures as any[], command.measureId, command.key)
+        break
+      }
+
+      case 'SET_SCORE_KEY': {
+        draft.keySignature = command.key as any
+        for (const part of draft.parts) {
+          for (const staff of part.staves) {
+            const firstId = (staff.measures as any[])[0]?.id
+            if (firstId) stripAccidentalsFrom(staff.measures as any[], firstId, command.key)
+          }
+        }
         break
       }
 

@@ -1,4 +1,4 @@
-import type { Duration, NoteName, Pitch, NoteEvent, TimeSignature, ClefType } from './score'
+import type { Duration, NoteName, Pitch, NoteEvent, TimeSignature, KeySignature, ClefType } from './score'
 
 // ── Duration arithmetic (64th-note units) ─────────────────────────────────────
 
@@ -48,6 +48,32 @@ export function resolveTimeSig(
 
 export function timeSigsEqual(a: TimeSignature, b: TimeSignature): boolean {
   return a.numerator === b.numerator && a.denominator === b.denominator
+}
+
+export function resolveKeySig(
+  measures: readonly { keySignature?: KeySignature }[],
+  idx: number,
+  scoreDefault: KeySignature
+): KeySignature {
+  for (let i = idx; i >= 0; i--) {
+    if (measures[i].keySignature) return measures[i].keySignature!
+  }
+  return scoreDefault
+}
+
+const MAJOR_KEY_LABELS: Partial<Record<number, string>> = {
+  0: 'C', 1: 'G', 2: 'D', 3: 'A', 4: 'E', 5: 'B', 6: 'F#', 7: 'C#',
+  [-1]: 'F', [-2]: 'Bb', [-3]: 'Eb', [-4]: 'Ab', [-5]: 'Db', [-6]: 'Gb', [-7]: 'Cb',
+}
+
+const MINOR_KEY_LABELS: Partial<Record<number, string>> = {
+  0: 'A', 1: 'E', 2: 'B', 3: 'F#', 4: 'C#', 5: 'G#', 6: 'D#',
+  [-1]: 'D', [-2]: 'G', [-3]: 'C', [-4]: 'F', [-5]: 'Bb', [-6]: 'Eb', [-7]: 'Ab',
+}
+
+export function keyLabel(key: KeySignature): string {
+  if (key.mode === 'major') return `${MAJOR_KEY_LABELS[key.fifths] ?? 'C'} maj`
+  return `${MINOR_KEY_LABELS[key.fifths] ?? 'A'} min`
 }
 
 // ── Octave proximity ──────────────────────────────────────────────────────────

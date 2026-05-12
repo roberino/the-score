@@ -1,8 +1,9 @@
 import { useState, useRef } from 'react'
 import { useAppStore, type InputMode } from '../store/appStore'
-import { DURATION_LABELS, KEY_TO_DURATION, resolveTimeSig } from '@shared/musicUtils'
-import type { Duration, TimeSignature } from '@shared/score'
+import { DURATION_LABELS, KEY_TO_DURATION, resolveTimeSig, resolveKeySig, keyLabel } from '@shared/musicUtils'
+import type { Duration, TimeSignature, KeySignature } from '@shared/score'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
+import { CircleOfFifths } from './CircleOfFifths'
 
 const MODES: { mode: InputMode; label: string; key: string }[] = [
   { mode: 'select', label: 'Select', key: 'S' },
@@ -27,6 +28,8 @@ export function Toolbar(): JSX.Element {
 
   const [timeSigPickerPos, setTimeSigPickerPos] = useState<{ x: number; y: number } | null>(null)
   const timeSigBtnRef = useRef<HTMLButtonElement>(null)
+  const [keySigPickerPos, setKeySigPickerPos] = useState<{ x: number; y: number } | null>(null)
+  const keySigBtnRef = useRef<HTMLButtonElement>(null)
 
   // Resolve the display time sig: cursor measure's effective sig, else score default
   const displayTimeSig: TimeSignature = (() => {
@@ -39,6 +42,31 @@ export function Toolbar(): JSX.Element {
     }
     return score.timeSignature
   })()
+
+  // Resolve display key sig
+  const displayKeySig: KeySignature = (() => {
+    if (!cursorMeasureId) return score.keySignature
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        const idx = staff.measures.findIndex(m => m.id === cursorMeasureId)
+        if (idx !== -1) return resolveKeySig(staff.measures, idx, score.keySignature)
+      }
+    }
+    return score.keySignature
+  })()
+
+  const handleKeySigClick = () => {
+    const btn = keySigBtnRef.current
+    if (!btn) return
+    if (keySigPickerPos) { setKeySigPickerPos(null); return }
+    const rect = btn.getBoundingClientRect()
+    setKeySigPickerPos({ x: rect.left, y: rect.bottom + 4 })
+  }
+
+  const handleKeySigSelect = (key: KeySignature) => {
+    dispatch({ type: 'SET_SCORE_KEY', key })
+    setKeySigPickerPos(null)
+  }
 
   const handleTimeSigClick = () => {
     const btn = timeSigBtnRef.current
@@ -123,6 +151,19 @@ export function Toolbar(): JSX.Element {
         >
           {displayTimeSig.numerator}/{displayTimeSig.denominator}
         </button>
+
+        <button
+          ref={keySigBtnRef}
+          onClick={handleKeySigClick}
+          title="Key signature"
+          style={{
+            padding: '4px 10px', fontSize: 12, borderRadius: 3, border: 'none',
+            cursor: 'pointer', background: keySigPickerPos ? '#0e639c' : 'transparent',
+            color: keySigPickerPos ? '#fff' : '#9d9d9d',
+          }}
+        >
+          {keyLabel(displayKeySig)}
+        </button>
       </div>
 
       {timeSigPickerPos && (
@@ -132,6 +173,15 @@ export function Toolbar(): JSX.Element {
           screenY={timeSigPickerPos.y}
           onClose={() => setTimeSigPickerPos(null)}
           onSelect={handleTimeSigSelect}
+        />
+      )}
+      {keySigPickerPos && (
+        <CircleOfFifths
+          current={displayKeySig}
+          screenX={keySigPickerPos.x}
+          screenY={keySigPickerPos.y}
+          onClose={() => setKeySigPickerPos(null)}
+          onSelect={handleKeySigSelect}
         />
       )}
 

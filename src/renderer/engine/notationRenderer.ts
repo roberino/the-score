@@ -17,8 +17,8 @@ import {
   type RenderContext
 } from 'vexflow'
 
-import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature } from '@shared/score'
-import { resolveTimeSig, timeSigsEqual } from '@shared/musicUtils'
+import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature } from '@shared/score'
+import { resolveTimeSig, timeSigsEqual, resolveKeySig } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
 
@@ -30,6 +30,13 @@ const DURATION_MAP: Record<Duration, string> = {
   '16th':  '16',
   '32nd':  '32',
   '64th':  '64'
+}
+
+// ── Key signature mapping: fifths count → VexFlow key name ───────────────────
+
+const FIFTHS_TO_VEX_KEY: Partial<Record<number, string>> = {
+  0: 'C', 1: 'G', 2: 'D', 3: 'A', 4: 'E', 5: 'B', 6: 'F#', 7: 'C#',
+  [-1]: 'F', [-2]: 'Bb', [-3]: 'Eb', [-4]: 'Ab', [-5]: 'Db', [-6]: 'Gb', [-7]: 'Cb',
 }
 
 // ── Barline mapping: our model → VexFlow BarlineType ─────────────────────────
@@ -185,7 +192,7 @@ export function renderScore(
   const ctx = renderer.getContext()
   ctx.clear()
 
-  renderParts(ctx, score.parts, score.timeSignature, options, selectedNoteId)
+  renderParts(ctx, score.parts, score.keySignature, score.timeSignature, options, selectedNoteId)
 
   if (cursor?.cursorMeasureId) {
     drawCursor(canvas, score, options, cursor)
@@ -195,13 +202,14 @@ export function renderScore(
 function renderParts(
   ctx: RenderContext,
   parts: readonly Part[],
+  scoreKeySig: KeySignature,
   scoreTimeSig: TimeSignature,
   options: RenderOptions,
   selectedNoteId: string | null
 ): void {
   parts.forEach((part, partIndex) => {
     part.staves.forEach((staff) => {
-      renderStaff(ctx, staff, partIndex, parts.length, scoreTimeSig, options, selectedNoteId)
+      renderStaff(ctx, staff, partIndex, parts.length, scoreKeySig, scoreTimeSig, options, selectedNoteId)
     })
   })
 }
@@ -211,6 +219,7 @@ function renderStaff(
   staff: Staff,
   partIndex: number,
   totalParts: number,
+  scoreKeySig: KeySignature,
   scoreTimeSig: TimeSignature,
   options: RenderOptions,
   selectedNoteId: string | null
@@ -224,6 +233,11 @@ function renderStaff(
     const x = marginX + colIndex * staveWidth
     const y = marginY + lineIndex * rowHeight + partIndex * staveHeight
 
+    const effectiveKey  = resolveKeySig(staff.measures, measureIndex, scoreKeySig)
+    const prevKey       = measureIndex > 0
+      ? resolveKeySig(staff.measures, measureIndex - 1, scoreKeySig)
+      : null
+
     const effectiveSig  = resolveTimeSig(staff.measures, measureIndex, scoreTimeSig)
     const prevSig       = measureIndex > 0
       ? resolveTimeSig(staff.measures, measureIndex - 1, scoreTimeSig)
@@ -232,6 +246,7 @@ function renderStaff(
     const prevMeasure = staff.measures[measureIndex - 1]
     renderMeasure(
       ctx, measure, prevMeasure,
+      effectiveKey, prevKey,
       effectiveSig, prevSig, scoreTimeSig,
       staff.clef, x, y, staveWidth, measuresPerLine, measureIndex, selectedNoteId
     )
@@ -242,6 +257,8 @@ function renderMeasure(
   ctx: RenderContext,
   measure: Measure,
   prevMeasure: Measure | undefined,
+  effectiveKey: KeySignature,
+  prevKey: KeySignature | null,
   effectiveSig: TimeSignature,
   prevSig: TimeSignature | null,
   scoreTimeSig: TimeSignature,
@@ -256,12 +273,16 @@ function renderMeasure(
   const stave = new Stave(x, y, width)
 
   const isNewSystem   = measureIndex > 0 && measureIndex % measuresPerLine === 0
+  const keyChanged    = prevKey !== null && prevKey.fifths !== effectiveKey.fifths
+  const showKeySig    = (measureIndex === 0 && effectiveKey.fifths !== 0) || keyChanged
   const sigChanged    = prevSig !== null && !timeSigsEqual(effectiveSig, prevSig)
   const showTimeSig   = measureIndex === 0
     || sigChanged
     || (isNewSystem && !timeSigsEqual(effectiveSig, scoreTimeSig))
 
   if (measureIndex === 0) stave.addClef(clefType)
+  // Key sig before time sig (standard order: clef → key → time)
+  if (showKeySig) stave.addKeySignature(FIFTHS_TO_VEX_KEY[effectiveKey.fifths] ?? 'C')
   if (showTimeSig) stave.addTimeSignature(`${effectiveSig.numerator}/${effectiveSig.denominator}`)
 
   // Apply end barline type

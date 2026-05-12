@@ -6,7 +6,7 @@ import {
   DEFAULT_RENDER_OPTIONS,
   type MeasureLayout,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature, type KeySignature } from '@shared/score'
 import {
   DURATION_UNITS,
   dottedUnits,
@@ -19,8 +19,10 @@ import {
   remainingUnits,
   resolveTimeSig,
   timeSigsEqual,
+  resolveKeySig,
 } from '@shared/musicUtils'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
+import { CircleOfFifths } from './CircleOfFifths'
 
 const LINE_SPACING_PX = 10
 const BARLINE_HIT_RADIUS = 8
@@ -160,10 +162,20 @@ interface TimeSigPickerState {
   screenY: number
 }
 
+interface KeySigPickerState {
+  measureId: string
+  partId: string
+  staffId: string
+  current: KeySignature
+  screenX: number
+  screenY: number
+}
+
 export function ScoreCanvas(): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [pickerState, setPickerState] = useState<PickerState | null>(null)
   const [timeSigPickerState, setTimeSigPickerState] = useState<TimeSigPickerState | null>(null)
+  const [keySigPickerState, setKeySigPickerState] = useState<KeySigPickerState | null>(null)
 
   const {
     score, zoom, inputMode,
@@ -545,6 +557,38 @@ export function ScoreCanvas(): JSX.Element {
       const STAVE_HEIGHT = 4 * LINE_SPACING_PX
       const options = getRenderOptions(zoom)
 
+      // Check if click is on a displayed key signature (leftmost preamble area)
+      for (const l of layouts) {
+        if (
+          canvasX >= l.x && canvasX <= l.x + 90 &&
+          canvasY >= l.staveTopY - 30 && canvasY <= l.staveTopY + STAVE_HEIGHT + 30
+        ) {
+          const part  = score.parts.find(p => p.id === l.partId)
+          const staff = part?.staves.find(s => s.id === l.staffId)
+          if (!staff) continue
+
+          const mIdx = staff.measures.findIndex(m => m.id === l.measureId)
+          const effectiveKey = resolveKeySig(staff.measures, mIdx, score.keySignature)
+          const prevKey = mIdx > 0 ? resolveKeySig(staff.measures, mIdx - 1, score.keySignature) : null
+
+          const displaysKeySig = (mIdx === 0 && effectiveKey.fifths !== 0)
+            || (prevKey !== null && prevKey.fifths !== effectiveKey.fifths)
+
+          if (!displaysKeySig) continue
+
+          const rect = canvas.getBoundingClientRect()
+          setKeySigPickerState({
+            measureId: l.measureId,
+            partId:    l.partId,
+            staffId:   l.staffId,
+            current:   effectiveKey,
+            screenX:   rect.left + l.x,
+            screenY:   rect.top  + l.staveTopY + STAVE_HEIGHT + 10,
+          })
+          return
+        }
+      }
+
       // Check if click is on a displayed time signature (left preamble area of stave)
       for (const l of layouts) {
         if (
@@ -626,6 +670,17 @@ export function ScoreCanvas(): JSX.Element {
     setSelectedBarline(null)
   }, [dispatch, setSelectedBarline])
 
+  // ── Key sig picker handlers ─────────────────────────────────────────────────
+
+  const closeKeySigPicker = useCallback(() => setKeySigPickerState(null), [])
+
+  const handleKeySigSelect = useCallback((key: KeySignature) => {
+    const s = keySigPickerState
+    if (!s) return
+    dispatch({ type: 'SET_KEY', partId: s.partId, staffId: s.staffId, measureId: s.measureId, key })
+    setKeySigPickerState(null)
+  }, [keySigPickerState, dispatch])
+
   // ── Time sig picker handlers ────────────────────────────────────────────────
 
   const closeTimeSigPicker = useCallback(() => setTimeSigPickerState(null), [])
@@ -646,6 +701,7 @@ export function ScoreCanvas(): JSX.Element {
     if (inputMode !== 'select') {
       setPickerState(null)
       setTimeSigPickerState(null)
+      setKeySigPickerState(null)
     }
   }, [inputMode])
 
@@ -690,6 +746,15 @@ export function ScoreCanvas(): JSX.Element {
           screenY={timeSigPickerState.screenY}
           onClose={closeTimeSigPicker}
           onSelect={handleTimeSigSelect}
+        />
+      )}
+      {keySigPickerState && (
+        <CircleOfFifths
+          current={keySigPickerState.current}
+          screenX={keySigPickerState.screenX}
+          screenY={keySigPickerState.screenY}
+          onClose={closeKeySigPicker}
+          onSelect={handleKeySigSelect}
         />
       )}
     </>
