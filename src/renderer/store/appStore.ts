@@ -126,6 +126,7 @@ export const useAppStore = create<AppState>()(
     },
 
     newScore: () => {
+      _playback?.stop(); _playback = null
       set(state => {
         state.score = createScore() as any
         state.filePath = null
@@ -137,10 +138,12 @@ export const useAppStore = create<AppState>()(
         state.lastEnteredPitch = null
         state.selectedNoteId = null
         state.selectedBarlineId = null
+        state.isPlaying = false
       })
     },
 
     loadScore: (score: Score, path: string) => {
+      _playback?.stop(); _playback = null
       set(state => {
         state.score = score as any
         state.filePath = path
@@ -152,6 +155,7 @@ export const useAppStore = create<AppState>()(
         state.lastEnteredPitch = null
         state.selectedNoteId = null
         state.selectedBarlineId = null
+        state.isPlaying = false
       })
     },
 
