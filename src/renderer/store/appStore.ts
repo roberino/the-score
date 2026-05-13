@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { createScore, type Score, type Pitch, type Duration, type Accidental } from '@shared/score'
 import { applyCommand, type Command } from '@shared/commands'
-import { measureCapacityUnits, usedUnits } from '@shared/musicUtils'
+import { measureCapacityUnits, usedUnits, resolveTimeSig } from '@shared/musicUtils'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -208,9 +208,10 @@ export const useAppStore = create<AppState>()(
         const score = state.score
         for (const part of score.parts) {
           for (const staff of part.staves) {
-            for (const measure of staff.measures) {
+            for (let i = 0; i < staff.measures.length; i++) {
+              const measure = staff.measures[i]
               const voice = measure.voices[0]
-              const timeSig = measure.timeSignature ?? score.timeSignature
+              const timeSig = resolveTimeSig(staff.measures, i, score.timeSignature)
               const capacity = measureCapacityUnits(timeSig)
               const used = usedUnits(voice?.events ?? [])
               if (used < capacity) {
@@ -238,7 +239,7 @@ export const useAppStore = create<AppState>()(
       if (!lastMeasure) return
 
       const voice = lastMeasure.voices[0]
-      const timeSig = lastMeasure.timeSignature ?? score.timeSignature
+      const timeSig = resolveTimeSig(firstStaff.measures, firstStaff.measures.length - 1, score.timeSignature)
       if (usedUnits(voice?.events ?? []) < measureCapacityUnits(timeSig)) return
 
       // Atomically: add measure + fix barlines (single undo step)

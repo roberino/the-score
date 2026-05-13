@@ -2,6 +2,7 @@ import { BrowserWindow, Menu, MenuItemConstructorOptions, shell } from 'electron
 
 export function buildAppMenu(win: BrowserWindow): Menu {
   const isMac = process.platform === 'darwin'
+  const send = (channel: string) => { if (!win.isDestroyed()) send(channel) }
 
   const template: MenuItemConstructorOptions[] = [
     // macOS app menu
@@ -25,29 +26,29 @@ export function buildAppMenu(win: BrowserWindow): Menu {
         {
           label: 'New Score',
           accelerator: 'CmdOrCtrl+N',
-          click: () => win.webContents.send('menu:new')
+          click: () => send('menu:new')
         },
         {
           label: 'Open…',
           accelerator: 'CmdOrCtrl+O',
-          click: () => win.webContents.send('menu:open')
+          click: () => send('menu:open')
         },
         { type: 'separator' },
         {
           label: 'Save',
           accelerator: 'CmdOrCtrl+S',
-          click: () => win.webContents.send('menu:save')
+          click: () => send('menu:save')
         },
         {
           label: 'Save As…',
           accelerator: 'CmdOrCtrl+Shift+S',
-          click: () => win.webContents.send('menu:saveAs')
+          click: () => send('menu:saveAs')
         },
         { type: 'separator' },
         {
           label: 'Export as PDF…',
           accelerator: 'CmdOrCtrl+Shift+E',
-          click: () => win.webContents.send('menu:exportPdf')
+          click: () => send('menu:exportPdf')
         },
         { type: 'separator' },
         isMac ? { role: 'close' as const } : { role: 'quit' as const }
@@ -59,12 +60,12 @@ export function buildAppMenu(win: BrowserWindow): Menu {
         {
           label: 'Undo',
           accelerator: 'CmdOrCtrl+Z',
-          click: () => win.webContents.send('menu:undo')
+          click: () => send('menu:undo')
         },
         {
           label: 'Redo',
           accelerator: 'CmdOrCtrl+Shift+Z',
-          click: () => win.webContents.send('menu:redo')
+          click: () => send('menu:redo')
         },
         { type: 'separator' },
         { role: 'cut' },
@@ -79,17 +80,17 @@ export function buildAppMenu(win: BrowserWindow): Menu {
         {
           label: 'Zoom In',
           accelerator: 'CmdOrCtrl+Plus',
-          click: () => win.webContents.send('menu:zoomIn')
+          click: () => send('menu:zoomIn')
         },
         {
           label: 'Zoom Out',
           accelerator: 'CmdOrCtrl+-',
-          click: () => win.webContents.send('menu:zoomOut')
+          click: () => send('menu:zoomOut')
         },
         {
           label: 'Zoom to Fit',
           accelerator: 'CmdOrCtrl+0',
-          click: () => win.webContents.send('menu:zoomFit')
+          click: () => send('menu:zoomFit')
         },
         { type: 'separator' },
         { role: 'toggleDevTools' }

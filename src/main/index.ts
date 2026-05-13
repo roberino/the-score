@@ -40,7 +40,10 @@ app.whenReady().then(() => {
 
   app.on('activate', () => {
     // macOS: re-create window when dock icon is clicked with no windows open
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) {
+      const newWin = createWindow()
+      Menu.setApplicationMenu(buildAppMenu(newWin))
+    }
   })
 })
 

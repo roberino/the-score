@@ -555,7 +555,6 @@ export function ScoreCanvas(): JSX.Element {
 
     if (inputMode === 'select') {
       const STAVE_HEIGHT = 4 * LINE_SPACING_PX
-      const options = getRenderOptions(zoom)
 
       // Check if click is on a displayed key signature (leftmost preamble area)
       for (const l of layouts) {
@@ -571,7 +570,7 @@ export function ScoreCanvas(): JSX.Element {
           const effectiveKey = resolveKeySig(staff.measures, mIdx, score.keySignature)
           const prevKey = mIdx > 0 ? resolveKeySig(staff.measures, mIdx - 1, score.keySignature) : null
 
-          const displaysKeySig = (mIdx === 0 && effectiveKey.fifths !== 0)
+          const displaysKeySig = (l.isLineStart && effectiveKey.fifths !== 0)
             || (prevKey !== null && prevKey.fifths !== effectiveKey.fifths)
 
           if (!displaysKeySig) continue
@@ -602,11 +601,10 @@ export function ScoreCanvas(): JSX.Element {
           const mIdx = staff.measures.findIndex(m => m.id === l.measureId)
           const effectiveSig = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
           const prevSig = mIdx > 0 ? resolveTimeSig(staff.measures, mIdx - 1, score.timeSignature) : null
-          const isNewSystem = mIdx > 0 && mIdx % options.measuresPerLine === 0
+          const sigChanged = prevSig !== null && !timeSigsEqual(effectiveSig, prevSig)
 
-          const displaysTimeSig = mIdx === 0
-            || (prevSig !== null && !timeSigsEqual(effectiveSig, prevSig))
-            || (isNewSystem && !timeSigsEqual(effectiveSig, score.timeSignature))
+          const displaysTimeSig = sigChanged
+            || (l.isLineStart && (l.measureIndex === 0 || !timeSigsEqual(effectiveSig, score.timeSignature)))
 
           if (!displaysTimeSig) continue
 

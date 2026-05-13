@@ -12,13 +12,14 @@ import {
   Voice as VexVoice,
   Formatter,
   Beam,
+  Fraction,
   Accidental as VexAccidental,
   BarlineType,
   type RenderContext
 } from 'vexflow'
 
 import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature } from '@shared/score'
-import { resolveTimeSig, timeSigsEqual, resolveKeySig } from '@shared/musicUtils'
+import { resolveTimeSig, timeSigsEqual, resolveKeySig, measureCapacityUnits } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
 
@@ -98,8 +99,8 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean): StaveNote {
 
 export interface RenderOptions {
   canvasWidth: number
-  measuresPerLine: number
-  staveWidth: number
+  measuresPerLine: number   // maximum measures per line (hard cap)
+  staveWidth: number        // fallback / minimum stave width
   staveHeight: number
   marginX: number
   marginY: number
@@ -114,6 +115,41 @@ export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
   marginY: 60
 }
 
+// ── Width calculation constants ───────────────────────────────────────────────
+
+const PX_PER_64TH_UNIT  = 3.2   // px per 64th-note unit (drives duration-based width)
+const MIN_PX_PER_NOTE   = 22    // minimum px per note head
+const MIN_NOTE_AREA     = 80    // minimum note area for any measure
+const RIGHT_PADDING     = 24    // right margin inside stave
+const PREAMBLE_CLEF     = 30
+const PREAMBLE_TIME     = 30
+const PREAMBLE_KEY_PER  = 12    // px per accidental in key sig
+const PREAMBLE_BASE     = 14    // left bar + small gap
+const MIN_STAVE_WIDTH   = 140
+
+function computeMeasureWidth(
+  events: readonly NoteEvent[],
+  effectiveSig: TimeSignature,
+  showClef: boolean,
+  showKeySig: boolean,
+  showTimeSig: boolean,
+  keySig: KeySignature,
+): number {
+  let preamble = PREAMBLE_BASE
+  if (showClef)    preamble += PREAMBLE_CLEF
+  if (showKeySig)  preamble += Math.max(Math.abs(keySig.fifths), 1) * PREAMBLE_KEY_PER
+  if (showTimeSig) preamble += PREAMBLE_TIME
+
+  const capacity  = measureCapacityUnits(effectiveSig)
+  const noteArea  = Math.max(
+    capacity * PX_PER_64TH_UNIT,
+    events.length * MIN_PX_PER_NOTE,
+    MIN_NOTE_AREA
+  )
+
+  return Math.max(preamble + noteArea + RIGHT_PADDING, MIN_STAVE_WIDTH)
+}
+
 // ── Layout ────────────────────────────────────────────────────────────────────
 
 export interface MeasureLayout {
@@ -123,9 +159,11 @@ export interface MeasureLayout {
   voiceId: string
   clef: ClefType
   x: number
-  staveTopY: number   // y of the actual top staff LINE (not VexFlow stave.y)
+  staveTopY: number   // y of the actual top staff LINE
   staveY: number      // raw y passed to new Stave()
   width: number
+  measureIndex: number
+  isLineStart: boolean
 }
 
 // VexFlow 5 default: spaceAboveStaffLn = 4, spacingBetweenLinesPx = 10
@@ -133,31 +171,95 @@ const VEXFLOW_HEADROOM_PX = 40
 
 export function computeLayout(score: Score, options: RenderOptions): MeasureLayout[] {
   const layouts: MeasureLayout[] = []
-  const { measuresPerLine, staveWidth, staveHeight, marginX, marginY } = options
+  const { canvasWidth, staveHeight, marginX, marginY, measuresPerLine } = options
   const totalParts = score.parts.length
-  const rowHeight = staveHeight * totalParts + 40
+  const rowHeight  = staveHeight * totalParts + 40
+  const maxLineX   = canvasWidth - marginX   // rightmost allowed x + width
 
-  score.parts.forEach((part, partIndex) => {
-    part.staves.forEach((staff) => {
-      staff.measures.forEach((measure, measureIndex) => {
-        const lineIndex = Math.floor(measureIndex / measuresPerLine)
-        const colIndex  = measureIndex % measuresPerLine
-        const x         = marginX + colIndex * staveWidth
-        const y         = marginY + lineIndex * rowHeight + partIndex * staveHeight
+  const firstPart  = score.parts[0]
+  if (!firstPart) return layouts
+  const firstStaff = firstPart.staves[0]
+  if (!firstStaff) return layouts
+  const measureCount = firstStaff.measures.length
+
+  let lineIndex           = 0
+  let currentX            = marginX
+  let measuresInLine      = 0
+
+  for (let mIdx = 0; mIdx < measureCount; mIdx++) {
+    const measure      = firstStaff.measures[mIdx]
+    const effectiveSig = resolveTimeSig(firstStaff.measures, mIdx, score.timeSignature)
+    const effectiveKey = resolveKeySig(firstStaff.measures, mIdx, score.keySignature)
+    const prevKey      = mIdx > 0 ? resolveKeySig(firstStaff.measures, mIdx - 1, score.keySignature) : null
+    const prevSig      = mIdx > 0 ? resolveTimeSig(firstStaff.measures, mIdx - 1, score.timeSignature) : null
+    const events       = measure.voices[0]?.events ?? []
+
+    const keyChanged = prevKey !== null && prevKey.fifths !== effectiveKey.fifths
+    const sigChanged = prevSig !== null && !timeSigsEqual(effectiveSig, prevSig)
+
+    // Width if NOT a line start (no repeat clef/key/time unless first measure or changed)
+    const showClef_mid    = false
+    const showKeySig_mid  = keyChanged
+    const showTimeSig_mid = sigChanged
+    const width_mid = computeMeasureWidth(events, effectiveSig, showClef_mid, showKeySig_mid, showTimeSig_mid, effectiveKey)
+
+    // Width if IS a line start (clef always; key if non-C; time if differs from score default)
+    const showClef_start    = true
+    const showKeySig_start  = effectiveKey.fifths !== 0
+    const showTimeSig_start = !timeSigsEqual(effectiveSig, score.timeSignature) || mIdx === 0
+    const width_start = computeMeasureWidth(events, effectiveSig, showClef_start, showKeySig_start, showTimeSig_start, effectiveKey)
+
+    let isLineStart: boolean
+    let width: number
+
+    if (mIdx === 0) {
+      // First measure is always a line start
+      isLineStart = true
+      width       = width_start
+      currentX    = marginX
+    } else {
+      const wouldExceed = currentX + width_mid > maxLineX
+      const hitCap      = measuresInLine >= measuresPerLine
+      if (wouldExceed || hitCap) {
+        // Wrap to new line
+        lineIndex++
+        currentX    = marginX
+        measuresInLine = 0
+        isLineStart = true
+        width       = width_start
+      } else {
+        isLineStart = false
+        width       = width_mid
+      }
+    }
+
+    const x      = currentX
+    const yBase  = marginY + lineIndex * rowHeight
+
+    score.parts.forEach((part, partIndex) => {
+      part.staves.forEach((staff) => {
+        const staffMeasure = staff.measures[mIdx]
+        if (!staffMeasure) return
+        const y = yBase + partIndex * staveHeight
         layouts.push({
-          measureId: measure.id,
-          partId:    part.id,
-          staffId:   staff.id,
-          voiceId:   measure.voices[0]?.id ?? '',
-          clef:      staff.clef,
+          measureId:    staffMeasure.id,
+          partId:       part.id,
+          staffId:      staff.id,
+          voiceId:      staffMeasure.voices[0]?.id ?? '',
+          clef:         staff.clef,
           x,
-          staveTopY: y + VEXFLOW_HEADROOM_PX,
-          staveY:    y,
-          width:     staveWidth,
+          staveTopY:    y + VEXFLOW_HEADROOM_PX,
+          staveY:       y,
+          width,
+          measureIndex: mIdx,
+          isLineStart,
         })
       })
     })
-  })
+
+    currentX += width
+    measuresInLine++
+  }
 
   return layouts
 }
@@ -184,74 +286,88 @@ export function renderScore(
   const firstStaff = firstPart.staves[0]
   if (!firstStaff) return
 
-  const measureCount = firstStaff.measures.length
-  const lineCount = Math.ceil(measureCount / options.measuresPerLine)
-  const canvasHeight = options.marginY + lineCount * (options.staveHeight * score.parts.length + 40)
+  const layouts = computeLayout(score, options)
+
+  // Canvas height: bottom of last stave row + margin
+  const lastLayout   = layouts[layouts.length - 1]
+  const canvasHeight = lastLayout
+    ? lastLayout.staveY + options.staveHeight + options.marginY
+    : options.marginY + options.staveHeight
 
   renderer.resize(options.canvasWidth, canvasHeight)
   const ctx = renderer.getContext()
   ctx.clear()
 
-  renderParts(ctx, score.parts, score.keySignature, score.timeSignature, options, selectedNoteId)
+  renderFromLayouts(ctx, score, layouts, selectedNoteId)
 
   if (cursor?.cursorMeasureId) {
-    drawCursor(canvas, score, options, cursor)
+    drawCursor(canvas, cursor, layouts)
   }
 }
 
-function renderParts(
+// ── Render all measures from precomputed layouts ──────────────────────────────
+
+function renderFromLayouts(
   ctx: RenderContext,
-  parts: readonly Part[],
-  scoreKeySig: KeySignature,
-  scoreTimeSig: TimeSignature,
-  options: RenderOptions,
+  score: Score,
+  layouts: MeasureLayout[],
   selectedNoteId: string | null
 ): void {
-  parts.forEach((part, partIndex) => {
-    part.staves.forEach((staff) => {
-      renderStaff(ctx, staff, partIndex, parts.length, scoreKeySig, scoreTimeSig, options, selectedNoteId)
-    })
-  })
-}
+  // Build fast lookup: staffId → staff (and its measure array for resolving sigs)
+  type StaffEntry = { staff: Staff; part: Part }
+  const staffMap = new Map<string, StaffEntry>()
+  for (const part of score.parts) {
+    for (const staff of part.staves) {
+      staffMap.set(staff.id, { staff, part })
+    }
+  }
 
-function renderStaff(
-  ctx: RenderContext,
-  staff: Staff,
-  partIndex: number,
-  totalParts: number,
-  scoreKeySig: KeySignature,
-  scoreTimeSig: TimeSignature,
-  options: RenderOptions,
-  selectedNoteId: string | null
-): void {
-  const { measuresPerLine, staveWidth, staveHeight, marginX, marginY } = options
-  const rowHeight = staveHeight * totalParts + 40
+  for (const layout of layouts) {
+    const entry = staffMap.get(layout.staffId)
+    if (!entry) continue
+    const { staff, part } = entry
+    void part  // used for type safety only
 
-  staff.measures.forEach((measure, measureIndex) => {
-    const lineIndex = Math.floor(measureIndex / measuresPerLine)
-    const colIndex  = measureIndex % measuresPerLine
-    const x = marginX + colIndex * staveWidth
-    const y = marginY + lineIndex * rowHeight + partIndex * staveHeight
+    const mIdx   = staff.measures.findIndex(m => m.id === layout.measureId)
+    if (mIdx === -1) continue
+    const measure     = staff.measures[mIdx]
+    const prevMeasure = staff.measures[mIdx - 1]
 
-    const effectiveKey  = resolveKeySig(staff.measures, measureIndex, scoreKeySig)
-    const prevKey       = measureIndex > 0
-      ? resolveKeySig(staff.measures, measureIndex - 1, scoreKeySig)
-      : null
+    const effectiveKey = resolveKeySig(staff.measures, mIdx, score.keySignature)
+    const prevKey      = mIdx > 0 ? resolveKeySig(staff.measures, mIdx - 1, score.keySignature) : null
+    const effectiveSig = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
+    const prevSig      = mIdx > 0 ? resolveTimeSig(staff.measures, mIdx - 1, score.timeSignature) : null
 
-    const effectiveSig  = resolveTimeSig(staff.measures, measureIndex, scoreTimeSig)
-    const prevSig       = measureIndex > 0
-      ? resolveTimeSig(staff.measures, measureIndex - 1, scoreTimeSig)
-      : null
-
-    const prevMeasure = staff.measures[measureIndex - 1]
     renderMeasure(
       ctx, measure, prevMeasure,
       effectiveKey, prevKey,
-      effectiveSig, prevSig, scoreTimeSig,
-      staff.clef, x, y, staveWidth, measuresPerLine, measureIndex, selectedNoteId
+      effectiveSig, prevSig, score.timeSignature,
+      layout.clef,
+      layout.x, layout.staveY, layout.width,
+      layout.measureIndex, layout.isLineStart,
+      selectedNoteId
     )
-  })
+  }
 }
+
+// ── Beam groups by time signature ────────────────────────────────────────────
+// Returns explicit beat groups for compound/asymmetric meters.
+// Simple meters (denominator ≤ 4) return null → VexFlow default (pairs per beat).
+
+function getBeamGroups(timeSig: TimeSignature): Fraction[] | null {
+  const { numerator, denominator } = timeSig
+  if (denominator <= 4) return null          // simple: 2/4, 3/4, 4/4, etc.
+  if (denominator === 8) {
+    if (numerator % 3 === 0) {              // compound: 6/8, 9/8, 12/8
+      return Array.from({ length: numerator / 3 }, () => new Fraction(3, 8))
+    }
+    if (numerator === 5) return [new Fraction(2, 8), new Fraction(3, 8)]
+    if (numerator === 7) return [new Fraction(2, 8), new Fraction(2, 8), new Fraction(3, 8)]
+  }
+  return null
+}
+
+// ── Render a single measure ───────────────────────────────────────────────────
 
 function renderMeasure(
   ctx: RenderContext,
@@ -266,39 +382,42 @@ function renderMeasure(
   x: number,
   y: number,
   width: number,
-  measuresPerLine: number,
   measureIndex: number,
+  isLineStart: boolean,
   selectedNoteId: string | null
 ): void {
   const stave = new Stave(x, y, width)
 
-  const isNewSystem   = measureIndex > 0 && measureIndex % measuresPerLine === 0
-  const keyChanged    = prevKey !== null && prevKey.fifths !== effectiveKey.fifths
-  const showKeySig    = (measureIndex === 0 && effectiveKey.fifths !== 0) || keyChanged
-  const sigChanged    = prevSig !== null && !timeSigsEqual(effectiveSig, prevSig)
-  const showTimeSig   = measureIndex === 0
-    || sigChanged
-    || (isNewSystem && !timeSigsEqual(effectiveSig, scoreTimeSig))
+  const keyChanged  = prevKey !== null && prevKey.fifths !== effectiveKey.fifths
+  const sigChanged  = prevSig !== null && !timeSigsEqual(effectiveSig, prevSig)
 
-  if (measureIndex === 0) stave.addClef(clefType)
-  // Key sig before time sig (standard order: clef → key → time)
+  // Clef: show at every system start (standard notation)
+  if (isLineStart) stave.addClef(clefType)
+
+  // Key sig: show at system starts (if non-C) and when it changes mid-score
+  const showKeySig = (isLineStart && effectiveKey.fifths !== 0) || keyChanged
   if (showKeySig) stave.addKeySignature(FIFTHS_TO_VEX_KEY[effectiveKey.fifths] ?? 'C')
+
+  // Time sig: show on first measure, when it changes, or when repeated at system start
+  const showTimeSig = (isLineStart && measureIndex === 0)
+    || sigChanged
+    || (isLineStart && !timeSigsEqual(effectiveSig, scoreTimeSig))
   if (showTimeSig) stave.addTimeSignature(`${effectiveSig.numerator}/${effectiveSig.denominator}`)
 
-  // Apply end barline type
+  // End barline type
   if (measure.barline && measure.barline !== 'repeat-start') {
     stave.setEndBarType(END_BARLINE_MAP[measure.barline] ?? BarlineType.SINGLE)
   }
 
-  // Apply repeat-begin to this stave's left edge when the previous bar had repeat-start
+  // Repeat-begin on left edge when previous bar has repeat-start
   if (prevMeasure?.barline === 'repeat-start') {
     stave.setBegBarType(BarlineType.REPEAT_BEGIN)
   }
 
   stave.setContext(ctx).draw()
 
-  // Bar numbers: show above the first measure of each new line (but not bar 1)
-  if (measureIndex > 0 && measureIndex % 4 === 0) {
+  // Bar numbers at system starts (not the first measure)
+  if (measureIndex > 0 && isLineStart) {
     const nativeCtx: CanvasRenderingContext2D | null =
       typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
     if (nativeCtx) {
@@ -314,9 +433,8 @@ function renderMeasure(
   const events = voice0?.events ?? []
 
   if (events.length === 0) {
-    // Whole rest for empty bar (display-only, not stored)
     const wholeRest = new StaveNote({ keys: ['b/4'], duration: 'wr' })
-    const vexVoice = new VexVoice({
+    const vexVoice  = new VexVoice({
       numBeats: effectiveSig.numerator,
       beatValue: effectiveSig.denominator,
     }).setStrict(false)
@@ -327,12 +445,15 @@ function renderMeasure(
   }
 
   const staveNotes = events.map(e => noteEventToStaveNote(e, e.id === selectedNoteId))
-  const vexVoice = new VexVoice({
+  const vexVoice   = new VexVoice({
     numBeats: effectiveSig.numerator,
     beatValue: effectiveSig.denominator,
   }).setStrict(false)
   vexVoice.addTickables(staveNotes)
-  const beams = Beam.generateBeams(staveNotes)
+  const beamGroups = getBeamGroups(effectiveSig)
+  const beams = beamGroups
+    ? Beam.generateBeams(staveNotes, { groups: beamGroups })
+    : Beam.generateBeams(staveNotes)
   new Formatter().joinVoices([vexVoice]).format([vexVoice], width - 40)
   vexVoice.draw(ctx, stave)
   beams.forEach(b => b.setContext(ctx).draw())
@@ -340,22 +461,20 @@ function renderMeasure(
 
 // ── Cursor overlay ────────────────────────────────────────────────────────────
 
-const LINE_SPACING_PX = 10
-const STAVE_HEIGHT_PX = 4 * LINE_SPACING_PX
+const LINE_SPACING_PX  = 10
+const STAVE_HEIGHT_PX  = 4 * LINE_SPACING_PX
 
 function drawCursor(
   canvas: HTMLCanvasElement,
-  score: Score,
-  options: RenderOptions,
-  cursor: RenderCursorOptions
+  cursor: RenderCursorOptions,
+  layouts: MeasureLayout[]
 ): void {
-  const layouts = computeLayout(score, options)
   const layout = layouts.find(l => l.measureId === cursor.cursorMeasureId)
   if (!layout) return
 
   const noteAreaStart = layout.x + 20
   const noteAreaWidth = layout.width - 40
-  const fraction = cursor.totalCapacityUnits > 0
+  const fraction      = cursor.totalCapacityUnits > 0
     ? cursor.cursorBeatPosition / cursor.totalCapacityUnits
     : 0
   const cursorX = noteAreaStart + fraction * noteAreaWidth
@@ -364,9 +483,9 @@ function drawCursor(
   if (!ctx2d) return
 
   ctx2d.save()
-  ctx2d.strokeStyle = '#2196F3'
-  ctx2d.lineWidth = 2
-  ctx2d.globalAlpha = 0.85
+  ctx2d.strokeStyle  = '#2196F3'
+  ctx2d.lineWidth    = 2
+  ctx2d.globalAlpha  = 0.85
   ctx2d.beginPath()
   ctx2d.moveTo(cursorX, layout.staveTopY - 6)
   ctx2d.lineTo(cursorX, layout.staveTopY + STAVE_HEIGHT_PX + 6)
