@@ -1,9 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Audio playback engine — Web Audio API, no external dependencies.
-// Schedules all notes up-front using AudioContext.currentTime for sample-
-// accurate timing. Returns a controller with a stop() method.
+// Audio playback engine — Tone.js v14
+//
+// Tone.Transport handles sample-accurate scheduling and BPM.
+// PolySynth handles polyphony (chords, overlapping notes).
 // ─────────────────────────────────────────────────────────────────────────────
 
+import * as Tone from 'tone'
 import type { Score, Note, Chord, NoteEvent } from '@shared/score'
 
 // ── Pitch → frequency ────────────────────────────────────────────────────────
@@ -14,11 +16,10 @@ const SEMITONES_FROM_C: Record<string, number> = {
 
 function pitchToHz(noteName: string, octave: number, accidental: string | null): number {
   let semi = SEMITONES_FROM_C[noteName] ?? 0
-  if (accidental === 'sharp')        semi += 1
-  else if (accidental === 'flat')    semi -= 1
+  if (accidental === 'sharp')            semi += 1
+  else if (accidental === 'flat')        semi -= 1
   else if (accidental === 'doubleSharp') semi += 2
   else if (accidental === 'doubleFlat')  semi -= 2
-  // MIDI: C4 = 60, A4 = 69 = 440 Hz
   const midi = (octave + 1) * 12 + semi
   return 440 * Math.pow(2, (midi - 69) / 12)
 }
@@ -36,86 +37,83 @@ function eventToSeconds(event: NoteEvent, bpm: number): number {
   return dotted * (60 / bpm)
 }
 
-// ── Single note scheduler ────────────────────────────────────────────────────
-
-function scheduleNote(
-  ctx: AudioContext,
-  dest: AudioNode,
-  hz: number,
-  startTime: number,
-  duration: number,
-): void {
-  const osc  = ctx.createOscillator()
-  const gain = ctx.createGain()
-  osc.type = 'triangle'
-  osc.frequency.value = hz
-  osc.connect(gain)
-  gain.connect(dest)
-
-  const attack  = 0.005
-  const release = Math.min(0.08, duration * 0.25)
-  const hold    = Math.max(duration - attack - release, 0.001)
-
-  gain.gain.setValueAtTime(0, startTime)
-  gain.gain.linearRampToValueAtTime(0.6, startTime + attack)
-  gain.gain.setValueAtTime(0.6, startTime + attack + hold)
-  gain.gain.linearRampToValueAtTime(0, startTime + attack + hold + release)
-
-  osc.start(startTime)
-  osc.stop(startTime + duration + 0.05)
-}
-
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export interface PlaybackController {
   stop: () => void
 }
 
-export function playScore(
+export async function playScore(
   score: Score,
   bpm = 120,
   onStop?: () => void,
-): PlaybackController {
-  const ctx = new AudioContext()
-  const master = ctx.createGain()
-  master.gain.value = 0.7
-  master.connect(ctx.destination)
+): Promise<PlaybackController> {
+  // Resume AudioContext — required after a user gesture in browser environments
+  await Tone.start()
 
-  let cursor = 0  // seconds offset from ctx.currentTime
+  Tone.Transport.stop()
+  Tone.Transport.cancel()
+  Tone.Transport.bpm.value = bpm
+
+  const synth = new Tone.PolySynth(Tone.Synth).toDestination()
+  synth.set({
+    oscillator: { type: 'triangle' },
+    envelope: { attack: 0.005, decay: 0.1, sustain: 0.7, release: 0.1 },
+  })
+  synth.volume.value = -6  // dB
+
+  let cursor = 0  // seconds from transport start
 
   const firstStaff = score.parts[0]?.staves[0]
   if (firstStaff) {
     for (const measure of firstStaff.measures) {
       for (const event of measure.voices[0]?.events ?? []) {
         const dur = eventToSeconds(event, bpm)
-        const t   = ctx.currentTime + cursor
+        const t   = cursor
+
         if (event.type === 'note') {
-          const n = event as Note
-          scheduleNote(ctx, master, pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental), t, dur)
+          const n  = event as Note
+          const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental)
+          Tone.Transport.schedule((time) => {
+            synth.triggerAttackRelease(hz, dur, time)
+          }, t)
         } else if (event.type === 'chord') {
-          const c = event as Chord
-          for (const p of c.pitches) {
-            scheduleNote(ctx, master, pitchToHz(p.noteName, p.octave, p.accidental), t, dur)
-          }
+          const c     = event as Chord
+          const freqs = c.pitches.map(p => pitchToHz(p.noteName, p.octave, p.accidental))
+          Tone.Transport.schedule((time) => {
+            freqs.forEach(hz => synth.triggerAttackRelease(hz, dur, time))
+          }, t)
         }
-        // rests: silence — just advance cursor
+        // rests: advance cursor only
+
         cursor += dur
       }
     }
   }
 
   let stopped = false
-  const endTimer = window.setTimeout(() => {
-    if (!stopped) { stopped = true; void ctx.close(); onStop?.() }
-  }, cursor * 1000 + 300)
+
+  // Fire onStop after all note release tails have finished
+  Tone.Transport.schedule(() => {
+    if (!stopped) {
+      stopped = true
+      Tone.Transport.stop()
+      Tone.Transport.cancel()
+      setTimeout(() => synth.dispose(), 300)
+      onStop?.()
+    }
+  }, cursor + 0.3)
+
+  Tone.Transport.start()
 
   return {
     stop() {
       if (stopped) return
       stopped = true
-      clearTimeout(endTimer)
-      master.gain.setTargetAtTime(0, ctx.currentTime, 0.02)
-      window.setTimeout(() => void ctx.close(), 200)
+      Tone.Transport.stop()
+      Tone.Transport.cancel()
+      synth.releaseAll()
+      setTimeout(() => synth.dispose(), 300)
       onStop?.()
     },
   }

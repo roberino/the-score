@@ -41,7 +41,7 @@ export interface AppState {
   playbackPositionTick: number
 
   // Actions
-  startPlayback: () => void
+  startPlayback: () => Promise<void>
   stopPlayback: () => void
   dispatch: (command: Command) => void
   undo: () => void
@@ -204,10 +204,10 @@ export const useAppStore = create<AppState>()(
     setSelectedBarline: (id) => set(s => { s.selectedBarlineId = id }),
     setPlaying: (playing) => set(s => { s.isPlaying = playing }),
 
-    startPlayback: () => {
+    startPlayback: async () => {
       if (_playback) return
       const { score } = get()
-      _playback = playScore(score, 120, () => {
+      _playback = await playScore(score, 120, () => {
         _playback = null
         set(s => { s.isPlaying = false })
       })
