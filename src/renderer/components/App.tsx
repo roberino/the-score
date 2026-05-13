@@ -6,7 +6,8 @@ import { StatusBar } from './StatusBar'
 import type { Score } from '@shared/score'
 
 export function App(): JSX.Element {
-  const { undo, redo, newScore, loadScore, saveScore, saveScoreAs, setZoom, zoom } = useAppStore()
+  const { undo, redo, newScore, loadScore, saveScore, saveScoreAs, setZoom, zoom,
+          isPlaying, startPlayback, stopPlayback, inputMode } = useAppStore()
 
   // ── Wire native menu events to store actions ────────────────────────────────
   useEffect(() => {
@@ -31,10 +32,15 @@ export function App(): JSX.Element {
       if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo() }
       if (mod && e.key === 'z' &&  e.shiftKey) { e.preventDefault(); redo() }
       if (mod && e.key === 's' && !e.shiftKey) { e.preventDefault(); saveScore() }
+      // Space toggles playback except in note/rest mode (where Space enters a rest)
+      if (!mod && e.key === ' ' && inputMode !== 'note' && inputMode !== 'rest') {
+        e.preventDefault()
+        isPlaying ? stopPlayback() : startPlayback()
+      }
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [])
+  }, [inputMode, isPlaying, startPlayback, stopPlayback])
 
   async function handleOpen(): Promise<void> {
     const result = await window.electronAPI.openFile()

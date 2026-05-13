@@ -3,6 +3,9 @@ import { immer } from 'zustand/middleware/immer'
 import { createScore, type Score, type Pitch, type Duration, type Accidental } from '@shared/score'
 import { applyCommand, type Command } from '@shared/commands'
 import { measureCapacityUnits, usedUnits, resolveTimeSig } from '@shared/musicUtils'
+import { playScore, type PlaybackController } from '../engine/audioEngine'
+
+let _playback: PlaybackController | null = null
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -38,6 +41,8 @@ export interface AppState {
   playbackPositionTick: number
 
   // Actions
+  startPlayback: () => void
+  stopPlayback: () => void
   dispatch: (command: Command) => void
   undo: () => void
   redo: () => void
@@ -194,6 +199,22 @@ export const useAppStore = create<AppState>()(
     setSelectedMeasure: (id) => set(s => { s.selectedMeasureId = id }),
     setSelectedBarline: (id) => set(s => { s.selectedBarlineId = id }),
     setPlaying: (playing) => set(s => { s.isPlaying = playing }),
+
+    startPlayback: () => {
+      if (_playback) return
+      const { score } = get()
+      _playback = playScore(score, 120, () => {
+        _playback = null
+        set(s => { s.isPlaying = false })
+      })
+      set(s => { s.isPlaying = true })
+    },
+
+    stopPlayback: () => {
+      _playback?.stop()
+      _playback = null
+      set(s => { s.isPlaying = false })
+    },
     setSelectedDuration: (duration) => set(s => { s.selectedDuration = duration }),
     toggleDot: () => set(s => { s.isDotted = !s.isDotted }),
     setPrimedAccidental: (acc) => set(s => { s.primedAccidental = acc }),

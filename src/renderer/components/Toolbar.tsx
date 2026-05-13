@@ -19,7 +19,7 @@ const DURATION_BUTTONS: { duration: Duration; key: string }[] = Object.entries(K
 export function Toolbar(): JSX.Element {
   const {
     inputMode, setInputMode,
-    undo, redo, isPlaying, setPlaying,
+    undo, redo, isPlaying, startPlayback, stopPlayback,
     undoStack, redoStack,
     selectedDuration, setSelectedDuration,
     isDotted, toggleDot,
@@ -131,7 +131,7 @@ export function Toolbar(): JSX.Element {
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
 
         <ToolbarButton
-          onClick={() => setPlaying(!isPlaying)}
+          onClick={() => isPlaying ? stopPlayback() : startPlayback()}
           title={isPlaying ? 'Stop (Space)' : 'Play (Space)'}
           label={isPlaying ? '⏹ Stop' : '▶ Play'}
           accent={isPlaying}
