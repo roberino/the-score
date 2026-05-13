@@ -278,17 +278,22 @@ export function ScoreCanvas(): JSX.Element {
 
     for (const part of score.parts) {
       for (const staff of part.staves) {
-        const measure = staff.measures.find(m => m.id === cursorMeasureId)
-        if (!measure) continue
+        const measureIdx = staff.measures.findIndex(m => m.id === cursorMeasureId)
+        if (measureIdx === -1) continue
+        const measure = staff.measures[measureIdx]
 
         const voice   = measure.voices[0]
-        const timeSig = measure.timeSignature ?? score.timeSignature
+        const timeSig = resolveTimeSig(staff.measures, measureIdx, score.timeSignature)
         const dots    = isDotted ? 1 : 0 as 0 | 1
         const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
 
-        if (remainingUnits(voice.events, timeSig) < units) return
+        if (remainingUnits(voice.events, timeSig) < units) {
+          canvasRef.current?.classList.add('cursor-reject')
+          setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+          return
+        }
 
-        const rest      = createRest(selectedDuration)
+        const rest        = createRest(selectedDuration)
         const restWithDot = { ...rest, dots } as typeof rest
 
         dispatch({
@@ -300,14 +305,12 @@ export function ScoreCanvas(): JSX.Element {
           event:     restWithDot,
         })
 
-        const newBeat = cursorBeatPosition + units
+        const newBeat  = cursorBeatPosition + units
         const capacity = measureCapacityUnits(timeSig)
         if (newBeat >= capacity) {
-          const measureIdx = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const nextMeasure = staff.measures[measureIdx + 1]
           if (nextMeasure) {
-            const nextVoice = nextMeasure.voices[0]
-            setCursor(nextMeasure.id, usedUnits(nextVoice?.events ?? []))
+            setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[0]?.events ?? []))
           } else {
             setCursor(null, 0)
           }
@@ -448,8 +451,8 @@ export function ScoreCanvas(): JSX.Element {
         if (noteName) { enterNote(noteName); return }
       }
 
-      // Rest entry (rest mode: Space or Enter)
-      if (inputMode === 'rest' && !mod && (e.key === ' ' || e.key === 'Enter')) {
+      // Rest entry: Space/Enter in rest mode, or Space in note mode
+      if (!mod && (e.key === ' ' || e.key === 'Enter') && (inputMode === 'rest' || inputMode === 'note')) {
         e.preventDefault()
         enterRest()
         return
@@ -543,13 +546,47 @@ export function ScoreCanvas(): JSX.Element {
     if (inputMode === 'rest') {
       const part    = score.parts.find(p => p.id === layout.partId)
       const staff   = part?.staves.find(s => s.id === layout.staffId)
-      const measure = staff?.measures.find(m => m.id === layout.measureId)
-      if (!measure) return
+      if (!staff) return
+      const mIdx    = staff.measures.findIndex(m => m.id === layout.measureId)
+      if (mIdx === -1) return
+      const measure = staff.measures[mIdx]
       const voice   = measure.voices[0]
-      const timeSig = measure.timeSignature ?? score.timeSignature
+      const timeSig = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
       const used    = usedUnits(voice?.events ?? [])
-      if (used >= measureCapacityUnits(timeSig)) return
+      const capacity = measureCapacityUnits(timeSig)
+      if (used >= capacity) return
+
       setCursor(layout.measureId, used)
+
+      const dots  = isDotted ? 1 : 0 as 0 | 1
+      const units = dottedUnits(DURATION_UNITS[selectedDuration], dots)
+      if (remainingUnits(voice.events, timeSig) < units) return
+
+      const rest        = createRest(selectedDuration)
+      const restWithDot = { ...rest, dots } as typeof rest
+
+      dispatch({
+        type: 'ADD_NOTE',
+        partId:    layout.partId,
+        staffId:   layout.staffId,
+        measureId: layout.measureId,
+        voiceId:   layout.voiceId,
+        event:     restWithDot,
+      })
+
+      setPrimedAccidental(null)
+
+      const newBeat = used + units
+      if (newBeat >= capacity) {
+        const nextMeasure = staff.measures[mIdx + 1]
+        if (nextMeasure) {
+          setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[0]?.events ?? []))
+        } else {
+          setCursor(null, 0)
+        }
+      } else {
+        setCursor(layout.measureId, newBeat)
+      }
       return
     }
 
