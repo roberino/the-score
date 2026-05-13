@@ -278,13 +278,14 @@ export function renderScore(
   options: RenderOptions = DEFAULT_RENDER_OPTIONS,
   selectedNoteId: string | null = null,
   cursor: RenderCursorOptions | null = null
-): void {
+): Map<string, number> {
+  const notePositions = new Map<string, number>()
   const renderer = new VexRenderer(canvas, VexRenderer.Backends.CANVAS)
 
   const firstPart = score.parts[0]
-  if (!firstPart) return
+  if (!firstPart) return notePositions
   const firstStaff = firstPart.staves[0]
-  if (!firstStaff) return
+  if (!firstStaff) return notePositions
 
   const layouts = computeLayout(score, options)
 
@@ -298,11 +299,13 @@ export function renderScore(
   const ctx = renderer.getContext()
   ctx.clear()
 
-  renderFromLayouts(ctx, score, layouts, selectedNoteId)
+  renderFromLayouts(ctx, score, layouts, selectedNoteId, notePositions)
 
   if (cursor?.cursorMeasureId) {
     drawCursor(canvas, cursor, layouts)
   }
+
+  return notePositions
 }
 
 // ── Render all measures from precomputed layouts ──────────────────────────────
@@ -311,7 +314,8 @@ function renderFromLayouts(
   ctx: RenderContext,
   score: Score,
   layouts: MeasureLayout[],
-  selectedNoteId: string | null
+  selectedNoteId: string | null,
+  notePositions: Map<string, number>
 ): void {
   // Build fast lookup: staffId → staff (and its measure array for resolving sigs)
   type StaffEntry = { staff: Staff; part: Part }
@@ -345,7 +349,7 @@ function renderFromLayouts(
       layout.clef,
       layout.x, layout.staveY, layout.width,
       layout.measureIndex, layout.isLineStart,
-      selectedNoteId
+      selectedNoteId, notePositions
     )
   }
 }
@@ -384,7 +388,8 @@ function renderMeasure(
   width: number,
   measureIndex: number,
   isLineStart: boolean,
-  selectedNoteId: string | null
+  selectedNoteId: string | null,
+  notePositions: Map<string, number>
 ): void {
   const stave = new Stave(x, y, width)
 
@@ -455,6 +460,12 @@ function renderMeasure(
     ? Beam.generateBeams(staveNotes, { groups: beamGroups })
     : Beam.generateBeams(staveNotes)
   new Formatter().joinVoices([vexVoice]).format([vexVoice], width - 40)
+  // Collect absolute x of each note head after formatting (stave already drawn,
+  // so getNoteStartX() is accurate). setStave() is called again internally by draw().
+  staveNotes.forEach((sn, i) => {
+    sn.setStave(stave)
+    notePositions.set(events[i].id, sn.getAbsoluteX())
+  })
   vexVoice.draw(ctx, stave)
   beams.forEach(b => b.setContext(ctx).draw())
 }

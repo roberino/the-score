@@ -173,6 +173,7 @@ interface KeySigPickerState {
 
 export function ScoreCanvas(): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const notePositionsRef = useRef(new Map<string, number>())
   const [pickerState, setPickerState] = useState<PickerState | null>(null)
   const [timeSigPickerState, setTimeSigPickerState] = useState<TimeSigPickerState | null>(null)
   const [keySigPickerState, setKeySigPickerState] = useState<KeySigPickerState | null>(null)
@@ -197,7 +198,7 @@ export function ScoreCanvas(): JSX.Element {
     const options = getRenderOptions(zoom)
     const timeSig = score.timeSignature
     const capacity = measureCapacityUnits(timeSig)
-    renderScore(
+    notePositionsRef.current = renderScore(
       canvas,
       score,
       options,
@@ -590,6 +591,37 @@ export function ScoreCanvas(): JSX.Element {
       return
     }
 
+    if (inputMode === 'eraser') {
+      const part  = score.parts.find(p => p.id === layout.partId)
+      const staff = part?.staves.find(s => s.id === layout.staffId)
+      if (!staff) return
+      const mIdx = staff.measures.findIndex(m => m.id === layout.measureId)
+      if (mIdx === -1) return
+      const measure = staff.measures[mIdx]
+      const voice   = measure.voices[0]
+      if (!voice || voice.events.length === 0) return
+
+      let closest: { id: string; dist: number } | null = null
+      for (const event of voice.events) {
+        const noteX = notePositionsRef.current.get(event.id)
+        if (noteX === undefined) continue
+        const dist = Math.abs(canvasX - noteX)
+        if (!closest || dist < closest.dist) closest = { id: event.id, dist }
+      }
+
+      if (closest) {
+        dispatch({
+          type:      'DELETE_NOTE',
+          partId:    layout.partId,
+          staffId:   layout.staffId,
+          measureId: layout.measureId,
+          voiceId:   voice.id,
+          noteId:    closest.id,
+        })
+      }
+      return
+    }
+
     if (inputMode === 'select') {
       const STAVE_HEIGHT = 4 * LINE_SPACING_PX
 
@@ -683,7 +715,30 @@ export function ScoreCanvas(): JSX.Element {
         }
       }
 
-      // No barline hit — close picker and deselect
+      // Note selection — find closest note in the clicked measure
+      const selPart  = score.parts.find(p => p.id === layout.partId)
+      const selStaff = selPart?.staves.find(s => s.id === layout.staffId)
+      if (selStaff) {
+        const selMIdx = selStaff.measures.findIndex(m => m.id === layout.measureId)
+        if (selMIdx !== -1) {
+          const selVoice = selStaff.measures[selMIdx].voices[0]
+          if (selVoice && selVoice.events.length > 0) {
+            let closest: { id: string; dist: number } | null = null
+            for (const event of selVoice.events) {
+              const noteX = notePositionsRef.current.get(event.id)
+              if (noteX === undefined) continue
+              const dist = Math.abs(canvasX - noteX)
+              if (!closest || dist < closest.dist) closest = { id: event.id, dist }
+            }
+            if (closest && closest.dist <= 20) {
+              setSelectedNote(closest.id)
+              return
+            }
+          }
+        }
+      }
+
+      // No hit — close picker and deselect
       setSelectedBarline(null)
       setPickerState(null)
       setSelectedNote(null)
