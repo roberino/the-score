@@ -2,7 +2,7 @@ import { BrowserWindow, Menu, MenuItemConstructorOptions, shell } from 'electron
 
 export function buildAppMenu(win: BrowserWindow): Menu {
   const isMac = process.platform === 'darwin'
-  const send = (channel: string) => { if (!win.isDestroyed()) send(channel) }
+  const send = (channel: string) => { if (!win.isDestroyed()) win.webContents.send(channel) }
 
   const template: MenuItemConstructorOptions[] = [
     // macOS app menu
@@ -49,6 +49,15 @@ export function buildAppMenu(win: BrowserWindow): Menu {
           label: 'Export as PDF…',
           accelerator: 'CmdOrCtrl+Shift+E',
           click: () => send('menu:exportPdf')
+        },
+        {
+          label: 'Export as MIDI…',
+          accelerator: 'CmdOrCtrl+Shift+M',
+          click: () => send('menu:exportMidi')
+        },
+        {
+          label: 'Import MIDI…',
+          click: () => send('menu:importMidi')
         },
         { type: 'separator' },
         isMac ? { role: 'close' as const } : { role: 'quit' as const }

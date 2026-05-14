@@ -84,3 +84,25 @@ ipcMain.handle('file:saveAs', async (_event, { content }: { content: string }) =
   await writeFile(filePath, content, 'utf-8')
   return { path: filePath, success: true }
 })
+
+ipcMain.handle('midi:import', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    filters: [{ name: 'MIDI Files', extensions: ['mid', 'midi'] }],
+    properties: ['openFile']
+  })
+  if (canceled || filePaths.length === 0) return null
+
+  const buf = await readFile(filePaths[0])
+  return { bytes: new Uint8Array(buf), path: filePaths[0] }
+})
+
+ipcMain.handle('midi:export', async (_event, { bytes }: { bytes: Uint8Array }) => {
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    filters: [{ name: 'MIDI Files', extensions: ['mid'] }],
+    defaultPath: 'Untitled.mid'
+  })
+  if (canceled || !filePath) return { success: false }
+
+  await writeFile(filePath, Buffer.from(bytes))
+  return { success: true }
+})

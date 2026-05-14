@@ -17,12 +17,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveFileAs: (content: string) =>
     ipcRenderer.invoke('file:saveAs', { content }) as Promise<{ path: string; success: boolean } | null>,
 
+  exportMidi: (bytes: Uint8Array) =>
+    ipcRenderer.invoke('midi:export', { bytes }) as Promise<{ success: boolean }>,
+
+  importMidi: () =>
+    ipcRenderer.invoke('midi:import') as Promise<{ bytes: Uint8Array; path: string } | null>,
+
   // ── Menu events → renderer ─────────────────────────────────────────────────
   // The main process sends these when native menu items are clicked.
   onMenuEvent: (
     event: 'menu:new' | 'menu:open' | 'menu:save' | 'menu:saveAs' |
            'menu:exportPdf' | 'menu:undo' | 'menu:redo' |
-           'menu:zoomIn' | 'menu:zoomOut' | 'menu:zoomFit',
+           'menu:zoomIn' | 'menu:zoomOut' | 'menu:zoomFit' |
+           'menu:exportMidi' | 'menu:importMidi',
     handler: () => void
   ) => {
     ipcRenderer.on(event, handler)

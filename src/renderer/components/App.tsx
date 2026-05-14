@@ -4,6 +4,7 @@ import { Toolbar } from './Toolbar'
 import { ScoreCanvas } from './ScoreCanvas'
 import { StatusBar } from './StatusBar'
 import type { Score } from '@shared/score'
+import { scoreToMidi, midiToScore } from '../engine/midiEngine'
 
 export function App(): JSX.Element {
   const { undo, redo, newScore, loadScore, saveScore, saveScoreAs, setZoom, zoom,
@@ -20,7 +21,9 @@ export function App(): JSX.Element {
       window.electronAPI.onMenuEvent('menu:redo',    () => redo()),
       window.electronAPI.onMenuEvent('menu:zoomIn',  () => setZoom(zoom + 0.1)),
       window.electronAPI.onMenuEvent('menu:zoomOut', () => setZoom(zoom - 0.1)),
-      window.electronAPI.onMenuEvent('menu:zoomFit', () => setZoom(1.0))
+      window.electronAPI.onMenuEvent('menu:zoomFit', () => setZoom(1.0)),
+      window.electronAPI.onMenuEvent('menu:exportMidi', () => handleExportMidi()),
+      window.electronAPI.onMenuEvent('menu:importMidi', () => handleImportMidi()),
     ]
     return () => cleanups.forEach(cleanup => cleanup())
   }, [zoom])   // re-register when zoom changes so closure captures latest value
@@ -50,6 +53,23 @@ export function App(): JSX.Element {
       loadScore(score, result.path)
     } catch {
       console.error('Failed to parse score file')
+    }
+  }
+
+  async function handleExportMidi(): Promise<void> {
+    const score = useAppStore.getState().score
+    const bytes = scoreToMidi(score)
+    await window.electronAPI.exportMidi(bytes)
+  }
+
+  async function handleImportMidi(): Promise<void> {
+    const result = await window.electronAPI.importMidi()
+    if (!result) return
+    try {
+      const score = midiToScore(result.bytes)
+      loadScore(score, result.path)
+    } catch {
+      console.error('Failed to import MIDI file')
     }
   }
 
