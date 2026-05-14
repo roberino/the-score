@@ -12,6 +12,7 @@ import {
   Voice as VexVoice,
   Formatter,
   Beam,
+  Dot,
   Fraction,
   Accidental as VexAccidental,
   BarlineType,
@@ -65,6 +66,7 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean): StaveNote {
         keys: [pitchToVexKey(n.pitch)],
         duration: DURATION_MAP[n.duration] + (n.dots > 0 ? 'd'.repeat(n.dots) : '')
       })
+      if (n.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
       if (n.pitch.accidental) {
         const acc = n.pitch.accidental === 'sharp'       ? '#'
           : n.pitch.accidental === 'flat'        ? 'b'
@@ -82,15 +84,18 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean): StaveNote {
         keys: ['b/4'],
         duration: DURATION_MAP[r.duration] + (r.dots > 0 ? 'd'.repeat(r.dots) : '') + 'r'
       })
+      if (r.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
       if (selected) staveNote.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
       return staveNote
     }
     case 'chord': {
       const c = event as Chord
-      return new StaveNote({
+      const staveNote = new StaveNote({
         keys: c.pitches.map(pitchToVexKey),
-        duration: DURATION_MAP[c.duration]
+        duration: DURATION_MAP[c.duration] + (c.dots > 0 ? 'd'.repeat(c.dots) : '')
       })
+      if (c.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
+      return staveNote
     }
   }
 }
