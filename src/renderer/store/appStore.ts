@@ -57,6 +57,7 @@ export interface AppState {
   setSelectedBarline: (measureId: string | null) => void
   setPlaying: (playing: boolean) => void
   setSelectedDuration: (duration: Duration) => void
+  setIsDotted: (dotted: boolean) => void
   toggleDot: () => void
   setPrimedAccidental: (acc: Accidental | null) => void
   setCursor: (measureId: string | null, beatPosition: number) => void
@@ -220,7 +221,37 @@ export const useAppStore = create<AppState>()(
       set(s => { s.isPlaying = false })
     },
     setSelectedDuration: (duration) => set(s => { s.selectedDuration = duration }),
-    toggleDot: () => set(s => { s.isDotted = !s.isDotted }),
+    setIsDotted: (dotted) => set(s => { s.isDotted = dotted }),
+    toggleDot: () => {
+      const { score, selectedNoteId, inputMode } = get()
+      if (inputMode === 'select' && selectedNoteId) {
+        for (const part of score.parts) {
+          for (const staff of part.staves) {
+            for (const measure of staff.measures) {
+              for (const voice of measure.voices) {
+                const event = voice.events.find(e => e.id === selectedNoteId)
+                if (event) {
+                  const newDots = (event.dots === 1 ? 0 : 1) as 0 | 1
+                  get().dispatch({
+                    type:      'SET_NOTE_DURATION',
+                    partId:    part.id,
+                    staffId:   staff.id,
+                    measureId: measure.id,
+                    voiceId:   voice.id,
+                    noteId:    selectedNoteId,
+                    duration:  event.duration,
+                    dots:      newDots,
+                  })
+                  set(s => { s.isDotted = newDots === 1 })
+                  return
+                }
+              }
+            }
+          }
+        }
+      }
+      set(s => { s.isDotted = !s.isDotted })
+    },
     setPrimedAccidental: (acc) => set(s => { s.primedAccidental = acc }),
     setCursor: (measureId, beatPosition) => set(s => {
       s.cursorMeasureId = measureId

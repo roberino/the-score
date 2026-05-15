@@ -184,7 +184,7 @@ export function ScoreCanvas(): JSX.Element {
     cursorMeasureId, cursorBeatPosition,
     lastEnteredPitch, selectedNoteId,
     dispatch, setInputMode,
-    setSelectedDuration, toggleDot, setPrimedAccidental,
+    setSelectedDuration, setIsDotted, toggleDot, setPrimedAccidental,
     setCursor, setLastEnteredPitch,
     setSelectedNote, setSelectedBarline,
     moveCursorToFirstAvailable,
@@ -732,6 +732,11 @@ export function ScoreCanvas(): JSX.Element {
             }
             if (closest && closest.dist <= 20) {
               setSelectedNote(closest.id)
+              const event = selVoice.events.find(e => e.id === closest.id)
+              if (event) {
+                setSelectedDuration(event.duration)
+                setIsDotted(event.dots > 0)
+              }
               return
             }
           }
