@@ -140,6 +140,14 @@ export function stepToPitch(step: number, clef: ClefType): { noteName: NoteName;
   return { noteName: DIATONIC[noteIndex], octave }
 }
 
+// Inverse of stepToPitch: given a stored pitch and clef, returns the staff step.
+export function pitchToStep(pitch: { noteName: NoteName; octave: number }, clef: ClefType): number {
+  const ref       = CLEF_REF[clef] ?? CLEF_REF.treble
+  const noteIndex = DIATONIC.indexOf(pitch.noteName)
+  const stepsAboveRef = noteIndex + 7 * (pitch.octave - ref.octave)
+  return ref.step - stepsAboveRef
+}
+
 // Convert a canvas Y coordinate to a staff step given the stave's top-line Y.
 export function yToStep(clickY: number, staveTopY: number, lineSpacingPx: number = 10): number {
   return Math.round((clickY - staveTopY) / (lineSpacingPx / 2))

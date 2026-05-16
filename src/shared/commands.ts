@@ -12,7 +12,7 @@
 import { produce } from 'immer'
 import { createMeasure } from './score'
 import type { Score, NoteEvent, Duration, ClefType, KeySignature, TimeSignature, BarlineType } from './score'
-import { measureCapacityUnits, eventDurationUnits } from './musicUtils'
+import { measureCapacityUnits, eventDurationUnits, resolveClef, pitchToStep, stepToPitch } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
 
@@ -124,6 +124,39 @@ function stripAccidentalsFrom(
   }
 }
 
+// ── Clef re-pitch helper ─────────────────────────────────────────────────────
+// When the clef changes at measure fromIdx, notes in all affected measures are
+// re-pitched so they stay at the same visual staff position (step) but sound the
+// new pitch implied by the new clef. Stops at the next explicit measure.clef.
+
+function repitchNotes(
+  measures: any[],
+  fromIdx: number,
+  oldClef: ClefType,
+  newClef: ClefType
+): void {
+  for (let i = fromIdx; i < measures.length; i++) {
+    if (i > fromIdx && measures[i].clef) break  // next explicit clef change — stop
+    for (const voice of measures[i].voices ?? []) {
+      for (const event of voice.events ?? []) {
+        if (event.type === 'note') {
+          const step = pitchToStep(event.pitch, oldClef)
+          const { noteName, octave } = stepToPitch(step, newClef)
+          event.pitch.noteName = noteName
+          event.pitch.octave   = octave
+        } else if (event.type === 'chord') {
+          for (const pitch of event.pitches ?? []) {
+            const step = pitchToStep(pitch, oldClef)
+            const { noteName, octave } = stepToPitch(step, newClef)
+            pitch.noteName = noteName
+            pitch.octave   = octave
+          }
+        }
+      }
+    }
+  }
+}
+
 // ── Command executor ─────────────────────────────────────────────────────────
 // Applies a command to a Score and returns the new Score (immutably, via Immer).
 // Think of Immer's `produce` as a C# `with` expression for deep object graphs.
@@ -207,12 +240,20 @@ export function applyCommand(score: Score, command: Command): Score {
         if (!staff) break
         const mIdx = (staff.measures as any[]).findIndex(m => m.id === command.measureId)
         if (mIdx === -1) break
+
+        const oldClef = resolveClef(staff.measures as any[], mIdx, staff.clef as ClefType)
+        const newClef = command.clef
+
         if (mIdx === 0) {
           // Change the staff-level default; first measure carries no per-measure override
           ;(staff as any).clef = command.clef
           delete (staff.measures[0] as any).clef
         } else {
           ;(staff.measures[mIdx] as any).clef = { type: command.clef }
+        }
+
+        if (oldClef !== newClef) {
+          repitchNotes(staff.measures as any[], mIdx, oldClef, newClef)
         }
         break
       }

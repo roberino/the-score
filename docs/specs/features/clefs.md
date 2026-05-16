@@ -104,6 +104,43 @@ Closes on Escape or click outside.
 
 ---
 
+## Pitch Re-spelling on Clef Change
+
+When a clef changes, existing notes in the affected measures are **re-pitched** so that their visual position on the staff (the line or space they occupy) stays the same, but their stored pitch — and therefore their sound — changes to match what that position means in the new clef.
+
+### Why this behaviour
+
+A note's staff position is its primary written identity. Keeping it fixed means the score looks identical before and after the clef change; only the sounding pitch differs. This is also immediately reflected in playback (the audio engine reads the stored pitch directly).
+
+### Scope of re-pitching
+
+Starting from the measure where the clef changes, all subsequent measures are re-pitched **until**:
+- another explicit `measure.clef` override is encountered, or
+- the end of the staff is reached.
+
+### Algorithm
+
+For each affected note:
+1. Compute its **staff step** from the stored pitch using the *old* clef via `pitchToStep(pitch, oldClef)`.
+2. Convert that step back to a pitch using the *new* clef via `stepToPitch(step, newClef)`.
+3. Update `noteName` and `octave`. Accidentals are preserved as-is (they represent a chromatic inflection on top of the written diatonic position).
+
+### `pitchToStep` (new utility)
+
+Inverse of `stepToPitch`. Given a pitch and a clef, returns the staff step:
+
+```
+step = ref.step − (noteIndex + 7 × (octave − ref.octave))
+```
+
+where `noteIndex` is the index of the note name in `['C','D','E','F','G','A','B']`.
+
+### Playback
+
+No changes to the audio engine are required. `pitchToHz` already reads `noteName` and `octave` from the stored `Pitch`, so re-pitched notes play back at their new frequency automatically.
+
+---
+
 ## Undo / Redo
 
-`SET_CLEF` is dispatched through the normal `dispatch` → `applyCommand` pipeline and is covered by the existing full-snapshot undo stack.
+`SET_CLEF` is dispatched through the normal `dispatch` → `applyCommand` pipeline and is covered by the existing full-snapshot undo stack. Undoing a clef change restores both the clef and the original pitches.
