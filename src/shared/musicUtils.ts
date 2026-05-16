@@ -61,6 +61,17 @@ export function resolveKeySig(
   return scoreDefault
 }
 
+export function resolveClef(
+  measures: readonly { clef?: { type: ClefType } }[],
+  idx: number,
+  staffDefault: ClefType
+): ClefType {
+  for (let i = idx; i >= 0; i--) {
+    if (measures[i].clef) return measures[i].clef!.type
+  }
+  return staffDefault
+}
+
 const MAJOR_KEY_LABELS: Partial<Record<number, string>> = {
   0: 'C', 1: 'G', 2: 'D', 3: 'A', 4: 'E', 5: 'B', 6: 'F#', 7: 'C#',
   [-1]: 'F', [-2]: 'Bb', [-3]: 'Eb', [-4]: 'Ab', [-5]: 'Db', [-6]: 'Gb', [-7]: 'Cb',
@@ -113,13 +124,16 @@ export function closestOctave(noteName: NoteName, prevPitch: Pitch | null): numb
 
 const DIATONIC: NoteName[] = ['C', 'D', 'E', 'F', 'G', 'A', 'B']
 
-const CLEF_REF: Record<'treble' | 'bass', { step: number; octave: number }> = {
-  treble: { step: 10, octave: 4 },
-  bass:   { step: 12, octave: 2 },
+const CLEF_REF: Record<string, { step: number; octave: number }> = {
+  treble:     { step: 10, octave: 4 },
+  bass:       { step: 12, octave: 2 },
+  alto:       { step: 4,  octave: 4 },  // C4 on 3rd (middle) line
+  tenor:      { step: 6,  octave: 4 },  // C4 on 4th line
+  percussion: { step: 10, octave: 4 },  // unpitched — treble fallback
 }
 
 export function stepToPitch(step: number, clef: ClefType): { noteName: NoteName; octave: number } {
-  const ref = clef === 'bass' ? CLEF_REF.bass : CLEF_REF.treble
+  const ref = CLEF_REF[clef] ?? CLEF_REF.treble
   const stepsAboveRef = ref.step - step          // positive = above ref C
   const noteIndex = ((stepsAboveRef % 7) + 7) % 7
   const octave    = ref.octave + Math.floor(stepsAboveRef / 7)

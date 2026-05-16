@@ -20,7 +20,7 @@ import {
 } from 'vexflow'
 
 import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature } from '@shared/score'
-import { resolveTimeSig, timeSigsEqual, resolveKeySig, measureCapacityUnits } from '@shared/musicUtils'
+import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, measureCapacityUnits } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
 
@@ -169,6 +169,7 @@ export interface MeasureLayout {
   width: number
   measureIndex: number
   isLineStart: boolean
+  showClef: boolean   // true when a clef symbol is rendered for this measure
 }
 
 // VexFlow 5 default: spaceAboveStaffLn = 4, spacingBetweenLinesPx = 10
@@ -193,17 +194,20 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
 
   for (let mIdx = 0; mIdx < measureCount; mIdx++) {
     const measure      = firstStaff.measures[mIdx]
-    const effectiveSig = resolveTimeSig(firstStaff.measures, mIdx, score.timeSignature)
-    const effectiveKey = resolveKeySig(firstStaff.measures, mIdx, score.keySignature)
-    const prevKey      = mIdx > 0 ? resolveKeySig(firstStaff.measures, mIdx - 1, score.keySignature) : null
-    const prevSig      = mIdx > 0 ? resolveTimeSig(firstStaff.measures, mIdx - 1, score.timeSignature) : null
-    const events       = measure.voices[0]?.events ?? []
+    const effectiveSig  = resolveTimeSig(firstStaff.measures, mIdx, score.timeSignature)
+    const effectiveKey  = resolveKeySig(firstStaff.measures, mIdx, score.keySignature)
+    const effectiveClef = resolveClef(firstStaff.measures, mIdx, firstStaff.clef)
+    const prevKey       = mIdx > 0 ? resolveKeySig(firstStaff.measures, mIdx - 1, score.keySignature) : null
+    const prevSig       = mIdx > 0 ? resolveTimeSig(firstStaff.measures, mIdx - 1, score.timeSignature) : null
+    const prevClef      = mIdx > 0 ? resolveClef(firstStaff.measures, mIdx - 1, firstStaff.clef) : null
+    const events        = measure.voices[0]?.events ?? []
 
-    const keyChanged = prevKey !== null && prevKey.fifths !== effectiveKey.fifths
-    const sigChanged = prevSig !== null && !timeSigsEqual(effectiveSig, prevSig)
+    const keyChanged  = prevKey  !== null && prevKey.fifths !== effectiveKey.fifths
+    const sigChanged  = prevSig  !== null && !timeSigsEqual(effectiveSig, prevSig)
+    const clefChanged = prevClef !== null && prevClef !== effectiveClef
 
     // Width if NOT a line start (no repeat clef/key/time unless first measure or changed)
-    const showClef_mid    = false
+    const showClef_mid    = clefChanged
     const showKeySig_mid  = keyChanged
     const showTimeSig_mid = sigChanged
     const width_mid = computeMeasureWidth(events, effectiveSig, showClef_mid, showKeySig_mid, showTimeSig_mid, effectiveKey)
@@ -245,19 +249,23 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
       part.staves.forEach((staff) => {
         const staffMeasure = staff.measures[mIdx]
         if (!staffMeasure) return
+        const staffClef     = resolveClef(staff.measures, mIdx, staff.clef)
+        const prevStaffClef = mIdx > 0 ? resolveClef(staff.measures, mIdx - 1, staff.clef) : null
+        const staffClefChanged = prevStaffClef !== null && prevStaffClef !== staffClef
         const y = yBase + partIndex * staveHeight
         layouts.push({
           measureId:    staffMeasure.id,
           partId:       part.id,
           staffId:      staff.id,
           voiceId:      staffMeasure.voices[0]?.id ?? '',
-          clef:         staff.clef,
+          clef:         staffClef,
           x,
           staveTopY:    y + VEXFLOW_HEADROOM_PX,
           staveY:       y,
           width,
           measureIndex: mIdx,
           isLineStart,
+          showClef:     isLineStart || staffClefChanged,
         })
       })
     })
@@ -353,7 +361,7 @@ function renderFromLayouts(
       effectiveSig, prevSig, score.timeSignature,
       layout.clef,
       layout.x, layout.staveY, layout.width,
-      layout.measureIndex, layout.isLineStart,
+      layout.measureIndex, layout.isLineStart, layout.showClef,
       selectedNoteId, notePositions
     )
   }
@@ -393,6 +401,7 @@ function renderMeasure(
   width: number,
   measureIndex: number,
   isLineStart: boolean,
+  showClef: boolean,
   selectedNoteId: string | null,
   notePositions: Map<string, number>
 ): void {
@@ -401,8 +410,14 @@ function renderMeasure(
   const keyChanged  = prevKey !== null && prevKey.fifths !== effectiveKey.fifths
   const sigChanged  = prevSig !== null && !timeSigsEqual(effectiveSig, prevSig)
 
-  // Clef: show at every system start (standard notation)
-  if (isLineStart) stave.addClef(clefType)
+  // Clef: full size at system starts, small size for mid-score changes
+  if (showClef) {
+    if (isLineStart) {
+      stave.addClef(clefType)
+    } else {
+      stave.addClef(clefType, 'small')
+    }
+  }
 
   // Key sig: show at system starts (if non-C) and when it changes mid-score
   const showKeySig = (isLineStart && effectiveKey.fifths !== 0) || keyChanged

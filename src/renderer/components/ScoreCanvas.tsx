@@ -6,7 +6,7 @@ import {
   DEFAULT_RENDER_OPTIONS,
   type MeasureLayout,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature, type KeySignature } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature, type KeySignature, type ClefType } from '@shared/score'
 import {
   DURATION_UNITS,
   dottedUnits,
@@ -23,9 +23,11 @@ import {
 } from '@shared/musicUtils'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
+import { ClefPicker } from './ClefPicker'
 
-const LINE_SPACING_PX = 10
+const LINE_SPACING_PX  = 10
 const BARLINE_HIT_RADIUS = 8
+const CLEF_HIT_WIDTH   = 46   // approximate px width of a rendered clef symbol
 
 // ── BarlinePicker ─────────────────────────────────────────────────────────────
 
@@ -171,12 +173,22 @@ interface KeySigPickerState {
   screenY: number
 }
 
+interface ClefPickerState {
+  measureId: string
+  partId: string
+  staffId: string
+  current: ClefType
+  screenX: number
+  screenY: number
+}
+
 export function ScoreCanvas(): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const notePositionsRef = useRef(new Map<string, number>())
   const [pickerState, setPickerState] = useState<PickerState | null>(null)
   const [timeSigPickerState, setTimeSigPickerState] = useState<TimeSigPickerState | null>(null)
   const [keySigPickerState, setKeySigPickerState] = useState<KeySigPickerState | null>(null)
+  const [clefPickerState, setClefPickerState] = useState<ClefPickerState | null>(null)
 
   const {
     score, zoom, inputMode,
@@ -625,6 +637,26 @@ export function ScoreCanvas(): JSX.Element {
     if (inputMode === 'select') {
       const STAVE_HEIGHT = 4 * LINE_SPACING_PX
 
+      // Check if click is on a displayed clef symbol (leftmost preamble area)
+      for (const l of layouts) {
+        if (
+          l.showClef &&
+          canvasX >= l.x && canvasX <= l.x + CLEF_HIT_WIDTH &&
+          canvasY >= l.staveTopY - 20 && canvasY <= l.staveTopY + STAVE_HEIGHT + 20
+        ) {
+          const rect = canvas.getBoundingClientRect()
+          setClefPickerState({
+            measureId: l.measureId,
+            partId:    l.partId,
+            staffId:   l.staffId,
+            current:   l.clef,
+            screenX:   rect.left + l.x,
+            screenY:   rect.top  + l.staveTopY + STAVE_HEIGHT + 10,
+          })
+          return
+        }
+      }
+
       // Check if click is on a displayed key signature (leftmost preamble area)
       for (const l of layouts) {
         if (
@@ -776,6 +808,17 @@ export function ScoreCanvas(): JSX.Element {
     setKeySigPickerState(null)
   }, [keySigPickerState, dispatch])
 
+  // ── Clef picker handlers ────────────────────────────────────────────────────
+
+  const closeClefPicker = useCallback(() => setClefPickerState(null), [])
+
+  const handleClefSelect = useCallback((clef: ClefType) => {
+    const s = clefPickerState
+    if (!s) return
+    dispatch({ type: 'SET_CLEF', partId: s.partId, staffId: s.staffId, measureId: s.measureId, clef })
+    setClefPickerState(null)
+  }, [clefPickerState, dispatch])
+
   // ── Time sig picker handlers ────────────────────────────────────────────────
 
   const closeTimeSigPicker = useCallback(() => setTimeSigPickerState(null), [])
@@ -797,6 +840,7 @@ export function ScoreCanvas(): JSX.Element {
       setPickerState(null)
       setTimeSigPickerState(null)
       setKeySigPickerState(null)
+      setClefPickerState(null)
     }
   }, [inputMode])
 
@@ -850,6 +894,15 @@ export function ScoreCanvas(): JSX.Element {
           screenY={keySigPickerState.screenY}
           onClose={closeKeySigPicker}
           onSelect={handleKeySigSelect}
+        />
+      )}
+      {clefPickerState && (
+        <ClefPicker
+          current={clefPickerState.current}
+          screenX={clefPickerState.screenX}
+          screenY={clefPickerState.screenY}
+          onClose={closeClefPicker}
+          onSelect={handleClefSelect}
         />
       )}
     </>

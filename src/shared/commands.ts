@@ -201,6 +201,22 @@ export function applyCommand(score: Score, command: Command): Score {
         break
       }
 
+      case 'SET_CLEF': {
+        const part  = draft.parts.find(p => p.id === command.partId)
+        const staff = part?.staves.find(s => s.id === command.staffId)
+        if (!staff) break
+        const mIdx = (staff.measures as any[]).findIndex(m => m.id === command.measureId)
+        if (mIdx === -1) break
+        if (mIdx === 0) {
+          // Change the staff-level default; first measure carries no per-measure override
+          ;(staff as any).clef = command.clef
+          delete (staff.measures[0] as any).clef
+        } else {
+          ;(staff.measures[mIdx] as any).clef = { type: command.clef }
+        }
+        break
+      }
+
       case 'SET_BARLINE': {
         const part    = draft.parts.find(p => p.id === command.partId)
         const staff   = part?.staves.find(s => s.id === command.staffId)
