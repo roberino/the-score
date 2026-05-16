@@ -426,6 +426,9 @@ function renderMeasure(
 
   stave.setContext(ctx).draw()
 
+  // Exact note area after VexFlow has placed clef/key/time preamble
+  const noteAreaWidth = stave.getNoteEndX() - stave.getNoteStartX()
+
   // Bar numbers at system starts (not the first measure)
   if (measureIndex > 0 && isLineStart) {
     const nativeCtx: CanvasRenderingContext2D | null =
@@ -449,7 +452,7 @@ function renderMeasure(
       beatValue: effectiveSig.denominator,
     }).setStrict(false)
     vexVoice.addTickables([wholeRest])
-    new Formatter().joinVoices([vexVoice]).format([vexVoice], width - 40)
+    new Formatter().joinVoices([vexVoice]).format([vexVoice], noteAreaWidth)
     vexVoice.draw(ctx, stave)
     return
   }
@@ -464,7 +467,7 @@ function renderMeasure(
   const beams = beamGroups
     ? Beam.generateBeams(staveNotes, { groups: beamGroups })
     : Beam.generateBeams(staveNotes)
-  new Formatter().joinVoices([vexVoice]).format([vexVoice], width - 40)
+  new Formatter().joinVoices([vexVoice]).format([vexVoice], noteAreaWidth)
   // Collect absolute x of each note head after formatting (stave already drawn,
   // so getNoteStartX() is accurate). setStave() is called again internally by draw().
   staveNotes.forEach((sn, i) => {
