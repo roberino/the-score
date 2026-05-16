@@ -20,7 +20,7 @@ import {
 } from 'vexflow'
 
 import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature } from '@shared/score'
-import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, measureCapacityUnits } from '@shared/musicUtils'
+import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, transposeKeyFifths, measureCapacityUnits } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
 
@@ -120,6 +120,8 @@ export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
   marginY: 60
 }
 
+export const LABEL_MARGIN_X = 140  // marginX when part labels are shown
+
 // ── Width calculation constants ───────────────────────────────────────────────
 
 const PX_PER_64TH_UNIT  = 3.2   // px per 64th-note unit (drives duration-based width)
@@ -163,6 +165,7 @@ export interface MeasureLayout {
   staffId: string
   voiceId: string
   clef: ClefType
+  transposeSemitones: number
   x: number
   staveTopY: number   // y of the actual top staff LINE
   staveY: number      // raw y passed to new Stave()
@@ -254,18 +257,19 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
         const staffClefChanged = prevStaffClef !== null && prevStaffClef !== staffClef
         const y = yBase + partIndex * staveHeight
         layouts.push({
-          measureId:    staffMeasure.id,
-          partId:       part.id,
-          staffId:      staff.id,
-          voiceId:      staffMeasure.voices[0]?.id ?? '',
-          clef:         staffClef,
+          measureId:          staffMeasure.id,
+          partId:             part.id,
+          staffId:            staff.id,
+          voiceId:            staffMeasure.voices[0]?.id ?? '',
+          clef:               staffClef,
+          transposeSemitones: part.transposeSemitones,
           x,
-          staveTopY:    y + VEXFLOW_HEADROOM_PX,
-          staveY:       y,
+          staveTopY:          y + VEXFLOW_HEADROOM_PX,
+          staveY:             y,
           width,
-          measureIndex: mIdx,
+          measureIndex:       mIdx,
           isLineStart,
-          showClef:     isLineStart || staffClefChanged,
+          showClef:           isLineStart || staffClefChanged,
         })
       })
     })
@@ -330,7 +334,7 @@ function renderFromLayouts(
   selectedNoteId: string | null,
   notePositions: Map<string, number>
 ): void {
-  // Build fast lookup: staffId → staff (and its measure array for resolving sigs)
+  // Build fast lookup: staffId → staff / part
   type StaffEntry = { staff: Staff; part: Part }
   const staffMap = new Map<string, StaffEntry>()
   for (const part of score.parts) {
@@ -343,7 +347,6 @@ function renderFromLayouts(
     const entry = staffMap.get(layout.staffId)
     if (!entry) continue
     const { staff, part } = entry
-    void part  // used for type safety only
 
     const mIdx   = staff.measures.findIndex(m => m.id === layout.measureId)
     if (mIdx === -1) continue
@@ -359,11 +362,26 @@ function renderFromLayouts(
       ctx, measure, prevMeasure,
       effectiveKey, prevKey,
       effectiveSig, prevSig, score.timeSignature,
-      layout.clef,
+      layout.clef, layout.transposeSemitones,
       layout.x, layout.staveY, layout.width,
       layout.measureIndex, layout.isLineStart, layout.showClef,
       selectedNoteId, notePositions
     )
+
+    // Part labels: right-aligned against the stave's left edge at system starts
+    if (layout.isLineStart && score.showPartLabels && part.labelVisible) {
+      const label = layout.measureIndex === 0 ? part.name : part.shortName
+      const nativeCtx: CanvasRenderingContext2D | null =
+        typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
+      if (nativeCtx) {
+        nativeCtx.save()
+        nativeCtx.font = layout.measureIndex === 0 ? '13px sans-serif' : '11px sans-serif'
+        nativeCtx.fillStyle = '#222'
+        nativeCtx.textAlign = 'right'
+        nativeCtx.fillText(label, layout.x - 8, layout.staveTopY + 20)
+        nativeCtx.restore()
+      }
+    }
   }
 }
 
@@ -396,6 +414,7 @@ function renderMeasure(
   prevSig: TimeSignature | null,
   scoreTimeSig: TimeSignature,
   clefType: string,
+  transposeSemitones: number,
   x: number,
   y: number,
   width: number,
@@ -410,6 +429,9 @@ function renderMeasure(
   const keyChanged  = prevKey !== null && prevKey.fifths !== effectiveKey.fifths
   const sigChanged  = prevSig !== null && !timeSigsEqual(effectiveSig, prevSig)
 
+  // Written key for this part (transposed from concert key)
+  const writtenFifths = transposeKeyFifths(effectiveKey.fifths, transposeSemitones)
+
   // Clef: full size at system starts, small size for mid-score changes
   if (showClef) {
     if (isLineStart) {
@@ -419,9 +441,9 @@ function renderMeasure(
     }
   }
 
-  // Key sig: show at system starts (if non-C) and when it changes mid-score
-  const showKeySig = (isLineStart && effectiveKey.fifths !== 0) || keyChanged
-  if (showKeySig) stave.addKeySignature(FIFTHS_TO_VEX_KEY[effectiveKey.fifths] ?? 'C')
+  // Key sig: show at system starts (if non-C in written key) and when concert key changes
+  const showKeySig = (isLineStart && writtenFifths !== 0) || keyChanged
+  if (showKeySig) stave.addKeySignature(FIFTHS_TO_VEX_KEY[writtenFifths] ?? 'C')
 
   // Time sig: show on first measure, when it changes, or when repeated at system start
   const showTimeSig = (isLineStart && measureIndex === 0)

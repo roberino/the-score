@@ -4,6 +4,7 @@ import {
   renderScore,
   computeLayout,
   DEFAULT_RENDER_OPTIONS,
+  LABEL_MARGIN_X,
   type MeasureLayout,
 } from '../engine/notationRenderer'
 import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature, type KeySignature, type ClefType } from '@shared/score'
@@ -107,11 +108,12 @@ function BarlinePicker({
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function getRenderOptions(zoom: number) {
+function getRenderOptions(zoom: number, showLabels: boolean) {
   return {
     ...DEFAULT_RENDER_OPTIONS,
     canvasWidth: Math.floor(DEFAULT_RENDER_OPTIONS.canvasWidth * zoom),
     staveWidth:  Math.floor(DEFAULT_RENDER_OPTIONS.staveWidth  * zoom),
+    marginX:     showLabels ? LABEL_MARGIN_X : DEFAULT_RENDER_OPTIONS.marginX,
   }
 }
 
@@ -207,7 +209,7 @@ export function ScoreCanvas(): JSX.Element {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const options = getRenderOptions(zoom)
+    const options = getRenderOptions(zoom, score.showPartLabels)
     const timeSig = score.timeSignature
     const capacity = measureCapacityUnits(timeSig)
     notePositionsRef.current = renderScore(
@@ -500,7 +502,7 @@ export function ScoreCanvas(): JSX.Element {
     if (!canvas) return
 
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
-    const options = getRenderOptions(zoom)
+    const options = getRenderOptions(zoom, score.showPartLabels)
     const layouts = computeLayout(score, options)
     const layout  = findClickedLayout(canvasX, canvasY, layouts)
     if (!layout) return

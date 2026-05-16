@@ -16,7 +16,12 @@ const DURATION_BUTTONS: { duration: Duration; key: string }[] = Object.entries(K
   .map(([key, duration]) => ({ key, duration }))
   .sort((a, b) => Number(a.key) - Number(b.key))
 
-export function Toolbar(): JSX.Element {
+interface ToolbarProps {
+  onTogglePartsPanel: () => void
+  partsPanelOpen: boolean
+}
+
+export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): JSX.Element {
   const {
     inputMode, setInputMode,
     undo, redo, isPlaying, startPlayback, stopPlayback,
@@ -135,6 +140,15 @@ export function Toolbar(): JSX.Element {
           title={isPlaying ? 'Stop (Space)' : 'Play (Space)'}
           label={isPlaying ? '⏹ Stop' : '▶ Play'}
           accent={isPlaying}
+        />
+
+        <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
+
+        <ToolbarButton
+          onClick={onTogglePartsPanel}
+          title="Parts panel"
+          label="Parts"
+          accent={partsPanelOpen}
         />
 
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />

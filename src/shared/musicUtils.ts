@@ -61,6 +61,16 @@ export function resolveKeySig(
   return scoreDefault
 }
 
+// Convert a concert key (fifths) to written key for a transposing instrument.
+// transposeSemitones: positive = written is above concert (e.g. Bb clarinet = +2).
+export function transposeKeyFifths(concertFifths: number, transposeSemitones: number): number {
+  if (transposeSemitones === 0) return concertFifths
+  const norm = ((transposeSemitones % 12) + 12) % 12
+  const raw  = (norm * 7) % 12
+  const fifthsChange = raw > 6 ? raw - 12 : raw
+  return Math.max(-7, Math.min(7, concertFifths + fifthsChange))
+}
+
 export function resolveClef(
   measures: readonly { clef?: { type: ClefType } }[],
   idx: number,

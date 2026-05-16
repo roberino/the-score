@@ -1,14 +1,16 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { Toolbar } from './Toolbar'
 import { ScoreCanvas } from './ScoreCanvas'
 import { StatusBar } from './StatusBar'
+import { PartsPanel } from './PartsPanel'
 import type { Score } from '@shared/score'
 import { scoreToMidi, midiToScore } from '../engine/midiEngine'
 
 export function App(): JSX.Element {
   const { undo, redo, newScore, loadScore, saveScore, saveScoreAs, setZoom, zoom,
           isPlaying, startPlayback, stopPlayback, inputMode } = useAppStore()
+  const [partsPanelOpen, setPartsPanelOpen] = useState(false)
 
   // ── Wire native menu events to store actions ────────────────────────────────
   useEffect(() => {
@@ -82,10 +84,13 @@ export function App(): JSX.Element {
       color: '#d4d4d4',
       overflow: 'hidden'
     }}>
-      <Toolbar />
-      <main style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
-        <ScoreCanvas />
-      </main>
+      <Toolbar onTogglePartsPanel={() => setPartsPanelOpen(x => !x)} partsPanelOpen={partsPanelOpen} />
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {partsPanelOpen && <PartsPanel onClose={() => setPartsPanelOpen(false)} />}
+        <main style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
+          <ScoreCanvas />
+        </main>
+      </div>
       <StatusBar />
     </div>
   )

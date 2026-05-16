@@ -10,7 +10,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { produce } from 'immer'
-import { createMeasure } from './score'
+import { v4 as uuid } from 'uuid'
+import { createMeasure, createStaff } from './score'
 import type { Score, NoteEvent, Duration, ClefType, KeySignature, TimeSignature, BarlineType } from './score'
 import { measureCapacityUnits, eventDurationUnits, resolveClef, pitchToStep, stepToPitch } from './musicUtils'
 
@@ -29,9 +30,14 @@ export type Command =
   | { type: 'SET_SCORE_KEY';    key: KeySignature }
   | { type: 'SET_TIME';         partId: string; staffId: string; measureId: string; time: TimeSignature }
   | { type: 'SET_SCORE_TIME';   time: TimeSignature }
-  | { type: 'SET_TEMPO';        measureId: string; bpm: number }
-  | { type: 'SET_TITLE';        title: string }
-  | { type: 'SET_COMPOSER';     composer: string }
+  | { type: 'SET_TEMPO';            measureId: string; bpm: number }
+  | { type: 'SET_TITLE';            title: string }
+  | { type: 'SET_COMPOSER';         composer: string }
+  | { type: 'ADD_PART';             name: string; shortName: string; clef: ClefType; midiProgram: number; transposeSemitones: number }
+  | { type: 'DELETE_PART';          partId: string }
+  | { type: 'MOVE_PART';            partId: string; direction: 'up' | 'down' }
+  | { type: 'SET_PART_METADATA';    partId: string; name?: string; shortName?: string; midiProgram?: number; transposeSemitones?: number; labelVisible?: boolean }
+  | { type: 'SET_SCORE_SHOW_LABELS'; visible: boolean }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -328,6 +334,57 @@ export function applyCommand(score: Score, command: Command): Score {
       case 'SET_TEMPO': {
         // Set tempo on the score root (simplification — future: per-measure map)
         draft.tempo = command.bpm
+        break
+      }
+
+      case 'ADD_PART': {
+        const measureCount = (draft.parts[0]?.staves[0]?.measures as any[])?.length ?? 8
+        const staff = createStaff(command.clef, measureCount)
+        const newPart = {
+          id: uuid(),
+          name:               command.name,
+          shortName:          command.shortName,
+          midiProgram:        command.midiProgram,
+          transposeSemitones: command.transposeSemitones,
+          staves:             [staff],
+          volume:             0.8,
+          muted:              false,
+          labelVisible:       true,
+        }
+        ;(draft.parts as any[]).push(newPart)
+        break
+      }
+
+      case 'DELETE_PART': {
+        if (draft.parts.length <= 1) break  // always keep at least 1
+        const idx = (draft.parts as any[]).findIndex((p: any) => p.id === command.partId)
+        if (idx !== -1) (draft.parts as any[]).splice(idx, 1)
+        break
+      }
+
+      case 'MOVE_PART': {
+        const parts = draft.parts as any[]
+        const idx = parts.findIndex((p: any) => p.id === command.partId)
+        if (idx === -1) break
+        const swapIdx = command.direction === 'up' ? idx - 1 : idx + 1
+        if (swapIdx < 0 || swapIdx >= parts.length) break
+        ;[parts[idx], parts[swapIdx]] = [parts[swapIdx], parts[idx]]
+        break
+      }
+
+      case 'SET_PART_METADATA': {
+        const part = (draft.parts as any[]).find((p: any) => p.id === command.partId)
+        if (!part) break
+        if (command.name               !== undefined) part.name               = command.name
+        if (command.shortName          !== undefined) part.shortName          = command.shortName
+        if (command.midiProgram        !== undefined) part.midiProgram        = command.midiProgram
+        if (command.transposeSemitones !== undefined) part.transposeSemitones = command.transposeSemitones
+        if (command.labelVisible       !== undefined) part.labelVisible       = command.labelVisible
+        break
+      }
+
+      case 'SET_SCORE_SHOW_LABELS': {
+        ;(draft as any).showPartLabels = command.visible
         break
       }
     }

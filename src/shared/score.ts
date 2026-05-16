@@ -103,9 +103,11 @@ export interface Part {
   readonly name: string              // e.g. "Violin I"
   readonly shortName: string         // e.g. "Vln. I"
   readonly midiProgram: number       // GM program 0–127
+  readonly transposeSemitones: number // 0 = concert pitch; positive = written above concert
   readonly staves: readonly Staff[]  // usually 1, piano has 2
   readonly volume: number            // 0–1
   readonly muted: boolean
+  readonly labelVisible: boolean     // show label on score
 }
 
 export interface ScoreMetadata {
@@ -124,6 +126,7 @@ export interface Score {
   readonly keySignature: KeySignature
   readonly timeSignature: TimeSignature
   readonly tempo: number             // BPM
+  readonly showPartLabels: boolean   // master label visibility
   readonly version: number           // file format version
 }
 
@@ -144,31 +147,41 @@ export function createScore(title: string = 'Untitled'): Score {
       createdAt: now,
       updatedAt: now
     },
-    parts: [createPart('Piano', 'Pno.', 0)],
+    parts: [createPart('Piano', 'Pno.', 0, 0)],
     keySignature: { fifths: 0, mode: 'major' },
     timeSignature: { numerator: 4, denominator: 4 },
     tempo: 120,
+    showPartLabels: true,
     version: 1
   }
 }
 
-export function createPart(name: string, shortName: string, midiProgram: number): Part {
+export function createPart(
+  name: string,
+  shortName: string,
+  midiProgram: number,
+  transposeSemitones: number = 0,
+  clef: ClefType = 'treble',
+  measureCount: number = INITIAL_MEASURE_COUNT,
+): Part {
   return {
     id: uuid(),
     name,
     shortName,
     midiProgram,
-    staves: [createStaff('treble')],
+    transposeSemitones,
+    staves: [createStaff(clef, measureCount)],
     volume: 0.8,
-    muted: false
+    muted: false,
+    labelVisible: true,
   }
 }
 
 const INITIAL_MEASURE_COUNT = 8
 
-export function createStaff(clef: ClefType): Staff {
-  const measures = Array.from({ length: INITIAL_MEASURE_COUNT }, (_, i) =>
-    createMeasure(i + 1, i === INITIAL_MEASURE_COUNT - 1 ? 'final' : 'single')
+export function createStaff(clef: ClefType, measureCount: number = INITIAL_MEASURE_COUNT): Staff {
+  const measures = Array.from({ length: measureCount }, (_, i) =>
+    createMeasure(i + 1, i === measureCount - 1 ? 'final' : 'single')
   )
   return { id: uuid(), clef, measures }
 }
