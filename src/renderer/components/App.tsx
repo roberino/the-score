@@ -6,11 +6,15 @@ import { StatusBar } from './StatusBar'
 import { PartsPanel } from './PartsPanel'
 import type { Score } from '@shared/score'
 import { scoreToMidi, midiToScore } from '../engine/midiEngine'
+import { loadSampler } from '../engine/samplerEngine'
 
 export function App(): JSX.Element {
   const { undo, redo, newScore, loadScore, saveScore, saveScoreAs, setZoom, zoom,
           isPlaying, startPlayback, stopPlayback, inputMode } = useAppStore()
   const [partsPanelOpen, setPartsPanelOpen] = useState(false)
+
+  // Prefetch Salamander Grand Piano samples in the background
+  useEffect(() => { loadSampler() }, [])
 
   // ── Wire native menu events to store actions ────────────────────────────────
   useEffect(() => {

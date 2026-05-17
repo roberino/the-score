@@ -32,7 +32,7 @@ const DURATION_BEATS: Record<string, number> = {
   '16th': 0.25, '32nd': 0.125, '64th': 0.0625,
 }
 
-function eventToSeconds(event: NoteEvent, bpm: number): number {
+export function eventToSeconds(event: NoteEvent, bpm: number): number {
   const beats = DURATION_BEATS[event.duration] ?? 1
   const dotted = event.dots === 2 ? beats * 1.75 : event.dots === 1 ? beats * 1.5 : beats
   return dotted * (60 / bpm)

@@ -4,6 +4,7 @@ import { DURATION_LABELS, KEY_TO_DURATION, resolveTimeSig, resolveKeySig, keyLab
 import type { Duration, TimeSignature, KeySignature } from '@shared/score'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
+import { AudioSettingsPanel } from './AudioSettingsPanel'
 
 const MODES: { mode: InputMode; label: string; key: string }[] = [
   { mode: 'select', label: 'Select', key: 'S' },
@@ -31,7 +32,11 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     score, cursorMeasureId, dispatch,
     keyboardVisible, toggleKeyboard,
     soundOnInput, toggleSoundOnInput,
+    audioMode,
   } = useAppStore()
+
+  const [audioSettingsPos, setAudioSettingsPos] = useState<{ x: number; y: number } | null>(null)
+  const audioSettingsBtnRef = useRef<HTMLButtonElement>(null)
 
   const [timeSigPickerPos, setTimeSigPickerPos] = useState<{ x: number; y: number } | null>(null)
   const timeSigBtnRef = useRef<HTMLButtonElement>(null)
@@ -61,6 +66,14 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     }
     return score.keySignature
   })()
+
+  const handleAudioClick = () => {
+    const btn = audioSettingsBtnRef.current
+    if (!btn) return
+    if (audioSettingsPos) { setAudioSettingsPos(null); return }
+    const rect = btn.getBoundingClientRect()
+    setAudioSettingsPos({ x: rect.left, y: rect.bottom + 4 })
+  }
 
   const handleKeySigClick = () => {
     const btn = keySigBtnRef.current
@@ -167,6 +180,20 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           accent={soundOnInput}
         />
 
+        <button
+          ref={audioSettingsBtnRef}
+          onClick={handleAudioClick}
+          title="Audio settings"
+          style={{
+            padding: '4px 10px', fontSize: 12, borderRadius: 3, border: 'none',
+            cursor: 'pointer',
+            background: audioSettingsPos ? '#0e639c' : audioMode === 'midi-out' ? '#1a4a6e' : 'transparent',
+            color: audioSettingsPos ? '#fff' : audioMode === 'midi-out' ? '#7ec8e3' : '#9d9d9d',
+          }}
+        >
+          Audio {audioMode === 'midi-out' ? '⇝' : ''}
+        </button>
+
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
 
         <button
@@ -203,6 +230,13 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           screenY={timeSigPickerPos.y}
           onClose={() => setTimeSigPickerPos(null)}
           onSelect={handleTimeSigSelect}
+        />
+      )}
+      {audioSettingsPos && (
+        <AudioSettingsPanel
+          screenX={audioSettingsPos.x}
+          screenY={audioSettingsPos.y}
+          onClose={() => setAudioSettingsPos(null)}
         />
       )}
       {keySigPickerPos && (

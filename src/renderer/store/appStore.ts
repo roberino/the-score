@@ -3,7 +3,9 @@ import { immer } from 'zustand/middleware/immer'
 import { createScore, type Score, type Pitch, type Duration, type Accidental } from '@shared/score'
 import { applyCommand, type Command } from '@shared/commands'
 import { measureCapacityUnits, usedUnits, resolveTimeSig } from '@shared/musicUtils'
-import { playScore, type PlaybackController } from '../engine/audioEngine'
+import type { PlaybackController } from '../engine/audioEngine'
+import { playScoreWithSampler } from '../engine/samplerEngine'
+import { midiOutputEngine } from '../engine/midiOutputEngine'
 
 let _playback: PlaybackController | null = null
 
@@ -40,6 +42,10 @@ export interface AppState {
   keyboardVisible: boolean
   soundOnInput: boolean
 
+  // Audio
+  audioMode: 'builtin' | 'midi-out'
+  midiOutputDeviceId: string | null
+
   // Playback
   isPlaying: boolean
   playbackPositionTick: number
@@ -70,6 +76,8 @@ export interface AppState {
   checkAndAutoAddBar: () => void
   toggleKeyboard: () => void
   toggleSoundOnInput: () => void
+  setAudioMode: (mode: 'builtin' | 'midi-out') => void
+  setMidiOutputDevice: (deviceId: string | null) => void
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -96,6 +104,9 @@ export const useAppStore = create<AppState>()(
 
     keyboardVisible: false,
     soundOnInput: false,
+
+    audioMode: 'builtin',
+    midiOutputDeviceId: null,
 
     isPlaying: false,
     playbackPositionTick: 0,
@@ -216,11 +227,13 @@ export const useAppStore = create<AppState>()(
 
     startPlayback: async () => {
       if (_playback) return
-      const { score } = get()
-      _playback = await playScore(score, 120, () => {
-        _playback = null
-        set(s => { s.isPlaying = false })
-      })
+      const { score, audioMode } = get()
+      const onDone = () => { _playback = null; set(s => { s.isPlaying = false }) }
+      if (audioMode === 'midi-out') {
+        _playback = await midiOutputEngine.playScore(score, 120, onDone)
+      } else {
+        _playback = await playScoreWithSampler(score, 120, onDone)
+      }
       set(s => { s.isPlaying = true })
     },
 
@@ -294,6 +307,17 @@ export const useAppStore = create<AppState>()(
 
     toggleKeyboard: () => set(s => { s.keyboardVisible = !s.keyboardVisible }),
     toggleSoundOnInput: () => set(s => { s.soundOnInput = !s.soundOnInput }),
+
+    setAudioMode: (mode) => {
+      set(s => { s.audioMode = mode })
+      if (mode === 'builtin') midiOutputEngine.deselect()
+    },
+
+    setMidiOutputDevice: (deviceId) => {
+      set(s => { s.midiOutputDeviceId = deviceId })
+      if (deviceId) void midiOutputEngine.selectOutput(deviceId)
+      else          midiOutputEngine.deselect()
+    },
 
     checkAndAutoAddBar: () => {
       const score = get().score

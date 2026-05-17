@@ -29,6 +29,7 @@ import {
 } from '@shared/musicUtils'
 import { pitchToHz } from '../engine/audioEngine'
 import { previewNote } from '../engine/notePreview'
+import { midiOutputEngine, pitchToMidi } from '../engine/midiOutputEngine'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
 import { ClefPicker } from './ClefPicker'
@@ -36,6 +37,23 @@ import { DirectivePicker } from './DirectivePicker'
 import { VirtualKeyboard } from './VirtualKeyboard'
 import { useMidiInput } from '../hooks/useMidiInput'
 import type { NoteInput } from '../services/midiService'
+
+// ── Preview helper ────────────────────────────────────────────────────────────
+
+function triggerInputPreview(
+  noteName: string, octave: number, accidental: string | null | undefined,
+  volDb: number, isPizz: boolean, transposeSemitones: number,
+  audioMode: 'builtin' | 'midi-out',
+): void {
+  if (audioMode === 'midi-out') {
+    const midiNum  = pitchToMidi(noteName, octave, accidental, transposeSemitones)
+    const velocity = Math.max(1, Math.min(127, Math.round(Math.pow(10, volDb / 20) * 100)))
+    midiOutputEngine.previewNote(midiNum, velocity)
+  } else {
+    const hz = pitchToHz(noteName, octave, accidental ?? null, transposeSemitones)
+    void previewNote(hz, volDb, isPizz)
+  }
+}
 
 const LINE_SPACING_PX  = 10
 const BARLINE_HIT_RADIUS = 8
@@ -267,7 +285,7 @@ export function ScoreCanvas(): JSX.Element {
     setSelectedNote, setSelectedBarline,
     moveCursorToFirstAvailable,
     keyboardVisible, toggleKeyboard,
-    soundOnInput,
+    soundOnInput, audioMode,
   } = useAppStore()
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -327,12 +345,11 @@ export function ScoreCanvas(): JSX.Element {
         })
 
         if (soundOnInput) {
-          const mIdx   = staff.measures.findIndex(m => m.id === cursorMeasureId)
-          const dyn    = resolveDirectiveDynamic(staff.measures, mIdx)
-          const volDb  = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
-          const midi   = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
-          const hz     = pitchToHz(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental ?? null, part.transposeSemitones)
-          void previewNote(hz, volDb, midi === 45)
+          const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
+          const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
+          const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
+          const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
+          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode)
         }
 
         setPrimedAccidental(null)
@@ -361,7 +378,7 @@ export function ScoreCanvas(): JSX.Element {
     }
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
       primedAccidental, lastEnteredPitch, dispatch, setPrimedAccidental,
-      setLastEnteredPitch, setCursor, soundOnInput])
+      setLastEnteredPitch, setCursor, soundOnInput, audioMode])
 
   // Explicit-octave variant used by virtual keyboard and MIDI input
   const enterNoteAtPitch = useCallback((noteName: NoteName, octave: number, accidental?: Accidental) => {
@@ -398,8 +415,7 @@ export function ScoreCanvas(): JSX.Element {
           const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
           const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
-          const hz    = pitchToHz(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental ?? null, part.transposeSemitones)
-          void previewNote(hz, volDb, midi === 45)
+          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode)
         }
         setLastEnteredPitch(noteWithDot.pitch)
         const newBeat  = cursorBeatPosition + units
@@ -416,7 +432,7 @@ export function ScoreCanvas(): JSX.Element {
       }
     }
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
-      dispatch, setLastEnteredPitch, setCursor, setInputMode, soundOnInput])
+      dispatch, setLastEnteredPitch, setCursor, setInputMode, soundOnInput, audioMode])
 
   // Stable handler ref so useMidiInput/VirtualKeyboard don't re-subscribe on every render
   const noteInputHandler = useCallback((input: NoteInput) => {
@@ -725,8 +741,7 @@ export function ScoreCanvas(): JSX.Element {
           const dyn   = resolveDirectiveDynamic(clickStaff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? clickPart.volume))
           const midi  = resolveDirectiveMidiProgram(clickStaff.measures, mIdx, clickPart.midiProgram)
-          const hz    = pitchToHz(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental ?? null, clickPart.transposeSemitones)
-          void previewNote(hz, volDb, midi === 45)
+          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, clickPart.transposeSemitones, audioMode)
         }
       }
 
