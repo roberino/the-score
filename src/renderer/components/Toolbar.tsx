@@ -30,6 +30,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     isDotted, toggleDot,
     score, cursorMeasureId, dispatch,
     keyboardVisible, toggleKeyboard,
+    soundOnInput, toggleSoundOnInput,
   } = useAppStore()
 
   const [timeSigPickerPos, setTimeSigPickerPos] = useState<{ x: number; y: number } | null>(null)
@@ -157,6 +158,13 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           title="Virtual keyboard (K)"
           label="Keys"
           accent={keyboardVisible}
+        />
+
+        <ToolbarButton
+          onClick={toggleSoundOnInput}
+          title="Sound on input"
+          label="Sound"
+          accent={soundOnInput}
         />
 
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />

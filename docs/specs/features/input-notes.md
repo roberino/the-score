@@ -208,6 +208,40 @@ The following fields are added to `appStore`:
 
 ---
 
+## Sound on Input
+
+### Overview
+
+When enabled, each note entered into the score sounds briefly (~0.4 s) so the user can hear the pitch as they input it.
+
+### Toggle
+
+A **Sound** button in the toolbar's top row toggles `soundOnInput` in `appStore`. The button is visually active (green accent) when enabled. Default: **off**.
+
+### Behaviour
+
+- Fires immediately when a note is placed (keyboard pitch key, virtual keyboard, MIDI device, or canvas click in note mode)
+- Preview duration is fixed at **0.4 s** regardless of the notated duration
+- Rests do **not** trigger a preview
+- Matches the **active part's** instrument context:
+  - Volume follows the part volume and any dynamics directive in effect at the cursor measure
+  - Pizz./arco envelope follows any expression directive in effect at the cursor measure
+  - Transposes by the part's `transposeSemitones` so transposing instruments sound at their written pitch
+
+### Implementation
+
+- `notePreview.ts`: singleton `Tone.Synth` (separate from playback `PolySynth`); `previewNote(hz, volumeDb, isPizz)` function
+- Preview synth is created lazily on first use; persists for the session (no dispose on playback stop)
+- `Tone.start()` is called inside `previewNote` (user gesture guarantee is met by key/mouse events that trigger note entry)
+
+### Store Changes
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `soundOnInput` | `boolean` | Whether to sound notes on entry (default: `false`) |
+
+---
+
 ## Acceptance Criteria
 
 1. Pressing `N` activates Note mode; pressing `Escape` returns to Select mode

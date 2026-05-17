@@ -38,6 +38,7 @@ export interface AppState {
 
   // UI panels
   keyboardVisible: boolean
+  soundOnInput: boolean
 
   // Playback
   isPlaying: boolean
@@ -68,6 +69,7 @@ export interface AppState {
   moveCursorToFirstAvailable: () => void
   checkAndAutoAddBar: () => void
   toggleKeyboard: () => void
+  toggleSoundOnInput: () => void
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -93,6 +95,7 @@ export const useAppStore = create<AppState>()(
     lastEnteredPitch: null,
 
     keyboardVisible: false,
+    soundOnInput: false,
 
     isPlaying: false,
     playbackPositionTick: 0,
@@ -290,6 +293,7 @@ export const useAppStore = create<AppState>()(
     },
 
     toggleKeyboard: () => set(s => { s.keyboardVisible = !s.keyboardVisible }),
+    toggleSoundOnInput: () => set(s => { s.soundOnInput = !s.soundOnInput }),
 
     checkAndAutoAddBar: () => {
       const score = get().score

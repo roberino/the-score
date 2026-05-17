@@ -15,7 +15,7 @@ const SEMITONES_FROM_C: Record<string, number> = {
   C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11,
 }
 
-function pitchToHz(noteName: string, octave: number, accidental: string | null, transposeSemitones: number = 0): number {
+export function pitchToHz(noteName: string, octave: number, accidental: string | null, transposeSemitones: number = 0): number {
   let semi = SEMITONES_FROM_C[noteName] ?? 0
   if (accidental === 'sharp')            semi += 1
   else if (accidental === 'flat')        semi -= 1
