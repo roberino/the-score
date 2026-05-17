@@ -21,6 +21,11 @@ export default defineConfig({
         '@shared': resolve('src/shared'),
         '@renderer': resolve('src/renderer')
       }
+    },
+    optimizeDeps: {
+      // Verovio embeds a 6 MB WASM binary inline as a JS string literal.
+      // Excluding it prevents esbuild from corrupting the binary during pre-bundling.
+      exclude: ['verovio']
     }
   }
 })

@@ -17,8 +17,10 @@
     "@tonejs/midi": "^2.0.28",
     "electron-updater": "^6.1.8",
     "immer": "^10.0.4",
+    "jspdf": "^4.2.1",
     "tone": "^14.7.77",
     "uuid": "^14.0.0",
+    "verovio": "^6.1.0",
     "vexflow": "^5.0.0",
     "zustand": "^4.5.2"
   },
