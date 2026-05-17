@@ -7,6 +7,8 @@ import { PartsPanel } from './PartsPanel'
 import type { Score } from '@shared/score'
 import { scoreToMidi, midiToScore } from '../engine/midiEngine'
 import { loadSampler } from '../engine/samplerEngine'
+import { exportScorePdf } from '../engine/pdfExporter'
+import { scoreToMusicXml } from '../engine/musicxmlEngine'
 
 export function App(): JSX.Element {
   const { undo, redo, newScore, loadScore, saveScore, saveScoreAs, setZoom, zoom,
@@ -28,8 +30,10 @@ export function App(): JSX.Element {
       window.electronAPI.onMenuEvent('menu:zoomIn',  () => setZoom(zoom + 0.1)),
       window.electronAPI.onMenuEvent('menu:zoomOut', () => setZoom(zoom - 0.1)),
       window.electronAPI.onMenuEvent('menu:zoomFit', () => setZoom(1.0)),
-      window.electronAPI.onMenuEvent('menu:exportMidi', () => handleExportMidi()),
-      window.electronAPI.onMenuEvent('menu:importMidi', () => handleImportMidi()),
+      window.electronAPI.onMenuEvent('menu:exportMidi',     () => handleExportMidi()),
+      window.electronAPI.onMenuEvent('menu:importMidi',     () => handleImportMidi()),
+      window.electronAPI.onMenuEvent('menu:exportPdf',      () => handleExportPdf()),
+      window.electronAPI.onMenuEvent('menu:exportMusicXml', () => handleExportMusicXml()),
     ]
     return () => cleanups.forEach(cleanup => cleanup())
   }, [zoom])   // re-register when zoom changes so closure captures latest value
@@ -77,6 +81,18 @@ export function App(): JSX.Element {
     } catch {
       console.error('Failed to import MIDI file')
     }
+  }
+
+  async function handleExportPdf(): Promise<void> {
+    const score = useAppStore.getState().score
+    const bytes = await exportScorePdf(score)
+    await window.electronAPI.exportPdf(bytes)
+  }
+
+  async function handleExportMusicXml(): Promise<void> {
+    const score = useAppStore.getState().score
+    const xml = scoreToMusicXml(score)
+    await window.electronAPI.exportMusicXml(xml)
   }
 
   return (

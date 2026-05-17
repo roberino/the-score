@@ -106,3 +106,25 @@ ipcMain.handle('midi:export', async (_event, { bytes }: { bytes: Uint8Array }) =
   await writeFile(filePath, Buffer.from(bytes))
   return { success: true }
 })
+
+ipcMain.handle('pdf:export', async (_event, { bytes }: { bytes: Uint8Array }) => {
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
+    defaultPath: 'Untitled.pdf'
+  })
+  if (canceled || !filePath) return { success: false }
+
+  await writeFile(filePath, Buffer.from(bytes))
+  return { success: true }
+})
+
+ipcMain.handle('musicxml:export', async (_event, { xml }: { xml: string }) => {
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    filters: [{ name: 'MusicXML Files', extensions: ['xml'] }],
+    defaultPath: 'Untitled.xml'
+  })
+  if (canceled || !filePath) return { success: false }
+
+  await writeFile(filePath, xml, 'utf8')
+  return { success: true }
+})

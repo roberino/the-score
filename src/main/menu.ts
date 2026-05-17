@@ -51,6 +51,11 @@ export function buildAppMenu(win: BrowserWindow): Menu {
           click: () => send('menu:exportPdf')
         },
         {
+          label: 'Export as MusicXML…',
+          accelerator: 'CmdOrCtrl+Shift+X',
+          click: () => send('menu:exportMusicXml')
+        },
+        {
           label: 'Export as MIDI…',
           accelerator: 'CmdOrCtrl+Shift+M',
           click: () => send('menu:exportMidi')
