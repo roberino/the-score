@@ -165,7 +165,7 @@ function findClickedLayout(
   y: number,
   layouts: MeasureLayout[]
 ): MeasureLayout | undefined {
-  const LEDGER_MARGIN = 30
+  const LEDGER_MARGIN = 50
   const STAVE_HEIGHT  = 4 * LINE_SPACING_PX   // 40px
   return layouts.find(l =>
     x >= l.x &&
@@ -565,6 +565,7 @@ export function ScoreCanvas(): JSX.Element {
         if (e.key === 'r' || e.key === 'R') { setInputMode('rest');   return }
         if (e.key === 's' || e.key === 'S') { setInputMode('select'); return }
         if (e.key === 'e' || e.key === 'E') { setInputMode('eraser'); return }
+        if (e.key === 't' || e.key === 'T') { setInputMode('text');   return }
         if (e.key === 'k' || e.key === 'K') { toggleKeyboard();       return }
       }
 
@@ -673,8 +674,8 @@ export function ScoreCanvas(): JSX.Element {
 
     const layouts = computeLayout(score, options)
 
-    // ── Directive zone: headroom above each stave (staveY ≤ y < staveTopY) ──
-    for (const l of layouts) {
+    // ── Directive zone: headroom above each stave (Text mode only) ──────────
+    if (inputMode === 'text') for (const l of layouts) {
       if (
         canvasX >= l.x && canvasX <= l.x + l.width &&
         canvasY >= l.staveY && canvasY < l.staveTopY
@@ -1057,13 +1058,15 @@ export function ScoreCanvas(): JSX.Element {
     setTimeSigPickerState(null)
   }, [timeSigPickerState, dispatch])
 
-  // Close pickers when leaving select mode
+  // Close pickers when leaving their relevant mode
   useEffect(() => {
     if (inputMode !== 'select') {
       setPickerState(null)
       setTimeSigPickerState(null)
       setKeySigPickerState(null)
       setClefPickerState(null)
+    }
+    if (inputMode !== 'text') {
       setDirectivePickerState(null)
     }
   }, [inputMode])
@@ -1074,6 +1077,7 @@ export function ScoreCanvas(): JSX.Element {
     inputMode === 'note'   ? 'crosshair'
     : inputMode === 'rest'   ? 'cell'
     : inputMode === 'eraser' ? 'pointer'
+    : inputMode === 'text'   ? 'text'
     : 'default'
 
   return (

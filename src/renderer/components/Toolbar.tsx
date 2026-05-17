@@ -10,7 +10,8 @@ const MODES: { mode: InputMode; label: string; key: string }[] = [
   { mode: 'select', label: 'Select', key: 'S' },
   { mode: 'note',   label: 'Note',   key: 'N' },
   { mode: 'rest',   label: 'Rest',   key: 'R' },
-  { mode: 'eraser', label: 'Eraser', key: 'E' }
+  { mode: 'eraser', label: 'Eraser', key: 'E' },
+  { mode: 'text',   label: 'Text',   key: 'T' },
 ]
 
 const DURATION_BUTTONS: { duration: Duration; key: string }[] = Object.entries(KEY_TO_DURATION)
