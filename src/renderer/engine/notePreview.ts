@@ -1,4 +1,5 @@
 import * as Tone from 'tone'
+import { isSamplerReady, previewWithSampler } from './samplerEngine'
 
 let _synth: Tone.Synth | null = null
 
@@ -14,6 +15,13 @@ function getSynth(): Tone.Synth {
 
 export async function previewNote(hz: number, volumeDb: number, isPizz: boolean): Promise<void> {
   await Tone.start()
+
+  if (isSamplerReady()) {
+    previewWithSampler(hz, volumeDb, isPizz)
+    return
+  }
+
+  // Sampler not yet loaded — fall back to triangle synth
   const synth = getSynth()
   synth.set({
     envelope: isPizz

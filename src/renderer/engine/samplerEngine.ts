@@ -37,6 +37,12 @@ export function loadSampler(): Promise<Tone.Sampler> {
 
 export function isSamplerReady(): boolean { return _samplerReady }
 
+export function previewWithSampler(hz: number, volDb: number, isPizz: boolean): void {
+  if (!_sampler || !_samplerReady) return
+  _sampler.volume.value = volDb
+  _sampler.triggerAttackRelease(hz, isPizz ? 0.25 : 0.5, Tone.now())
+}
+
 // ── Playback ──────────────────────────────────────────────────────────────────
 
 export async function playScoreWithSampler(
