@@ -41,15 +41,23 @@ function midiNoteToInput(midiNote: number, velocity: number): NoteInput {
 }
 
 class MidiService {
-  private access:   MIDIAccess | null = null
-  private handlers: Set<NoteInputHandler> = new Set()
-  private _connected = false
+  private access:        MIDIAccess | null = null
+  private handlers:      Set<NoteInputHandler> = new Set()
+  private _connected     = false
+  private _outputFilter: string | null = null
 
   get connected(): boolean { return this._connected }
 
   get inputNames(): string[] {
     if (!this.access) return []
     return Array.from(this.access.inputs.values()).map(i => i.name ?? 'Unknown')
+  }
+
+  // Call this whenever the active MIDI output changes so the loopback
+  // port is excluded from input listeners (prevents IAC Driver feedback).
+  setOutputFilter(portName: string | null): void {
+    this._outputFilter = portName
+    this.wireListeners()
   }
 
   async connect(): Promise<boolean> {
@@ -80,6 +88,13 @@ class MidiService {
 
   private wireListeners(): void {
     this.access?.inputs.forEach(input => {
+      // Skip the port whose name matches the active output — on virtual buses
+      // like IAC Driver, input and output share the same name and any note
+      // sent to the output immediately loops back as input.
+      if (this._outputFilter && input.name === this._outputFilter) {
+        input.onmidimessage = null
+        return
+      }
       input.onmidimessage = (msg: MIDIMessageEvent) => this.handleMessage(msg)
     })
   }

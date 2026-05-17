@@ -29,7 +29,6 @@ import {
 } from '@shared/musicUtils'
 import { pitchToHz } from '../engine/audioEngine'
 import { previewNote } from '../engine/notePreview'
-import { midiOutputEngine, pitchToMidi } from '../engine/midiOutputEngine'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
 import { ClefPicker } from './ClefPicker'
@@ -43,16 +42,12 @@ import type { NoteInput } from '../services/midiService'
 function triggerInputPreview(
   noteName: string, octave: number, accidental: string | null | undefined,
   volDb: number, isPizz: boolean, transposeSemitones: number,
-  audioMode: 'builtin' | 'midi-out',
 ): void {
-  if (audioMode === 'midi-out') {
-    const midiNum  = pitchToMidi(noteName, octave, accidental, transposeSemitones)
-    const velocity = Math.max(1, Math.min(127, Math.round(Math.pow(10, volDb / 20) * 100)))
-    midiOutputEngine.previewNote(midiNum, velocity)
-  } else {
-    const hz = pitchToHz(noteName, octave, accidental ?? null, transposeSemitones)
-    void previewNote(hz, volDb, isPizz)
-  }
+  // Always use internal audio for note-entry feedback regardless of playback
+  // audio mode — sending preview via MIDI output causes a feedback loop on
+  // virtual buses like IAC Driver (output loops back as input, entering notes).
+  const hz = pitchToHz(noteName, octave, accidental ?? null, transposeSemitones)
+  void previewNote(hz, volDb, isPizz)
 }
 
 const LINE_SPACING_PX  = 10
@@ -349,7 +344,7 @@ export function ScoreCanvas(): JSX.Element {
           const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
           const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
-          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode)
+          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
         }
 
         setPrimedAccidental(null)
@@ -415,7 +410,7 @@ export function ScoreCanvas(): JSX.Element {
           const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
           const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
-          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode)
+          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
         }
         setLastEnteredPitch(noteWithDot.pitch)
         const newBeat  = cursorBeatPosition + units
@@ -742,7 +737,7 @@ export function ScoreCanvas(): JSX.Element {
           const dyn   = resolveDirectiveDynamic(clickStaff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? clickPart.volume))
           const midi  = resolveDirectiveMidiProgram(clickStaff.measures, mIdx, clickPart.midiProgram)
-          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, clickPart.transposeSemitones, audioMode)
+          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, clickPart.transposeSemitones)
         }
       }
 

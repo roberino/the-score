@@ -2,6 +2,7 @@ import * as Tone from 'tone'
 import type { Score, Note, Chord } from '@shared/score'
 import { resolveDirectiveTempo, resolveDirectiveDynamic, buildPlaybackSequence } from '@shared/musicUtils'
 import { eventToSeconds, type PlaybackController } from './audioEngine'
+import { midiService } from '../services/midiService'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -74,6 +75,7 @@ class MidiOutputEngine {
     if (!output) return false
     this._output    = output
     this._connected = true
+    midiService.setOutputFilter(output.name ?? null)
     return true
   }
 
@@ -81,6 +83,7 @@ class MidiOutputEngine {
     this.allNotesOff()
     this._output    = null
     this._connected = false
+    midiService.setOutputFilter(null)
   }
 
   allNotesOff(): void {
