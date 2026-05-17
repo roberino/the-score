@@ -5,7 +5,10 @@ import {
   computeLayout,
   DEFAULT_RENDER_OPTIONS,
   LABEL_MARGIN_X,
+  HEADING_MARGIN_Y,
+  headingFieldBounds,
   type MeasureLayout,
+  type HeadingFieldBound,
 } from '../engine/notationRenderer'
 import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature, type KeySignature, type ClefType } from '@shared/score'
 import {
@@ -146,6 +149,47 @@ function findClickedLayout(
   )
 }
 
+// ── Heading inline editor ─────────────────────────────────────────────────────
+
+function HeadingEditor({
+  bound, currentValue, onCommit, onCancel,
+}: {
+  bound: HeadingFieldBound
+  currentValue: string
+  onCommit: (value: string) => void
+  onCancel: () => void
+}): JSX.Element {
+  return (
+    <input
+      autoFocus
+      key={bound.field}
+      defaultValue={currentValue}
+      placeholder={bound.field.charAt(0).toUpperCase() + bound.field.slice(1)}
+      style={{
+        position: 'absolute',
+        left:   bound.x,
+        top:    bound.y,
+        width:  bound.width,
+        height: bound.height,
+        font:   bound.font,
+        textAlign: bound.textAlign,
+        background: 'rgba(255, 255, 255, 0.92)',
+        border: '1px solid #0e639c',
+        borderRadius: 2,
+        outline: 'none',
+        padding: '0 4px',
+        boxSizing: 'border-box',
+        color: '#111',
+      }}
+      onBlur={e  => onCommit(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Enter')  { onCommit(e.currentTarget.value); e.preventDefault() }
+        if (e.key === 'Escape') { onCancel(); e.preventDefault() }
+      }}
+    />
+  )
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface PickerState {
@@ -191,6 +235,7 @@ export function ScoreCanvas(): JSX.Element {
   const [timeSigPickerState, setTimeSigPickerState] = useState<TimeSigPickerState | null>(null)
   const [keySigPickerState, setKeySigPickerState] = useState<KeySigPickerState | null>(null)
   const [clefPickerState, setClefPickerState] = useState<ClefPickerState | null>(null)
+  const [editingHeading, setEditingHeading] = useState<HeadingFieldBound | null>(null)
 
   const {
     score, zoom, inputMode,
@@ -503,6 +548,18 @@ export function ScoreCanvas(): JSX.Element {
 
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
     const options = getRenderOptions(zoom, score.showPartLabels)
+
+    // ── Heading area (above all staves) ─────────────────────────────────────
+    if (canvasY < HEADING_MARGIN_Y) {
+      const bounds = headingFieldBounds(options.canvasWidth, options.marginX)
+      const hit = bounds.find(b =>
+        canvasX >= b.x && canvasX <= b.x + b.width &&
+        canvasY >= b.y && canvasY <= b.y + b.height
+      )
+      if (hit) setEditingHeading(hit)
+      return
+    }
+
     const layouts = computeLayout(score, options)
     const layout  = findClickedLayout(canvasX, canvasY, layouts)
     if (!layout) return
@@ -861,12 +918,24 @@ export function ScoreCanvas(): JSX.Element {
         borderRadius: 4,
         display: 'inline-block',
         minWidth: '100%',
+        position: 'relative',
       }}>
         <canvas
           ref={canvasRef}
           onClick={handleCanvasClick}
           style={{ cursor: cursorStyle, display: 'block' }}
         />
+        {editingHeading && (
+          <HeadingEditor
+            bound={editingHeading}
+            currentValue={(score.metadata as any)[editingHeading.field] ?? ''}
+            onCommit={value => {
+              dispatch({ type: 'SET_HEADING', field: editingHeading.field, value })
+              setEditingHeading(null)
+            }}
+            onCancel={() => setEditingHeading(null)}
+          />
+        )}
       </div>
       {pickerState && (
         <BarlinePicker

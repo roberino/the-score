@@ -56,6 +56,8 @@ function pitchToVexKey(pitch: { noteName: string; octave: number; accidental: st
   return `${pitch.noteName.toLowerCase()}/${pitch.octave}`
 }
 
+export const HEADING_MARGIN_Y = 100   // canvas top reserved for the heading block
+
 // Middle-line pitch for each clef — used as the VexFlow rest anchor key so that
 // rest glyphs are centred on the staff regardless of clef.
 const CLEF_REST_KEY: Record<string, string> = {
@@ -130,10 +132,106 @@ export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
   staveWidth: 260,
   staveHeight: 120,
   marginX: 40,
-  marginY: 60
+  marginY: HEADING_MARGIN_Y,
 }
 
-export const LABEL_MARGIN_X = 140  // marginX when part labels are shown
+export const LABEL_MARGIN_X = 140   // marginX when part labels are shown
+
+// ── Heading layout ─────────────────────────────────────────────────────────────
+// Click-target rectangles for each heading field (canvas CSS-pixel coordinates).
+// Drawn text baselines match these zones so the overlay input aligns correctly.
+
+export interface HeadingFieldBound {
+  field: 'title' | 'subtitle' | 'composer' | 'arranger'
+  x: number
+  y: number
+  width: number
+  height: number
+  font: string              // CSS canvas font string used for both drawing and the overlay input
+  textAlign: 'center' | 'right'
+}
+
+export function headingFieldBounds(canvasWidth: number, marginX: number): HeadingFieldBound[] {
+  const inner = canvasWidth - 2 * marginX
+  const mid   = marginX + inner * 0.6   // horizontal split: left 60% subtitle / right 40% composer+arranger
+  return [
+    { field: 'title',    x: marginX, y: 6,  width: inner,           height: 36, font: 'bold 22px serif',    textAlign: 'center' },
+    { field: 'subtitle', x: marginX, y: 44, width: mid - marginX,   height: 22, font: '13px serif',         textAlign: 'center' },
+    { field: 'composer', x: mid,     y: 44, width: canvasWidth - mid - marginX, height: 22, font: 'italic 12px serif', textAlign: 'right' },
+    { field: 'arranger', x: mid,     y: 66, width: canvasWidth - mid - marginX, height: 22, font: '11px serif',        textAlign: 'right' },
+  ]
+}
+
+// ── Draw heading block ────────────────────────────────────────────────────────
+
+function drawHeadings(ctx: RenderContext, score: Score, options: RenderOptions): void {
+  const nativeCtx: CanvasRenderingContext2D | null =
+    typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
+  if (!nativeCtx) return
+
+  const { canvasWidth, marginX } = options
+  const cx   = canvasWidth / 2
+  const rEdge = canvasWidth - marginX
+
+  const meta = score.metadata
+  // Fall back gracefully for scores saved before subtitle/arranger existed
+  const title    = meta.title    || ''
+  const subtitle = (meta as any).subtitle || ''
+  const composer = meta.composer || ''
+  const arranger = (meta as any).arranger || ''
+
+  nativeCtx.save()
+
+  // Title
+  nativeCtx.textAlign = 'center'
+  if (title) {
+    nativeCtx.font      = 'bold 22px serif'
+    nativeCtx.fillStyle = '#111'
+    nativeCtx.fillText(title, cx, 34)
+  } else {
+    nativeCtx.font      = '13px sans-serif'
+    nativeCtx.fillStyle = '#ccc'
+    nativeCtx.fillText('Click to add title', cx, 34)
+  }
+
+  // Subtitle (centered, left zone)
+  if (subtitle) {
+    nativeCtx.font      = '13px serif'
+    nativeCtx.fillStyle = '#333'
+    nativeCtx.textAlign = 'center'
+    nativeCtx.fillText(subtitle, marginX + (canvasWidth * 0.6 - marginX) / 2, 60)
+  } else {
+    nativeCtx.font      = '11px sans-serif'
+    nativeCtx.fillStyle = '#ddd'
+    nativeCtx.textAlign = 'center'
+    nativeCtx.fillText('subtitle', cx * 0.6 + marginX * 0.4, 60)
+  }
+
+  // Composer (right-aligned)
+  nativeCtx.textAlign = 'right'
+  if (composer) {
+    nativeCtx.font      = 'italic 12px serif'
+    nativeCtx.fillStyle = '#333'
+    nativeCtx.fillText(composer, rEdge, 60)
+  } else {
+    nativeCtx.font      = '11px sans-serif'
+    nativeCtx.fillStyle = '#ddd'
+    nativeCtx.fillText('composer', rEdge, 60)
+  }
+
+  // Arranger (right-aligned)
+  if (arranger) {
+    nativeCtx.font      = '11px serif'
+    nativeCtx.fillStyle = '#333'
+    nativeCtx.fillText(arranger, rEdge, 78)
+  } else {
+    nativeCtx.font      = '11px sans-serif'
+    nativeCtx.fillStyle = '#ddd'
+    nativeCtx.fillText('arranger', rEdge, 78)
+  }
+
+  nativeCtx.restore()
+}
 
 // ── Width calculation constants ───────────────────────────────────────────────
 
@@ -330,6 +428,7 @@ export function renderScore(
   ctx.clear()
 
   renderFromLayouts(ctx, score, layouts, selectedNoteId, notePositions)
+  drawHeadings(ctx, score, options)
 
   if (cursor?.cursorMeasureId) {
     drawCursor(canvas, cursor, layouts)

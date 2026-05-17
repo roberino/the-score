@@ -33,6 +33,7 @@ export type Command =
   | { type: 'SET_TEMPO';            measureId: string; bpm: number }
   | { type: 'SET_TITLE';            title: string }
   | { type: 'SET_COMPOSER';         composer: string }
+  | { type: 'SET_HEADING';          field: 'title' | 'subtitle' | 'composer' | 'arranger'; value: string }
   | { type: 'ADD_PART';             name: string; shortName: string; clef: ClefType; midiProgram: number; transposeSemitones: number }
   | { type: 'DELETE_PART';          partId: string }
   | { type: 'MOVE_PART';            partId: string; direction: 'up' | 'down' }
@@ -284,6 +285,17 @@ export function applyCommand(score: Score, command: Command): Score {
 
       case 'SET_COMPOSER': {
         draft.metadata.composer = command.composer
+        draft.metadata.updatedAt = new Date().toISOString()
+        break
+      }
+
+      case 'SET_HEADING': {
+        switch (command.field) {
+          case 'title':    draft.metadata.title    = command.value; break
+          case 'subtitle': draft.metadata.subtitle = command.value; break
+          case 'composer': draft.metadata.composer = command.value; break
+          case 'arranger': draft.metadata.arranger = command.value; break
+        }
         draft.metadata.updatedAt = new Date().toISOString()
         break
       }

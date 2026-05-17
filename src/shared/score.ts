@@ -112,7 +112,9 @@ export interface Part {
 
 export interface ScoreMetadata {
   readonly title: string
+  readonly subtitle: string
   readonly composer: string
+  readonly arranger: string
   readonly lyricist: string
   readonly copyright: string
   readonly createdAt: string         // ISO 8601
@@ -141,7 +143,9 @@ export function createScore(title: string = 'Untitled'): Score {
     id: uuid(),
     metadata: {
       title,
+      subtitle: '',
       composer: '',
+      arranger: '',
       lyricist: '',
       copyright: '',
       createdAt: now,
