@@ -1,6 +1,6 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord } from '@shared/score'
-import { resolveDirectiveTempo, resolveDirectiveDynamic } from '@shared/musicUtils'
+import { resolveDirectiveTempo, resolveDirectiveDynamic, buildPlaybackSequence } from '@shared/musicUtils'
 import { eventToSeconds, type PlaybackController } from './audioEngine'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -120,6 +120,7 @@ class MidiOutputEngine {
 
     let totalDuration = 0
     const tempoStaff = score.parts[0]?.staves[0]
+    const sequence   = buildPlaybackSequence(tempoStaff?.measures ?? [])
 
     score.parts.forEach((part, partIdx) => {
       if (part.muted) return
@@ -137,7 +138,7 @@ class MidiOutputEngine {
 
       let partTime = 0
 
-      for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
+      for (const mIdx of sequence) {
         const measure = staff.measures[mIdx]
 
         const effectiveBpm = tempoStaff

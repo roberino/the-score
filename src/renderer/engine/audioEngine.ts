@@ -7,7 +7,7 @@
 
 import * as Tone from 'tone'
 import type { Score, Note, Chord, NoteEvent } from '@shared/score'
-import { resolveDirectiveTempo, resolveDirectiveDynamic, resolveDirectiveMidiProgram } from '@shared/musicUtils'
+import { resolveDirectiveTempo, resolveDirectiveDynamic, resolveDirectiveMidiProgram, buildPlaybackSequence } from '@shared/musicUtils'
 
 // ── Pitch → frequency ────────────────────────────────────────────────────────
 
@@ -65,8 +65,9 @@ export async function playScore(
 
   let cursor = 0  // seconds — tracks the latest end time across all parts
 
-  // First part's staff used to resolve global tempo directives
+  // First part's staff used to resolve global tempo directives and repeat structure
   const tempoStaff = score.parts[0]?.staves[0]
+  const sequence   = buildPlaybackSequence(tempoStaff?.measures ?? [])
 
   for (const part of score.parts) {
     if (part.muted) continue
@@ -75,7 +76,7 @@ export async function playScore(
 
     const partCursor = { t: 0 }
 
-    for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
+    for (const mIdx of sequence) {
       const measure = staff.measures[mIdx]
 
       // Resolve effective BPM at this measure (global — uses first part's staff)

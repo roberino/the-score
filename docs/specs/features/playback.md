@@ -205,3 +205,92 @@ export function playScore(
 9. Pressing **Space** in Select mode toggles play/stop.
 10. Pressing **Space** in Note mode still enters a rest and does not affect playback.
 11. Starting a new score or loading a file while playing stops playback.
+
+---
+
+## Advanced Playback — Repeat Bars
+
+### Overview
+
+When playback reaches a `repeat-end` barline it jumps back to the most recent `repeat-start` barline (or the beginning if none exists) and plays the section a second time before continuing. This is the standard "play twice" convention.
+
+All three audio backends (Tone.js synth, Salamander sampler, MIDI output) use the same sequence expansion so repeat behaviour is identical regardless of audio mode.
+
+### Sequence expansion — `buildPlaybackSequence`
+
+Located in `src/shared/musicUtils.ts`. Takes the reference part's measure array (part 0, staff 0) and returns a flat array of measure indices in playback order, with repeats expanded.
+
+```typescript
+export function buildPlaybackSequence(measures: readonly Measure[]): number[] {
+  const order: number[] = []
+  const seen = new Set<number>()    // repeat-end indices already triggered
+
+  let i = 0
+  while (i < measures.length) {
+    order.push(i)
+
+    if (measures[i].barline === 'repeat-end' && !seen.has(i)) {
+      seen.add(i)
+      let jumpTo = 0   // default: start of score
+      for (let j = i - 1; j >= 0; j--) {
+        if (measures[j].barline === 'repeat-start') {
+          jumpTo = j + 1   // first measure after the repeat-start barline
+          break
+        }
+      }
+      i = jumpTo
+      continue
+    }
+
+    i++
+  }
+
+  return order
+}
+```
+
+**Properties:**
+- Each `repeat-end` triggers exactly one jump (the `seen` set prevents infinite loops on second pass).
+- A lone `repeat-end` with no preceding `repeat-start` jumps to measure 0.
+- Back-to-back repeats (`:|  |:`) each trigger independently.
+- The sequence is built once at Play time; all parts use the same index sequence.
+
+### Barline semantics in the data model
+
+`measures[j].barline === 'repeat-start'` means the **right** barline of measure j is a begin-repeat sign. The renderer draws the dots on the **left** edge of measure j+1. The repeated section is therefore `measures[j+1 … k]` where `measures[k].barline === 'repeat-end'`.
+
+### Engine changes
+
+In all three scheduling loops the linear `for mIdx` is replaced with:
+
+```typescript
+const refMeasures = score.parts[0]?.staves[0]?.measures ?? []
+const sequence    = buildPlaybackSequence(refMeasures)
+
+for (const mIdx of sequence) {
+  const measure = staff.measures[mIdx]
+  // directive resolution and note scheduling unchanged — mIdx is still
+  // the original array index so resolveDirective* backward walks are correct
+}
+```
+
+Directive resolution (`resolveDirectiveTempo`, `resolveDirectiveDynamic`, `resolveDirectiveMidiProgram`) is always called with the original array index so backward walks correctly resolve the most recent directive regardless of the repeat pass.
+
+### Out of scope (deferred)
+
+| Feature | Notes |
+|---|---|
+| Volta brackets (1st/2nd endings) | Requires `volta?` field on `Measure`, renderer support, and UI. |
+| D.C. al Fine / al Coda | Needs new directive types and Fine/Coda marks in data model. |
+| Dal Segno (D.S.) | Needs segno mark (𝄋) in data model. |
+| Playback cursor | Visual indicator tracking current note/measure during playback. |
+| Ties across repeat boundary | Tie on final note of repeated section retriggers on second pass. |
+| Repeat count > 2 | Play section N times — not supported by standard barline notation. |
+
+### Acceptance Criteria (advanced)
+
+12. A section enclosed in `|: … :|` plays twice in full before continuing.
+13. A score with only `repeat-end` (no `repeat-start`) plays from the beginning twice.
+14. Back-to-back repeats (`|: A :|  |: B :|`) each repeat exactly once independently.
+15. Repeated sections honour tempo/dynamic directives on each pass (resolve by original measure index).
+16. Stop during the repeated section cancels immediately with no click artefact.

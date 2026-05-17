@@ -222,6 +222,33 @@ export function resolveDirectiveMidiProgram(measures: readonly Measure[], idx: n
   return partMidiProgram
 }
 
+export function buildPlaybackSequence(measures: readonly Measure[]): number[] {
+  const order: number[] = []
+  const seen = new Set<number>()
+
+  let i = 0
+  while (i < measures.length) {
+    order.push(i)
+
+    if (measures[i].barline === 'repeat-end' && !seen.has(i)) {
+      seen.add(i)
+      let jumpTo = 0
+      for (let j = i - 1; j >= 0; j--) {
+        if (measures[j].barline === 'repeat-start') {
+          jumpTo = j + 1
+          break
+        }
+      }
+      i = jumpTo
+      continue
+    }
+
+    i++
+  }
+
+  return order
+}
+
 export const DURATION_LABELS: Record<Duration, string> = {
   '64th':    '64th',
   '32nd':    '32nd',

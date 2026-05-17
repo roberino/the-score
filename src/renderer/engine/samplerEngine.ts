@@ -1,6 +1,6 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord } from '@shared/score'
-import { resolveDirectiveTempo, resolveDirectiveDynamic, resolveDirectiveMidiProgram } from '@shared/musicUtils'
+import { resolveDirectiveTempo, resolveDirectiveDynamic, resolveDirectiveMidiProgram, buildPlaybackSequence } from '@shared/musicUtils'
 import { pitchToHz, eventToSeconds, type PlaybackController } from './audioEngine'
 
 // ── Salamander Grand Piano samples (Tone.js CDN) ──────────────────────────────
@@ -63,6 +63,7 @@ export async function playScoreWithSampler(
 
   let totalDuration = 0
   const tempoStaff = score.parts[0]?.staves[0]
+  const sequence   = buildPlaybackSequence(tempoStaff?.measures ?? [])
 
   for (const part of score.parts) {
     if (part.muted) continue
@@ -71,7 +72,7 @@ export async function playScoreWithSampler(
 
     let partTime = 0
 
-    for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
+    for (const mIdx of sequence) {
       const measure = staff.measures[mIdx]
 
       const effectiveBpm = tempoStaff
