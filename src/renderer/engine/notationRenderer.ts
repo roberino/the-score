@@ -56,6 +56,16 @@ function pitchToVexKey(pitch: { noteName: string; octave: number; accidental: st
   return `${pitch.noteName.toLowerCase()}/${pitch.octave}`
 }
 
+// Middle-line pitch for each clef — used as the VexFlow rest anchor key so that
+// rest glyphs are centred on the staff regardless of clef.
+const CLEF_REST_KEY: Record<string, string> = {
+  treble:     'b/4',  // B4  = 3rd (middle) line of treble staff
+  bass:       'd/3',  // D3  = 3rd (middle) line of bass staff
+  alto:       'c/4',  // C4  = 3rd (middle) line of alto staff
+  tenor:      'e/4',  // E4  = 3rd (middle) line of tenor staff
+  percussion: 'b/4',  // treble fallback for unpitched percussion
+}
+
 // ── Convert a NoteEvent to a VexFlow StaveNote ────────────────────────────────
 
 function noteEventToStaveNote(event: NoteEvent, selected: boolean, clef: string): StaveNote {
@@ -83,7 +93,7 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean, clef: string)
       const r = event as Rest
       const staveNote = new StaveNote({
         clef,
-        keys: ['b/4'],
+        keys: [CLEF_REST_KEY[clef] ?? 'b/4'],
         duration: DURATION_MAP[r.duration] + (r.dots > 0 ? 'd'.repeat(r.dots) : '') + 'r'
       })
       if (r.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
@@ -486,7 +496,7 @@ function renderMeasure(
   const events = voice0?.events ?? []
 
   if (events.length === 0) {
-    const wholeRest = new StaveNote({ clef: clefType, keys: ['b/4'], duration: 'wr' })
+    const wholeRest = new StaveNote({ clef: clefType, keys: [CLEF_REST_KEY[clefType] ?? 'b/4'], duration: 'wr' })
     const vexVoice  = new VexVoice({
       numBeats: effectiveSig.numerator,
       beatValue: effectiveSig.denominator,
