@@ -36,6 +36,9 @@ export interface AppState {
   cursorBeatPosition: number          // in 64th-note units
   lastEnteredPitch: Pitch | null
 
+  // UI panels
+  keyboardVisible: boolean
+
   // Playback
   isPlaying: boolean
   playbackPositionTick: number
@@ -64,6 +67,7 @@ export interface AppState {
   setLastEnteredPitch: (pitch: Pitch | null) => void
   moveCursorToFirstAvailable: () => void
   checkAndAutoAddBar: () => void
+  toggleKeyboard: () => void
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -87,6 +91,8 @@ export const useAppStore = create<AppState>()(
     cursorMeasureId: null,
     cursorBeatPosition: 0,
     lastEnteredPitch: null,
+
+    keyboardVisible: false,
 
     isPlaying: false,
     playbackPositionTick: 0,
@@ -282,6 +288,8 @@ export const useAppStore = create<AppState>()(
         state.cursorBeatPosition = 0
       })
     },
+
+    toggleKeyboard: () => set(s => { s.keyboardVisible = !s.keyboardVisible }),
 
     checkAndAutoAddBar: () => {
       const score = get().score

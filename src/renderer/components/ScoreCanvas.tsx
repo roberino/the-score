@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { useAppStore } from '../store/appStore'
 import {
   renderScore,
@@ -29,6 +29,9 @@ import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
 import { ClefPicker } from './ClefPicker'
 import { DirectivePicker } from './DirectivePicker'
+import { VirtualKeyboard } from './VirtualKeyboard'
+import { useMidiInput } from '../hooks/useMidiInput'
+import type { NoteInput } from '../services/midiService'
 
 const LINE_SPACING_PX  = 10
 const BARLINE_HIT_RADIUS = 8
@@ -259,6 +262,7 @@ export function ScoreCanvas(): JSX.Element {
     setCursor, setLastEnteredPitch,
     setSelectedNote, setSelectedBarline,
     moveCursorToFirstAvailable,
+    keyboardVisible, toggleKeyboard,
   } = useAppStore()
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -344,6 +348,62 @@ export function ScoreCanvas(): JSX.Element {
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
       primedAccidental, lastEnteredPitch, dispatch, setPrimedAccidental,
       setLastEnteredPitch, setCursor])
+
+  // Explicit-octave variant used by virtual keyboard and MIDI input
+  const enterNoteAtPitch = useCallback((noteName: NoteName, octave: number, accidental?: Accidental) => {
+    if (!cursorMeasureId) {
+      // Keyboard/MIDI note pressed without cursor — auto-place cursor and switch to note mode
+      setInputMode('note')
+      return
+    }
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        const measure = staff.measures.find(m => m.id === cursorMeasureId)
+        if (!measure) continue
+        const voice   = measure.voices[0]
+        const timeSig = measure.timeSignature ?? score.timeSignature
+        const dots    = isDotted ? 1 : 0 as 0 | 1
+        const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
+        if (remainingUnits(voice.events, timeSig) < units) {
+          canvasRef.current?.classList.add('cursor-reject')
+          setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+          return
+        }
+        const note        = createNote(noteName, octave, selectedDuration, accidental ?? null)
+        const noteWithDot = { ...note, dots } as Note
+        dispatch({
+          type: 'ADD_NOTE',
+          partId:    part.id,
+          staffId:   staff.id,
+          measureId: measure.id,
+          voiceId:   voice.id,
+          event:     noteWithDot,
+        })
+        setLastEnteredPitch(noteWithDot.pitch)
+        const newBeat  = cursorBeatPosition + units
+        const capacity = measureCapacityUnits(timeSig)
+        if (newBeat >= capacity) {
+          const mIdx       = staff.measures.findIndex(m => m.id === cursorMeasureId)
+          const nextMeasure = staff.measures[mIdx + 1]
+          if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[0]?.events ?? []))
+          else             setCursor(null, 0)
+        } else {
+          setCursor(cursorMeasureId, newBeat)
+        }
+        return
+      }
+    }
+  }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
+      dispatch, setLastEnteredPitch, setCursor, setInputMode])
+
+  // Stable handler ref so useMidiInput/VirtualKeyboard don't re-subscribe on every render
+  const noteInputHandler = useCallback((input: NoteInput) => {
+    if (inputMode !== 'note') setInputMode('note')
+    enterNoteAtPitch(input.noteName, input.octave, input.accidental as Accidental | undefined)
+  }, [enterNoteAtPitch, inputMode, setInputMode])
+
+  const stableNoteInputHandler = useMemo(() => noteInputHandler, [noteInputHandler])
+  useMidiInput(stableNoteInputHandler)
 
   const enterRest = useCallback(() => {
     if (!cursorMeasureId) return
@@ -467,6 +527,7 @@ export function ScoreCanvas(): JSX.Element {
         if (e.key === 'r' || e.key === 'R') { setInputMode('rest');   return }
         if (e.key === 's' || e.key === 'S') { setInputMode('select'); return }
         if (e.key === 'e' || e.key === 'E') { setInputMode('eraser'); return }
+        if (e.key === 'k' || e.key === 'K') { toggleKeyboard();       return }
       }
 
       // Duration keys 1–7 (no modifier)
@@ -542,7 +603,7 @@ export function ScoreCanvas(): JSX.Element {
   }, [
     inputMode, score, selectedNoteId,
     enterNote, enterRest, deleteSelectedNote, nudgeOctave,
-    setInputMode, setSelectedDuration, toggleDot, setPrimedAccidental, dispatch,
+    setInputMode, setSelectedDuration, toggleDot, setPrimedAccidental, dispatch, toggleKeyboard,
   ])
 
   // Set cursor when first entering note/rest mode
@@ -1028,6 +1089,12 @@ export function ScoreCanvas(): JSX.Element {
           screenY={clefPickerState.screenY}
           onClose={closeClefPicker}
           onSelect={handleClefSelect}
+        />
+      )}
+      {keyboardVisible && (
+        <VirtualKeyboard
+          onNotePress={noteInputHandler}
+          onClose={toggleKeyboard}
         />
       )}
       {directivePickerState && (
