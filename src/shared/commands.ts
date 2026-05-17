@@ -12,7 +12,7 @@
 import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
-import type { Score, NoteEvent, Duration, ClefType, KeySignature, TimeSignature, BarlineType } from './score'
+import type { Score, NoteEvent, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive } from './score'
 import { measureCapacityUnits, eventDurationUnits, resolveClef, pitchToStep, stepToPitch } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
@@ -39,6 +39,8 @@ export type Command =
   | { type: 'MOVE_PART';            partId: string; direction: 'up' | 'down' }
   | { type: 'SET_PART_METADATA';    partId: string; name?: string; shortName?: string; midiProgram?: number; transposeSemitones?: number; labelVisible?: boolean }
   | { type: 'SET_SCORE_SHOW_LABELS'; visible: boolean }
+  | { type: 'ADD_DIRECTIVE';         partId: string; staffId: string; measureId: string; directive: Directive }
+  | { type: 'REMOVE_DIRECTIVE';      partId: string; staffId: string; measureId: string; directiveId: string }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -397,6 +399,26 @@ export function applyCommand(score: Score, command: Command): Score {
 
       case 'SET_SCORE_SHOW_LABELS': {
         ;(draft as any).showPartLabels = command.visible
+        break
+      }
+
+      case 'ADD_DIRECTIVE': {
+        const part    = draft.parts.find(p => p.id === command.partId)
+        const staff   = part?.staves.find(s => s.id === command.staffId)
+        const measure = staff?.measures.find(m => m.id === command.measureId) as any
+        if (!measure) break
+        if (!measure.directives) measure.directives = []
+        measure.directives.push(command.directive)
+        break
+      }
+
+      case 'REMOVE_DIRECTIVE': {
+        const part    = draft.parts.find(p => p.id === command.partId)
+        const staff   = part?.staves.find(s => s.id === command.staffId)
+        const measure = staff?.measures.find(m => m.id === command.measureId) as any
+        if (!measure?.directives) break
+        const idx = measure.directives.findIndex((d: any) => d.id === command.directiveId)
+        if (idx !== -1) measure.directives.splice(idx, 1)
         break
       }
     }

@@ -10,7 +10,7 @@ import {
   type MeasureLayout,
   type HeadingFieldBound,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature, type KeySignature, type ClefType } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive } from '@shared/score'
 import {
   DURATION_UNITS,
   dottedUnits,
@@ -28,6 +28,7 @@ import {
 import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
 import { ClefPicker } from './ClefPicker'
+import { DirectivePicker } from './DirectivePicker'
 
 const LINE_SPACING_PX  = 10
 const BARLINE_HIT_RADIUS = 8
@@ -228,6 +229,16 @@ interface ClefPickerState {
   screenY: number
 }
 
+interface DirectivePickerState {
+  measureId: string
+  partId: string
+  staffId: string
+  existing: readonly Directive[]
+  isFirstPart: boolean
+  screenX: number
+  screenY: number
+}
+
 export function ScoreCanvas(): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const notePositionsRef = useRef(new Map<string, number>())
@@ -235,6 +246,7 @@ export function ScoreCanvas(): JSX.Element {
   const [timeSigPickerState, setTimeSigPickerState] = useState<TimeSigPickerState | null>(null)
   const [keySigPickerState, setKeySigPickerState] = useState<KeySigPickerState | null>(null)
   const [clefPickerState, setClefPickerState] = useState<ClefPickerState | null>(null)
+  const [directivePickerState, setDirectivePickerState] = useState<DirectivePickerState | null>(null)
   const [editingHeading, setEditingHeading] = useState<HeadingFieldBound | null>(null)
 
   const {
@@ -561,6 +573,31 @@ export function ScoreCanvas(): JSX.Element {
     }
 
     const layouts = computeLayout(score, options)
+
+    // ── Directive zone: headroom above each stave (staveY ≤ y < staveTopY) ──
+    for (const l of layouts) {
+      if (
+        canvasX >= l.x && canvasX <= l.x + l.width &&
+        canvasY >= l.staveY && canvasY < l.staveTopY
+      ) {
+        const part  = score.parts.find(p => p.id === l.partId)
+        const staff = part?.staves.find(s => s.id === l.staffId)
+        const measure = staff?.measures.find(m => m.id === l.measureId)
+        if (!measure) break
+        const rect = canvas.getBoundingClientRect()
+        setDirectivePickerState({
+          measureId:  l.measureId,
+          partId:     l.partId,
+          staffId:    l.staffId,
+          existing:   measure.directives ?? [],
+          isFirstPart: part === score.parts[0],
+          screenX:    rect.left + canvasX,
+          screenY:    rect.top  + l.staveTopY,
+        })
+        return
+      }
+    }
+
     const layout  = findClickedLayout(canvasX, canvasY, layouts)
     if (!layout) return
 
@@ -867,6 +904,22 @@ export function ScoreCanvas(): JSX.Element {
     setKeySigPickerState(null)
   }, [keySigPickerState, dispatch])
 
+  // ── Directive picker handlers ───────────────────────────────────────────────
+
+  const handleDirectiveAdd = useCallback((directive: Directive) => {
+    const s = directivePickerState
+    if (!s) return
+    dispatch({ type: 'ADD_DIRECTIVE', partId: s.partId, staffId: s.staffId, measureId: s.measureId, directive })
+    setDirectivePickerState(prev => prev ? { ...prev, existing: [...prev.existing, directive] } : null)
+  }, [directivePickerState, dispatch])
+
+  const handleDirectiveRemove = useCallback((directiveId: string) => {
+    const s = directivePickerState
+    if (!s) return
+    dispatch({ type: 'REMOVE_DIRECTIVE', partId: s.partId, staffId: s.staffId, measureId: s.measureId, directiveId })
+    setDirectivePickerState(prev => prev ? { ...prev, existing: prev.existing.filter(d => d.id !== directiveId) } : null)
+  }, [directivePickerState, dispatch])
+
   // ── Clef picker handlers ────────────────────────────────────────────────────
 
   const closeClefPicker = useCallback(() => setClefPickerState(null), [])
@@ -900,6 +953,7 @@ export function ScoreCanvas(): JSX.Element {
       setTimeSigPickerState(null)
       setKeySigPickerState(null)
       setClefPickerState(null)
+      setDirectivePickerState(null)
     }
   }, [inputMode])
 
@@ -974,6 +1028,17 @@ export function ScoreCanvas(): JSX.Element {
           screenY={clefPickerState.screenY}
           onClose={closeClefPicker}
           onSelect={handleClefSelect}
+        />
+      )}
+      {directivePickerState && (
+        <DirectivePicker
+          existing={directivePickerState.existing}
+          showTempo={directivePickerState.isFirstPart}
+          screenX={directivePickerState.screenX}
+          screenY={directivePickerState.screenY}
+          onAdd={handleDirectiveAdd}
+          onRemove={handleDirectiveRemove}
+          onClose={() => setDirectivePickerState(null)}
         />
       )}
     </>

@@ -7,6 +7,7 @@
 
 import * as Tone from 'tone'
 import type { Score, Note, Chord, NoteEvent } from '@shared/score'
+import { resolveDirectiveTempo, resolveDirectiveDynamic, resolveDirectiveMidiProgram } from '@shared/musicUtils'
 
 // ── Pitch → frequency ────────────────────────────────────────────────────────
 
@@ -64,29 +65,60 @@ export async function playScore(
 
   let cursor = 0  // seconds — tracks the latest end time across all parts
 
+  // First part's staff used to resolve global tempo directives
+  const tempoStaff = score.parts[0]?.staves[0]
+
   for (const part of score.parts) {
     if (part.muted) continue
     const staff = part.staves[0]
     if (!staff) continue
 
-    const vol = 20 * Math.log10(Math.max(0.001, part.volume))  // linear → dB
     const partCursor = { t: 0 }
 
-    for (const measure of staff.measures) {
+    for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
+      const measure = staff.measures[mIdx]
+
+      // Resolve effective BPM at this measure (global — uses first part's staff)
+      const effectiveBpm = tempoStaff
+        ? resolveDirectiveTempo(tempoStaff.measures, mIdx, bpm)
+        : bpm
+
+      // Resolve volume multiplier from dynamics (per-part)
+      const dynMultiplier = resolveDirectiveDynamic(staff.measures, mIdx)
+      const volumeScale   = dynMultiplier ?? part.volume
+      const volDb         = 20 * Math.log10(Math.max(0.001, volumeScale))
+
+      // Resolve MIDI program override from pizz./arco (per-part, best-effort)
+      const effectiveMidi = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
+      // Pizz. approximation: shorter envelope (plucked feel)
+      const isPizz = effectiveMidi === 45
+
       for (const event of measure.voices[0]?.events ?? []) {
-        const dur = eventToSeconds(event, bpm)
+        const dur = eventToSeconds(event, effectiveBpm)
         const t   = partCursor.t
 
         if (event.type === 'note') {
-          const n  = event as Note
-          const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
+          const n   = event as Note
+          const hz  = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
+          const db  = volDb
+          const plucked = isPizz
           Tone.Transport.schedule((time) => {
+            synth.set({ envelope: plucked
+              ? { attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.1 }
+              : { attack: 0.005, decay: 0.1, sustain: 0.7, release: 0.1 } })
+            synth.volume.value = db
             synth.triggerAttackRelease(hz, dur, time)
           }, t)
         } else if (event.type === 'chord') {
-          const c     = event as Chord
-          const freqs = c.pitches.map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
+          const c      = event as Chord
+          const freqs  = c.pitches.map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
+          const db     = volDb
+          const plucked = isPizz
           Tone.Transport.schedule((time) => {
+            synth.set({ envelope: plucked
+              ? { attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.1 }
+              : { attack: 0.005, decay: 0.1, sustain: 0.7, release: 0.1 } })
+            synth.volume.value = db
             freqs.forEach(hz => synth.triggerAttackRelease(hz, dur, time))
           }, t)
         }
@@ -96,7 +128,6 @@ export async function playScore(
       }
     }
 
-    void vol  // volume per-part reserved for per-synth implementation
     cursor = Math.max(cursor, partCursor.t)
   }
 

@@ -1,4 +1,4 @@
-import type { Duration, NoteName, Pitch, NoteEvent, TimeSignature, KeySignature, ClefType } from './score'
+import type { Duration, NoteName, Pitch, NoteEvent, TimeSignature, KeySignature, ClefType, Measure } from './score'
 
 // ── Duration arithmetic (64th-note units) ─────────────────────────────────────
 
@@ -173,6 +173,53 @@ export const KEY_TO_DURATION: Record<string, Duration> = {
   '5': 'quarter',
   '6': 'half',
   '7': 'whole',
+}
+
+// ── Directive resolution ──────────────────────────────────────────────────────
+
+export const DYNAMIC_VOLUME: Record<string, number> = {
+  ppp: 0.15, pp: 0.25, p: 0.40, mp: 0.55, mf: 0.65, f: 0.80, ff: 0.90, fff: 1.00,
+}
+
+export const TEMPO_WORDS: { text: string; bpm: number }[] = [
+  { text: 'Larghissimo', bpm: 24  },
+  { text: 'Largo',       bpm: 40  },
+  { text: 'Larghetto',   bpm: 60  },
+  { text: 'Adagio',      bpm: 66  },
+  { text: 'Adagietto',   bpm: 72  },
+  { text: 'Andante',     bpm: 76  },
+  { text: 'Andantino',   bpm: 84  },
+  { text: 'Moderato',    bpm: 96  },
+  { text: 'Allegretto',  bpm: 112 },
+  { text: 'Allegro',     bpm: 120 },
+  { text: 'Vivace',      bpm: 140 },
+  { text: 'Presto',      bpm: 168 },
+  { text: 'Prestissimo', bpm: 200 },
+]
+
+export function resolveDirectiveTempo(measures: readonly Measure[], idx: number, scoreTempo: number): number {
+  for (let i = idx; i >= 0; i--) {
+    const d = measures[i].directives?.find(d => d.category === 'tempo' && d.bpm != null)
+    if (d?.bpm != null) return d.bpm
+  }
+  return scoreTempo
+}
+
+export function resolveDirectiveDynamic(measures: readonly Measure[], idx: number): number | null {
+  for (let i = idx; i >= 0; i--) {
+    const d = measures[i].directives?.find(d => d.category === 'dynamic')
+    if (d) return DYNAMIC_VOLUME[d.text] ?? null
+  }
+  return null
+}
+
+export function resolveDirectiveMidiProgram(measures: readonly Measure[], idx: number, partMidiProgram: number): number {
+  for (let i = idx; i >= 0; i--) {
+    const d = measures[i].directives?.find(d => d.category === 'expression' && d.midiProgram != null)
+    if (d?.midiProgram === -1) return partMidiProgram
+    if (d?.midiProgram != null) return d.midiProgram
+  }
+  return partMidiProgram
 }
 
 export const DURATION_LABELS: Record<Duration, string> = {

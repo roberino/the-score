@@ -60,6 +60,18 @@ export type Articulation =
   | 'staccato' | 'accent' | 'tenuto' | 'marcato'
   | 'fermata' | 'trill' | 'mordent' | 'turn'
 
+// ── Performance directives ────────────────────────────────────────────────────
+
+export type DirectiveCategory = 'tempo' | 'dynamic' | 'expression'
+
+export interface Directive {
+  readonly id: string
+  readonly category: DirectiveCategory
+  readonly text: string           // display text, e.g. "Allegro", "mf", "pizz."
+  readonly bpm?: number           // tempo only — overrides BPM from this measure forward
+  readonly midiProgram?: number   // expression only — -1 = restore original, ≥0 = override
+}
+
 // ── Structure ─────────────────────────────────────────────────────────────────
 
 export interface TimeSignature {
@@ -84,12 +96,13 @@ export interface Voice {
 export interface Measure {
   readonly id: string
   readonly number: number
-  readonly voices: readonly Voice[]  // usually 1–2 voices per staff
-  readonly clef?: Clef               // only set when clef changes
+  readonly voices: readonly Voice[]           // usually 1–2 voices per staff
+  readonly clef?: Clef                        // only set when clef changes
   readonly keySignature?: KeySignature
   readonly timeSignature?: TimeSignature
-  readonly tempo?: number            // BPM — set when tempo changes
+  readonly tempo?: number                     // BPM — set when tempo changes
   readonly barline?: BarlineType
+  readonly directives?: readonly Directive[]  // performance directives at this measure
 }
 
 export interface Staff {

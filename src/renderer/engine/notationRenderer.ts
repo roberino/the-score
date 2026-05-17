@@ -20,7 +20,7 @@ import {
 } from 'vexflow'
 
 import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature } from '@shared/score'
-import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, transposeKeyFifths, measureCapacityUnits } from '@shared/musicUtils'
+import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
 
@@ -496,7 +496,73 @@ function renderFromLayouts(
         nativeCtx.restore()
       }
     }
+
+    // Directives: drawn in the VexFlow headroom zone above the top staff line
+    drawDirectives(ctx, layout, measure, staff, score, part === score.parts[0])
   }
+}
+
+// ── Draw performance directives for one measure ───────────────────────────────
+
+function drawDirectives(
+  ctx: RenderContext,
+  layout: MeasureLayout,
+  measure: Measure,
+  staff: Staff,
+  score: Score,
+  isFirstPart: boolean
+): void {
+  const nativeCtx: CanvasRenderingContext2D | null =
+    typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
+  if (!nativeCtx) return
+
+  const mIdx = staff.measures.findIndex(m => m.id === measure.id)
+  const directives = measure.directives ?? []
+
+  nativeCtx.save()
+  nativeCtx.textBaseline = 'alphabetic'
+
+  // ── Tempo (first part only) ─────────────────────────────────────────────────
+  if (isFirstPart) {
+    const tempoDirs = directives.filter(d => d.category === 'tempo')
+    const showScoreTempo = mIdx === 0 && tempoDirs.length === 0
+
+    if (tempoDirs.length > 0 || showScoreTempo) {
+      nativeCtx.font      = 'bold italic 12px sans-serif'
+      nativeCtx.fillStyle = '#111'
+      nativeCtx.textAlign = 'left'
+
+      let label: string
+      if (tempoDirs.length > 0) {
+        label = tempoDirs.map(d => d.bpm ? `${d.text} ♩=${d.bpm}` : d.text).join('  ')
+      } else {
+        const bpm = resolveDirectiveTempo(staff.measures, mIdx, score.tempo)
+        label = `♩=${bpm}`
+      }
+      nativeCtx.fillText(label, layout.x + 4, layout.staveY + 14)
+    }
+  }
+
+  // ── Dynamics ───────────────────────────────────────────────────────────────
+  const dynamicDirs = directives.filter(d => d.category === 'dynamic')
+  if (dynamicDirs.length > 0) {
+    nativeCtx.font      = 'bold 13px serif'
+    nativeCtx.fillStyle = '#111'
+    nativeCtx.textAlign = 'left'
+    nativeCtx.fillText(dynamicDirs.map(d => d.text).join(' '), layout.x + 4, layout.staveY + 28)
+  }
+
+  // ── Expression ─────────────────────────────────────────────────────────────
+  const exprDirs = directives.filter(d => d.category === 'expression')
+  if (exprDirs.length > 0) {
+    nativeCtx.font      = 'italic 11px serif'
+    nativeCtx.fillStyle = '#444'
+    nativeCtx.textAlign = 'left'
+    const exprY = dynamicDirs.length > 0 ? layout.staveY + 40 : layout.staveY + 28
+    nativeCtx.fillText(exprDirs.map(d => d.text).join(' '), layout.x + 4, exprY)
+  }
+
+  nativeCtx.restore()
 }
 
 // ── Beam groups by time signature ────────────────────────────────────────────
