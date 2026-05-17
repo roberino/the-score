@@ -58,11 +58,12 @@ function pitchToVexKey(pitch: { noteName: string; octave: number; accidental: st
 
 // ── Convert a NoteEvent to a VexFlow StaveNote ────────────────────────────────
 
-function noteEventToStaveNote(event: NoteEvent, selected: boolean): StaveNote {
+function noteEventToStaveNote(event: NoteEvent, selected: boolean, clef: string): StaveNote {
   switch (event.type) {
     case 'note': {
       const n = event as Note
       const staveNote = new StaveNote({
+        clef,
         keys: [pitchToVexKey(n.pitch)],
         duration: DURATION_MAP[n.duration] + (n.dots > 0 ? 'd'.repeat(n.dots) : '')
       })
@@ -81,6 +82,7 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean): StaveNote {
     case 'rest': {
       const r = event as Rest
       const staveNote = new StaveNote({
+        clef,
         keys: ['b/4'],
         duration: DURATION_MAP[r.duration] + (r.dots > 0 ? 'd'.repeat(r.dots) : '') + 'r'
       })
@@ -91,6 +93,7 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean): StaveNote {
     case 'chord': {
       const c = event as Chord
       const staveNote = new StaveNote({
+        clef,
         keys: c.pitches.map(pitchToVexKey),
         duration: DURATION_MAP[c.duration] + (c.dots > 0 ? 'd'.repeat(c.dots) : '')
       })
@@ -483,7 +486,7 @@ function renderMeasure(
   const events = voice0?.events ?? []
 
   if (events.length === 0) {
-    const wholeRest = new StaveNote({ keys: ['b/4'], duration: 'wr' })
+    const wholeRest = new StaveNote({ clef: clefType, keys: ['b/4'], duration: 'wr' })
     const vexVoice  = new VexVoice({
       numBeats: effectiveSig.numerator,
       beatValue: effectiveSig.denominator,
@@ -494,7 +497,7 @@ function renderMeasure(
     return
   }
 
-  const staveNotes = events.map(e => noteEventToStaveNote(e, e.id === selectedNoteId))
+  const staveNotes = events.map(e => noteEventToStaveNote(e, e.id === selectedNoteId, clefType))
   const vexVoice   = new VexVoice({
     numBeats: effectiveSig.numerator,
     beatValue: effectiveSig.denominator,
