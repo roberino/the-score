@@ -153,12 +153,15 @@ export interface HeadingFieldBound {
 
 export function headingFieldBounds(canvasWidth: number, marginX: number): HeadingFieldBound[] {
   const inner = canvasWidth - 2 * marginX
-  const mid   = marginX + inner * 0.6   // horizontal split: left 60% subtitle / right 40% composer+arranger
+  const mid   = marginX + inner * 0.6   // right 40%: composer + arranger
+  const rightW = canvasWidth - mid - marginX
+  // Composer/arranger are checked BEFORE subtitle so right-side clicks
+  // open the correct editor (subtitle's zone spans the full inner width).
   return [
-    { field: 'title',    x: marginX, y: 6,  width: inner,           height: 36, font: 'bold 22px serif',    textAlign: 'center' },
-    { field: 'subtitle', x: marginX, y: 44, width: mid - marginX,   height: 22, font: '13px serif',         textAlign: 'center' },
-    { field: 'composer', x: mid,     y: 44, width: canvasWidth - mid - marginX, height: 22, font: 'italic 12px serif', textAlign: 'right' },
-    { field: 'arranger', x: mid,     y: 66, width: canvasWidth - mid - marginX, height: 22, font: '11px serif',        textAlign: 'right' },
+    { field: 'title',    x: marginX, y: 6,  width: inner,  height: 36, font: 'bold 22px serif',    textAlign: 'center' },
+    { field: 'composer', x: mid,     y: 44, width: rightW, height: 22, font: 'italic 12px serif',  textAlign: 'right'  },
+    { field: 'subtitle', x: marginX, y: 44, width: inner,  height: 22, font: '13px serif',         textAlign: 'center' },
+    { field: 'arranger', x: mid,     y: 66, width: rightW, height: 22, font: '11px serif',         textAlign: 'right'  },
   ]
 }
 
@@ -194,17 +197,16 @@ function drawHeadings(ctx: RenderContext, score: Score, options: RenderOptions):
     nativeCtx.fillText('Click to add title', cx, 34)
   }
 
-  // Subtitle (centered, left zone)
+  // Subtitle (centered on full canvas, same axis as title)
+  nativeCtx.textAlign = 'center'
   if (subtitle) {
     nativeCtx.font      = '13px serif'
     nativeCtx.fillStyle = '#333'
-    nativeCtx.textAlign = 'center'
-    nativeCtx.fillText(subtitle, marginX + (canvasWidth * 0.6 - marginX) / 2, 60)
+    nativeCtx.fillText(subtitle, cx, 60)
   } else {
     nativeCtx.font      = '11px sans-serif'
     nativeCtx.fillStyle = '#ddd'
-    nativeCtx.textAlign = 'center'
-    nativeCtx.fillText('subtitle', cx * 0.6 + marginX * 0.4, 60)
+    nativeCtx.fillText('subtitle', cx, 60)
   }
 
   // Composer (right-aligned)
