@@ -1,7 +1,7 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord } from '@shared/score'
-import { resolveDirectiveTempo, resolveDirectiveDynamic, buildPlaybackSequence } from '@shared/musicUtils'
-import { eventToSeconds, type PlaybackController } from './audioEngine'
+import { resolveDirectiveDynamic, buildPlaybackSequence, buildFlatSchedule } from '@shared/musicUtils'
+import { type PlaybackController } from './audioEngine'
 import { midiService } from '../services/midiService'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -56,7 +56,6 @@ class MidiOutputEngine {
     try {
       this.access = await navigator.requestMIDIAccess()
       this.access.onstatechange = () => {
-        // If selected output was removed, mark disconnected
         if (this._output && !this.access!.outputs.has(this._output.id)) {
           this._output    = null
           this._connected = false
@@ -118,7 +117,6 @@ class MidiOutputEngine {
     Tone.Transport.cancel()
     Tone.Transport.bpm.value = bpm
 
-    // Establish a stable wall-clock ↔ AudioContext time offset for MIDI timestamps
     const perfAudioOffset = performance.now() - Tone.now() * 1000
 
     let totalDuration = 0
@@ -128,62 +126,54 @@ class MidiOutputEngine {
     score.parts.forEach((part, partIdx) => {
       if (part.muted) return
       const staff = part.staves[0]
-      if (!staff) return
+      if (!staff || !tempoStaff) return
 
       const channel = Math.min(partIdx, 15)
 
-      // Send Program Change for this part's instrument
       const pgm = Math.max(0, Math.min(127, part.midiProgram - 1))
       Tone.Transport.schedule((time) => {
         const ts = perfAudioOffset + time * 1000
         output.send([0xC0 | channel, pgm], ts)
       }, 0)
 
-      let partTime = 0
+      const schedule = buildFlatSchedule(staff, sequence, tempoStaff, bpm)
 
-      for (const mIdx of sequence) {
-        const measure = staff.measures[mIdx]
-
-        const effectiveBpm = tempoStaff
-          ? resolveDirectiveTempo(tempoStaff.measures, mIdx, bpm)
-          : bpm
+      for (const fe of schedule) {
+        if (fe.skip) continue
+        const { event, mIdx, startSec, playDurSec } = fe
 
         const dynMultiplier = resolveDirectiveDynamic(staff.measures, mIdx)
         const volumeScale   = dynMultiplier ?? part.volume
         const volDb         = 20 * Math.log10(Math.max(0.001, volumeScale))
         const velocity      = velocityFromDb(volDb)
+        const noteOffMs     = Math.max(50, playDurSec * 1000 - 30)
 
-        for (const event of measure.voices[0]?.events ?? []) {
-          const durSec = eventToSeconds(event, effectiveBpm)
-          const t      = partTime
-          const noteOffMs = Math.max(50, durSec * 1000 - 30)  // small gate
-
-          if (event.type === 'note') {
-            const n       = event as Note
-            const midiNum = pitchToMidi(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
-            Tone.Transport.schedule((time) => {
-              const ts = perfAudioOffset + time * 1000
-              output.send([0x90 | channel, midiNum, velocity], ts)
-              output.send([0x80 | channel, midiNum, 0], ts + noteOffMs)
-            }, t)
-          } else if (event.type === 'chord') {
-            const midiNums = (event as Chord).pitches.map(
-              p => pitchToMidi(p.noteName, p.octave, p.accidental, part.transposeSemitones)
-            )
-            Tone.Transport.schedule((time) => {
-              const ts = perfAudioOffset + time * 1000
-              midiNums.forEach(n => {
-                output.send([0x90 | channel, n, velocity], ts)
-                output.send([0x80 | channel, n, 0], ts + noteOffMs)
-              })
-            }, t)
-          }
-
-          partTime += durSec
+        if (event.type === 'note') {
+          const n       = event as Note
+          const midiNum = pitchToMidi(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
+          Tone.Transport.schedule((time) => {
+            const ts = perfAudioOffset + time * 1000
+            output.send([0x90 | channel, midiNum, velocity], ts)
+            output.send([0x80 | channel, midiNum, 0], ts + noteOffMs)
+          }, startSec)
+        } else if (event.type === 'chord') {
+          const midiNums = (event as Chord).pitches.map(
+            p => pitchToMidi(p.noteName, p.octave, p.accidental, part.transposeSemitones)
+          )
+          Tone.Transport.schedule((time) => {
+            const ts = perfAudioOffset + time * 1000
+            midiNums.forEach(n => {
+              output.send([0x90 | channel, n, velocity], ts)
+              output.send([0x80 | channel, n, 0], ts + noteOffMs)
+            })
+          }, startSec)
         }
       }
 
-      totalDuration = Math.max(totalDuration, partTime)
+      if (schedule.length > 0) {
+        const last = schedule[schedule.length - 1]
+        totalDuration = Math.max(totalDuration, last.startSec + last.playDurSec)
+      }
     })
 
     let stopped = false
@@ -205,7 +195,6 @@ class MidiOutputEngine {
         stopped = true
         Tone.Transport.stop()
         Tone.Transport.cancel()
-        // All Notes Off on all channels
         for (let ch = 0; ch < 16; ch++) {
           output.send([0xB0 | ch, 123, 0])
         }

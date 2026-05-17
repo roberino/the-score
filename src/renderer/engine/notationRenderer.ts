@@ -9,6 +9,7 @@ import {
   Renderer as VexRenderer,
   Stave,
   StaveNote,
+  StaveTie,
   Voice as VexVoice,
   Formatter,
   Beam,
@@ -457,6 +458,10 @@ function renderFromLayouts(
     }
   }
 
+  // Maps for second-pass tie/slur rendering
+  const staveNoteMap   = new Map<string, StaveNote>()   // eventId → StaveNote
+  const eventStaveMap  = new Map<string, Stave>()        // eventId → Stave
+
   for (const layout of layouts) {
     const entry = staffMap.get(layout.staffId)
     if (!entry) continue
@@ -472,7 +477,7 @@ function renderFromLayouts(
     const effectiveSig = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
     const prevSig      = mIdx > 0 ? resolveTimeSig(staff.measures, mIdx - 1, score.timeSignature) : null
 
-    renderMeasure(
+    const { stave, staveNotes, events } = renderMeasure(
       ctx, measure, prevMeasure,
       effectiveKey, prevKey,
       effectiveSig, prevSig, score.timeSignature,
@@ -481,6 +486,11 @@ function renderFromLayouts(
       layout.measureIndex, layout.isLineStart, layout.showClef,
       selectedNoteId, notePositions
     )
+
+    events.forEach((e, i) => {
+      staveNoteMap.set(e.id, staveNotes[i])
+      eventStaveMap.set(e.id, stave)
+    })
 
     // Part labels: right-aligned against the stave's left edge at system starts
     if (layout.isLineStart && score.showPartLabels && part.labelVisible) {
@@ -499,6 +509,17 @@ function renderFromLayouts(
 
     // Directives: drawn in the VexFlow headroom zone above the top staff line
     drawDirectives(ctx, layout, measure, staff, score, part === score.parts[0])
+  }
+
+  // ── Second pass: ties and slurs ─────────────────────────────────────────────
+  const nativeCtx: CanvasRenderingContext2D | null =
+    typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
+
+  for (const part of score.parts) {
+    for (const staff of part.staves) {
+      drawTiesForStaff(ctx, staff, staveNoteMap)
+      if (nativeCtx) drawSlursForStaff(nativeCtx, staff, staveNoteMap, eventStaveMap)
+    }
   }
 }
 
@@ -584,6 +605,12 @@ function getBeamGroups(timeSig: TimeSignature): Fraction[] | null {
 
 // ── Render a single measure ───────────────────────────────────────────────────
 
+interface MeasureRenderResult {
+  stave: Stave
+  staveNotes: StaveNote[]
+  events: NoteEvent[]
+}
+
 function renderMeasure(
   ctx: RenderContext,
   measure: Measure,
@@ -603,7 +630,7 @@ function renderMeasure(
   showClef: boolean,
   selectedNoteId: string | null,
   notePositions: Map<string, number>
-): void {
+): MeasureRenderResult {
   const stave = new Stave(x, y, width)
 
   const keyChanged  = prevKey !== null && prevKey.fifths !== effectiveKey.fifths
@@ -671,7 +698,7 @@ function renderMeasure(
     vexVoice.addTickables([wholeRest])
     new Formatter().joinVoices([vexVoice]).format([vexVoice], noteAreaWidth)
     vexVoice.draw(ctx, stave)
-    return
+    return { stave, staveNotes: [], events: [] as NoteEvent[] }
   }
 
   const staveNotes = events.map(e => noteEventToStaveNote(e, e.id === selectedNoteId, clefType))
@@ -685,14 +712,129 @@ function renderMeasure(
     ? Beam.generateBeams(staveNotes, { groups: beamGroups })
     : Beam.generateBeams(staveNotes)
   new Formatter().joinVoices([vexVoice]).format([vexVoice], noteAreaWidth)
-  // Collect absolute x of each note head after formatting (stave already drawn,
-  // so getNoteStartX() is accurate). setStave() is called again internally by draw().
   staveNotes.forEach((sn, i) => {
     sn.setStave(stave)
     notePositions.set(events[i].id, sn.getAbsoluteX())
   })
   vexVoice.draw(ctx, stave)
   beams.forEach(b => b.setContext(ctx).draw())
+  return { stave, staveNotes, events: events as NoteEvent[] }
+}
+
+// ── Tie rendering ─────────────────────────────────────────────────────────────
+// Uses VexFlow StaveTie; null firstNote/lastNote produces partial arcs at
+// measure boundaries for cross-measure ties.
+
+function drawTiesForStaff(
+  ctx: RenderContext,
+  staff: Staff,
+  staveNoteMap: Map<string, StaveNote>,
+): void {
+  for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
+    const measure = staff.measures[mIdx]
+    const events  = measure.voices[0]?.events ?? []
+
+    for (let eIdx = 0; eIdx < events.length; eIdx++) {
+      const event = events[eIdx]
+      if (event.type !== 'note') continue
+      const note = event as Note
+      if (!note.tieStart) continue
+
+      const srcSN = staveNoteMap.get(note.id)
+      if (!srcSN) continue
+
+      // Find the next note: rest of this measure first, then first of next measure
+      let destNote: Note | null = null
+      let inSameMeasure = false
+      for (let j = eIdx + 1; j < events.length; j++) {
+        if (events[j].type === 'note') {
+          destNote = events[j] as Note
+          inSameMeasure = true
+          break
+        }
+      }
+      if (!destNote && mIdx + 1 < staff.measures.length) {
+        for (const e of staff.measures[mIdx + 1].voices[0]?.events ?? []) {
+          if (e.type === 'note') { destNote = e as Note; break }
+        }
+      }
+
+      const dstSN = destNote ? staveNoteMap.get(destNote.id) ?? null : null
+
+      if (inSameMeasure && dstSN) {
+        new StaveTie({ firstNote: srcSN, lastNote: dstSN, firstIndexes: [0], lastIndexes: [0] })
+          .setContext(ctx).draw()
+      } else if (dstSN) {
+        // Cross-measure: arc to right edge of source stave, then from left edge of dest stave
+        new StaveTie({ firstNote: srcSN, lastNote: null, firstIndexes: [0], lastIndexes: [0] })
+          .setContext(ctx).draw()
+        new StaveTie({ firstNote: null, lastNote: dstSN, firstIndexes: [0], lastIndexes: [0] })
+          .setContext(ctx).draw()
+      }
+    }
+  }
+}
+
+// ── Slur rendering ────────────────────────────────────────────────────────────
+// Drawn with native canvas quadratic bezier curves. For cross-measure slurs,
+// the arc is split at each stave boundary.
+
+function drawSlursForStaff(
+  ctx2d: CanvasRenderingContext2D,
+  staff: Staff,
+  staveNoteMap: Map<string, StaveNote>,
+  eventStaveMap: Map<string, Stave>,
+): void {
+  if (!staff.slurs?.length) return
+
+  for (const slur of staff.slurs) {
+    const fromSN = staveNoteMap.get(slur.fromNoteId)
+    const toSN   = staveNoteMap.get(slur.toNoteId)
+    const fromStave = eventStaveMap.get(slur.fromNoteId)
+    const toStave   = eventStaveMap.get(slur.toNoteId)
+    if (!fromSN || !toSN || !fromStave || !toStave) continue
+
+    const above   = (slur.placement ?? 'above') === 'above'
+    const sign    = above ? -1 : 1
+
+    const x1 = fromSN.getAbsoluteX() + 4
+    const x2 = toSN.getAbsoluteX()   + 4
+    const y1 = above ? fromStave.getYForLine(0) - 6 : fromStave.getYForLine(4) + 6
+    const y2 = above ? toStave.getYForLine(0)   - 6 : toStave.getYForLine(4)   + 6
+
+    const sameLine = fromStave === toStave
+
+    ctx2d.save()
+    ctx2d.strokeStyle = '#111'
+    ctx2d.lineWidth   = 1.5
+
+    if (sameLine) {
+      const span = x2 - x1
+      const arc  = sign * Math.max(10, span * 0.12)
+      const midX = (x1 + x2) / 2
+      ctx2d.beginPath()
+      ctx2d.moveTo(x1, y1)
+      ctx2d.quadraticCurveTo(midX, y1 + arc, x2, y2)
+      ctx2d.stroke()
+    } else {
+      // Split arc: source note → right edge of source stave
+      const rightEdge = fromStave.getX() + fromStave.getWidth()
+      const arc1 = sign * Math.max(10, (rightEdge - x1) * 0.15)
+      ctx2d.beginPath()
+      ctx2d.moveTo(x1, y1)
+      ctx2d.quadraticCurveTo((x1 + rightEdge) / 2, y1 + arc1, rightEdge, y1)
+      ctx2d.stroke()
+      // Left edge of dest stave → dest note
+      const leftEdge = toStave.getX()
+      const arc2 = sign * Math.max(10, (x2 - leftEdge) * 0.15)
+      ctx2d.beginPath()
+      ctx2d.moveTo(leftEdge, y2)
+      ctx2d.quadraticCurveTo((leftEdge + x2) / 2, y2 + arc2, x2, y2)
+      ctx2d.stroke()
+    }
+
+    ctx2d.restore()
+  }
 }
 
 // ── Cursor overlay ────────────────────────────────────────────────────────────

@@ -10,7 +10,8 @@ import {
   type MeasureLayout,
   type HeadingFieldBound,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur } from '@shared/score'
+import { v4 as uuid } from 'uuid'
 import {
   DURATION_UNITS,
   dottedUnits,
@@ -268,6 +269,7 @@ export function ScoreCanvas(): JSX.Element {
   const [clefPickerState, setClefPickerState] = useState<ClefPickerState | null>(null)
   const [directivePickerState, setDirectivePickerState] = useState<DirectivePickerState | null>(null)
   const [editingHeading, setEditingHeading] = useState<HeadingFieldBound | null>(null)
+  const [slurPendingId, setSlurPendingId] = useState<string | null>(null)
 
   const {
     score, zoom, inputMode,
@@ -513,6 +515,47 @@ export function ScoreCanvas(): JSX.Element {
     }
   }, [score, selectedNoteId, dispatch, setSelectedNote])
 
+  // Locate a note event's part and staff (used for tie/slur dispatch)
+  const findNoteLocation = useCallback((noteId: string): { partId: string; staffId: string } | null => {
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        for (const measure of staff.measures) {
+          for (const voice of measure.voices) {
+            if (voice.events.some(e => e.id === noteId)) return { partId: part.id, staffId: staff.id }
+          }
+        }
+      }
+    }
+    return null
+  }, [score])
+
+  const toggleTie = useCallback(() => {
+    if (!selectedNoteId) return
+    const loc = findNoteLocation(selectedNoteId)
+    if (!loc) return
+    dispatch({ type: 'TOGGLE_TIE', partId: loc.partId, staffId: loc.staffId, noteId: selectedNoteId })
+  }, [selectedNoteId, findNoteLocation, dispatch])
+
+  const handleSlurKey = useCallback(() => {
+    if (!selectedNoteId) return
+    if (!slurPendingId) {
+      setSlurPendingId(selectedNoteId)
+      return
+    }
+    if (slurPendingId === selectedNoteId) {
+      setSlurPendingId(null)
+      return
+    }
+    // Commit slur — both notes must be in the same staff
+    const fromLoc = findNoteLocation(slurPendingId)
+    const toLoc   = findNoteLocation(selectedNoteId)
+    if (fromLoc && toLoc && fromLoc.staffId === toLoc.staffId) {
+      const slur: Slur = { id: uuid(), fromNoteId: slurPendingId, toNoteId: selectedNoteId }
+      dispatch({ type: 'ADD_SLUR', partId: fromLoc.partId, staffId: fromLoc.staffId, slur })
+    }
+    setSlurPendingId(null)
+  }, [selectedNoteId, slurPendingId, findNoteLocation, dispatch])
+
   const nudgeOctave = useCallback((direction: 1 | -1) => {
     if (!selectedNoteId) return
     for (const part of score.parts) {
@@ -551,8 +594,14 @@ export function ScoreCanvas(): JSX.Element {
 
       const mod = e.metaKey || e.ctrlKey
 
-      // Escape → select mode
-      if (e.key === 'Escape') { setInputMode('select'); return }
+      // Escape → select mode + cancel pending slur
+      if (e.key === 'Escape') { setSlurPendingId(null); setInputMode('select'); return }
+
+      // Tie / Slur shortcuts (select mode with a note selected; T otherwise falls through to text mode)
+      if (!mod && inputMode === 'select' && selectedNoteId) {
+        if (e.key === 't' || e.key === 'T') { toggleTie(); return }
+        if (e.key === 'l' || e.key === 'L') { handleSlurKey(); return }
+      }
 
       // Mode shortcuts (no modifier)
       if (!mod) {
@@ -635,8 +684,8 @@ export function ScoreCanvas(): JSX.Element {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [
-    inputMode, score, selectedNoteId,
-    enterNote, enterRest, deleteSelectedNote, nudgeOctave,
+    inputMode, score, selectedNoteId, slurPendingId,
+    enterNote, enterRest, deleteSelectedNote, nudgeOctave, toggleTie, handleSlurKey,
     setInputMode, setSelectedDuration, toggleDot, setPrimedAccidental, dispatch, toggleKeyboard,
   ])
 
@@ -1084,6 +1133,49 @@ export function ScoreCanvas(): JSX.Element {
         minWidth: '100%',
         position: 'relative',
       }}>
+        {selectedNoteId && inputMode === 'select' && (
+          <div style={{
+            position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)',
+            background: '#fff', border: '1px solid #d0d0d0', borderRadius: 4,
+            padding: '3px 6px', display: 'flex', gap: 4, zIndex: 100,
+            boxShadow: '0 1px 4px rgba(0,0,0,0.12)', fontSize: 12,
+          }}>
+            <button
+              onClick={toggleTie}
+              title="Toggle tie (T)"
+              style={{
+                padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc',
+                background: (() => {
+                  for (const part of score.parts) {
+                    for (const staff of part.staves) {
+                      for (const measure of staff.measures) {
+                        for (const voice of measure.voices) {
+                          const ev = voice.events.find(e => e.id === selectedNoteId)
+                          if (ev?.type === 'note' && (ev as Note).tieStart) return '#d0e8ff'
+                        }
+                      }
+                    }
+                  }
+                  return 'none'
+                })(),
+                cursor: 'pointer',
+              }}
+            >
+              Tie
+            </button>
+            <button
+              onClick={handleSlurKey}
+              title={slurPendingId ? 'Click destination note then press L, or click here to cancel' : 'Start slur (L)'}
+              style={{
+                padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc',
+                background: slurPendingId ? '#ffe0b0' : 'none',
+                cursor: 'pointer',
+              }}
+            >
+              {slurPendingId ? 'Slur…' : 'Slur'}
+            </button>
+          </div>
+        )}
         <canvas
           ref={canvasRef}
           onClick={handleCanvasClick}

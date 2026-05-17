@@ -60,6 +60,13 @@ export type Articulation =
   | 'staccato' | 'accent' | 'tenuto' | 'marcato'
   | 'fermata' | 'trill' | 'mordent' | 'turn'
 
+export interface Slur {
+  readonly id: string
+  readonly fromNoteId: string   // source NoteEvent id (Note or Chord)
+  readonly toNoteId: string     // destination NoteEvent id
+  readonly placement?: 'above' | 'below'  // omit = auto
+}
+
 // ── Performance directives ────────────────────────────────────────────────────
 
 export type DirectiveCategory = 'tempo' | 'dynamic' | 'expression'
@@ -109,6 +116,7 @@ export interface Staff {
   readonly id: string
   readonly clef: ClefType
   readonly measures: readonly Measure[]
+  readonly slurs?: readonly Slur[]
 }
 
 export interface Part {

@@ -12,7 +12,7 @@
 import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
-import type { Score, NoteEvent, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive } from './score'
+import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur } from './score'
 import { measureCapacityUnits, eventDurationUnits, resolveClef, pitchToStep, stepToPitch } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
@@ -41,6 +41,9 @@ export type Command =
   | { type: 'SET_SCORE_SHOW_LABELS'; visible: boolean }
   | { type: 'ADD_DIRECTIVE';         partId: string; staffId: string; measureId: string; directive: Directive }
   | { type: 'REMOVE_DIRECTIVE';      partId: string; staffId: string; measureId: string; directiveId: string }
+  | { type: 'TOGGLE_TIE';            partId: string; staffId: string; noteId: string }
+  | { type: 'ADD_SLUR';              partId: string; staffId: string; slur: Slur }
+  | { type: 'REMOVE_SLUR';           partId: string; staffId: string; slurId: string }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -196,7 +199,25 @@ export function applyCommand(score: Score, command: Command): Score {
         if (!voice) break
         const events = voice.events as NoteEvent[]
         const idx = events.findIndex(e => e.id === command.noteId)
-        if (idx !== -1) events.splice(idx, 1)
+        if (idx === -1) break
+        const deleted = events[idx]
+        // Clear tie on predecessor if this was a tieEnd
+        if (deleted.type === 'note' && (deleted as Note).tieEnd && idx > 0) {
+          const prev = events[idx - 1]
+          if (prev.type === 'note') (prev as any).tieStart = false
+        }
+        // Clear tie on successor if this was a tieStart
+        if (deleted.type === 'note' && (deleted as Note).tieStart && idx + 1 < events.length) {
+          const next = events[idx + 1]
+          if (next.type === 'note') (next as any).tieEnd = false
+        }
+        events.splice(idx, 1)
+        // Remove any slurs that reference this note
+        if ((staff as any).slurs) {
+          ;(staff as any).slurs = (staff as any).slurs.filter(
+            (sl: any) => sl.fromNoteId !== command.noteId && sl.toNoteId !== command.noteId
+          )
+        }
         break
       }
 
@@ -419,6 +440,57 @@ export function applyCommand(score: Score, command: Command): Score {
         if (!measure?.directives) break
         const idx = measure.directives.findIndex((d: any) => d.id === command.directiveId)
         if (idx !== -1) measure.directives.splice(idx, 1)
+        break
+      }
+
+      case 'TOGGLE_TIE': {
+        const part  = draft.parts.find(p => p.id === command.partId)
+        const staff = part?.staves.find(s => s.id === command.staffId)
+        if (!staff) break
+        let found = false
+        for (let mIdx = 0; mIdx < staff.measures.length && !found; mIdx++) {
+          const measure = staff.measures[mIdx] as any
+          for (const voice of measure.voices ?? []) {
+            const eIdx = (voice.events as any[]).findIndex((e: any) => e.id === command.noteId)
+            if (eIdx === -1) continue
+            const note = voice.events[eIdx] as any
+            if (note.type !== 'note') break
+            // Find the next note: remainder of this measure, then first of next measure
+            let nextNote: any = null
+            for (let j = eIdx + 1; j < voice.events.length; j++) {
+              if (voice.events[j].type === 'note') { nextNote = voice.events[j]; break }
+            }
+            if (!nextNote && mIdx + 1 < staff.measures.length) {
+              const nextVoice = (staff.measures[mIdx + 1] as any).voices?.[0]
+              for (const e of nextVoice?.events ?? []) {
+                if (e.type === 'note') { nextNote = e; break }
+              }
+            }
+            if (!nextNote) break
+            const tying = !note.tieStart
+            note.tieStart = tying
+            nextNote.tieEnd = tying
+            found = true
+            break
+          }
+        }
+        break
+      }
+
+      case 'ADD_SLUR': {
+        const part  = draft.parts.find(p => p.id === command.partId)
+        const staff = part?.staves.find(s => s.id === command.staffId) as any
+        if (!staff) break
+        if (!staff.slurs) staff.slurs = []
+        staff.slurs.push(command.slur)
+        break
+      }
+
+      case 'REMOVE_SLUR': {
+        const part  = draft.parts.find(p => p.id === command.partId)
+        const staff = part?.staves.find(s => s.id === command.staffId) as any
+        if (!staff?.slurs) break
+        staff.slurs = staff.slurs.filter((s: any) => s.id !== command.slurId)
         break
       }
     }

@@ -1,7 +1,7 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord } from '@shared/score'
-import { resolveDirectiveTempo, resolveDirectiveDynamic, resolveDirectiveMidiProgram, buildPlaybackSequence } from '@shared/musicUtils'
-import { pitchToHz, eventToSeconds, type PlaybackController } from './audioEngine'
+import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, buildPlaybackSequence, buildFlatSchedule } from '@shared/musicUtils'
+import { pitchToHz, type PlaybackController } from './audioEngine'
 
 // ── Salamander Grand Piano samples (Tone.js CDN) ──────────────────────────────
 
@@ -50,11 +50,9 @@ export async function playScoreWithSampler(
   bpm = 120,
   onStop?: () => void,
 ): Promise<PlaybackController> {
-  // Kick off loading (no-op if already started); if not ready yet, fall back to synth
   loadSampler()
 
   if (!_samplerReady) {
-    // Samples still loading — import lazily to avoid circular dep at module level
     const { playScore } = await import('./audioEngine')
     return playScore(score, bpm, onStop)
   }
@@ -74,54 +72,41 @@ export async function playScoreWithSampler(
   for (const part of score.parts) {
     if (part.muted) continue
     const staff = part.staves[0]
-    if (!staff) continue
+    if (!staff || !tempoStaff) continue
 
-    let partTime = 0
+    const schedule = buildFlatSchedule(staff, sequence, tempoStaff, bpm)
 
-    for (const mIdx of sequence) {
-      const measure = staff.measures[mIdx]
-
-      const effectiveBpm = tempoStaff
-        ? resolveDirectiveTempo(tempoStaff.measures, mIdx, bpm)
-        : bpm
+    for (const fe of schedule) {
+      if (fe.skip) continue
+      const { event, mIdx, startSec, playDurSec } = fe
 
       const dynMultiplier = resolveDirectiveDynamic(staff.measures, mIdx)
       const volumeScale   = dynMultiplier ?? part.volume
       const volDb         = 20 * Math.log10(Math.max(0.001, volumeScale))
-
       const effectiveMidi = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
       const isPizz        = effectiveMidi === 45
 
-      for (const event of measure.voices[0]?.events ?? []) {
-        const dur = eventToSeconds(event, effectiveBpm)
-        const t   = partTime
-
-        if (event.type === 'note') {
-          const n  = event as Note
-          const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
-          Tone.Transport.schedule((time) => {
-            sampler.volume.value = volDb
-            if (isPizz) {
-              // Plucked feel: shorten the release by triggering a quick note
-              sampler.triggerAttackRelease(hz, Math.min(dur, 0.3), time)
-            } else {
-              sampler.triggerAttackRelease(hz, dur, time)
-            }
-          }, t)
-        } else if (event.type === 'chord') {
-          const freqs = (event as unknown as Chord).pitches
-            .map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
-          Tone.Transport.schedule((time) => {
-            sampler.volume.value = volDb
-            freqs.forEach(hz => sampler.triggerAttackRelease(hz, dur, time))
-          }, t)
-        }
-
-        partTime += dur
+      if (event.type === 'note') {
+        const n  = event as Note
+        const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
+        Tone.Transport.schedule((time) => {
+          sampler.volume.value = volDb
+          sampler.triggerAttackRelease(hz, isPizz ? Math.min(playDurSec, 0.3) : playDurSec, time)
+        }, startSec)
+      } else if (event.type === 'chord') {
+        const freqs = (event as unknown as Chord).pitches
+          .map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
+        Tone.Transport.schedule((time) => {
+          sampler.volume.value = volDb
+          freqs.forEach(hz => sampler.triggerAttackRelease(hz, isPizz ? Math.min(playDurSec, 0.3) : playDurSec, time))
+        }, startSec)
       }
     }
 
-    totalDuration = Math.max(totalDuration, partTime)
+    if (schedule.length > 0) {
+      const last = schedule[schedule.length - 1]
+      totalDuration = Math.max(totalDuration, last.startSec + last.playDurSec)
+    }
   }
 
   let stopped = false

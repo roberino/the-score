@@ -1,4 +1,4 @@
-import type { Duration, NoteName, Pitch, NoteEvent, TimeSignature, KeySignature, ClefType, Measure } from './score'
+import type { Duration, NoteName, Pitch, NoteEvent, Note, Staff, TimeSignature, KeySignature, ClefType, Measure } from './score'
 
 // ── Duration arithmetic (64th-note units) ─────────────────────────────────────
 
@@ -247,6 +247,79 @@ export function buildPlaybackSequence(measures: readonly Measure[]): number[] {
   }
 
   return order
+}
+
+// ── Playback scheduling ────────────────────────────────────────────────────────
+
+const DURATION_BEATS: Record<string, number> = {
+  whole: 4, half: 2, quarter: 1, eighth: 0.5,
+  '16th': 0.25, '32nd': 0.125, '64th': 0.0625,
+}
+
+export function eventToSeconds(event: NoteEvent, bpm: number): number {
+  const beats = DURATION_BEATS[event.duration] ?? 1
+  const dotted = event.dots === 2 ? beats * 1.75 : event.dots === 1 ? beats * 1.5 : beats
+  return dotted * (60 / bpm)
+}
+
+export interface FlatScheduleEntry {
+  event: NoteEvent
+  mIdx: number
+  startSec: number
+  playDurSec: number  // merged duration for tied notes; equals base duration otherwise
+  skip: boolean       // tied continuation — do not schedule sound for this event
+}
+
+// Builds a flat, time-ordered schedule of events for one staff voice,
+// honouring the playback sequence (repeats) and merging tied note durations.
+export function buildFlatSchedule(
+  staff: Staff,
+  sequence: number[],
+  tempoStaff: Staff,
+  baseBpm: number,
+): FlatScheduleEntry[] {
+  // Flatten events across all measures in playback order
+  const raw: { event: NoteEvent; mIdx: number }[] = []
+  for (const mIdx of sequence) {
+    const measure = staff.measures[mIdx]
+    if (!measure) continue
+    for (const event of measure.voices[0]?.events ?? []) {
+      raw.push({ event, mIdx })
+    }
+  }
+
+  // Compute absolute start times
+  const result: FlatScheduleEntry[] = []
+  let t = 0
+  for (const { event, mIdx } of raw) {
+    const bpm = resolveDirectiveTempo(tempoStaff.measures, mIdx, baseBpm)
+    const dur = eventToSeconds(event, bpm)
+    result.push({ event, mIdx, startSec: t, playDurSec: dur, skip: false })
+    t += dur
+  }
+
+  // Merge tied note chains: accumulate duration into the first note, mark successors skip
+  for (let i = 0; i < result.length; i++) {
+    const fe = result[i]
+    if (fe.event.type !== 'note') continue
+    if (!(fe.event as Note).tieStart) continue
+
+    let merged = fe.playDurSec
+    let j = i + 1
+    while (j < result.length) {
+      const next = result[j]
+      if (next.event.type !== 'note') break
+      const nxt = next.event as Note
+      if (!nxt.tieEnd) break
+      merged += next.playDurSec
+      next.skip = true
+      if (!nxt.tieStart) break  // chain ends here
+      j++
+    }
+    fe.playDurSec = merged
+  }
+
+  return result
 }
 
 export const DURATION_LABELS: Record<Duration, string> = {

@@ -10,7 +10,7 @@
 
 import type {
   Score, Measure, Note, Rest, Chord, NoteEvent,
-  Directive, Duration, Accidental, ClefType, TimeSignature,
+  Directive, Duration, Accidental, ClefType, TimeSignature, Staff,
 } from '@shared/score'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -209,10 +209,24 @@ function directiveLines(directives: readonly Directive[], scoreTempo: number, is
 
 type BeamState = { active: boolean }
 
-function notationsElement(tieTypes: string[], articulations: readonly string[]): string {
+interface SlurNotation {
+  number: number
+  type: 'start' | 'stop'
+  placement?: 'above' | 'below'
+}
+
+function notationsElement(
+  tieTypes: string[],
+  articulations: readonly string[],
+  slur?: SlurNotation,
+): string {
   const parts: string[] = []
 
   for (const t of tieTypes) parts.push(`<tied type="${t}"/>`)
+  if (slur) {
+    const pl = slur.placement ? ` placement="${slur.placement}"` : ''
+    parts.push(`<slur number="${slur.number}" type="${slur.type}"${pl}/>`)
+  }
 
   const artEls: string[] = []
   const ornEls: string[] = []
@@ -240,7 +254,12 @@ function isSubQuarter(duration: Duration): boolean {
   return DURATION_DIVS[duration] < DURATION_DIVS['quarter']
 }
 
-function noteLines(event: NoteEvent, beamState: BeamState, lvl: number): string[] {
+function noteLines(
+  event: NoteEvent,
+  beamState: BeamState,
+  lvl: number,
+  slurMap?: Map<string, SlurNotation>,
+): string[] {
   const lines: string[] = []
 
   if (event.type === 'note') {
@@ -263,7 +282,8 @@ function noteLines(event: NoteEvent, beamState: BeamState, lvl: number): string[
       beamState.active = false
     }
 
-    const notEl = notationsElement(tieTypes, n.articulations)
+    const slur  = slurMap?.get(n.id)
+    const notEl = notationsElement(tieTypes, n.articulations, slur)
     const alterEl  = alter !== null ? `<alter>${alter}</alter>` : ''
     const accEl    = accName ? `<accidental>${accName}</accidental>` : ''
 
@@ -371,6 +391,19 @@ function partListLines(score: Score): string[] {
 
 // ── Part / measure sections ───────────────────────────────────────────────────
 
+function buildSlurMap(staff: Staff): Map<string, SlurNotation> {
+  const map = new Map<string, SlurNotation>()
+  let num = 1
+  for (const slur of staff.slurs ?? []) {
+    const notation: SlurNotation = { number: num, type: 'start' }
+    if (slur.placement) notation.placement = slur.placement
+    map.set(slur.fromNoteId, notation)
+    map.set(slur.toNoteId,   { number: num, type: 'stop' })
+    num = (num % 6) + 1  // MusicXML supports slur numbers 1–6
+  }
+  return map
+}
+
 function partLines(score: Score, partIdx: number): string[] {
   const part  = score.parts[partIdx]
   const staff = part.staves[0]
@@ -378,6 +411,7 @@ function partLines(score: Score, partIdx: number): string[] {
 
   const partId  = `P${partIdx + 1}`
   const lines: string[] = [`  <part id="${partId}">`]
+  const slurMap = buildSlurMap(staff)
 
   for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
     const measure     = staff.measures[mIdx]
@@ -414,7 +448,7 @@ function partLines(score: Score, partIdx: number): string[] {
     // Notes — voice 0 only
     const beamState: BeamState = { active: false }
     for (const event of measure.voices[0]?.events ?? []) {
-      lines.push(...noteLines(event, beamState, lvl + 1))
+      lines.push(...noteLines(event, beamState, lvl + 1, slurMap))
     }
 
     // Right barline for non-default barlines (repeat-start is handled as left of next measure)
