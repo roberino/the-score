@@ -1,6 +1,6 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord } from '@shared/score'
-import { resolveDirectiveDynamic, buildPlaybackSequence, buildFlatSchedule } from '@shared/musicUtils'
+import { resolveDirectiveDynamic, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, articulationPlaybackMods, expandOrnamentNotes } from '@shared/musicUtils'
 import { type PlaybackController } from './audioEngine'
 import { midiService } from '../services/midiService'
 
@@ -145,8 +145,27 @@ class MidiOutputEngine {
         const dynMultiplier = resolveDirectiveDynamic(staff.measures, mIdx)
         const volumeScale   = dynMultiplier ?? part.volume
         const volDb         = 20 * Math.log10(Math.max(0.001, volumeScale))
-        const velocity      = velocityFromDb(volDb)
-        const noteOffMs     = Math.max(50, playDurSec * 1000 - 30)
+
+        const keySig     = resolveKeySig(staff.measures, mIdx, score.keySignature)
+        const bpmAtEvent = resolveDirectiveTempo(tempoStaff.measures, mIdx, bpm)
+        const ornNotes   = expandOrnamentNotes(event, startSec, playDurSec, bpmAtEvent, keySig)
+        if (ornNotes) {
+          const baseVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(volDb))))
+          for (const on of ornNotes) {
+            const midiNum   = pitchToMidi(on.noteName, on.octave, on.accidental, part.transposeSemitones)
+            const noteOffMs = Math.max(20, on.durSec * 1000 - 20)
+            Tone.Transport.schedule((time) => {
+              const ts = perfAudioOffset + time * 1000
+              output.send([0x90 | channel, midiNum, baseVel], ts)
+              output.send([0x80 | channel, midiNum, 0], ts + noteOffMs)
+            }, on.startSec)
+          }
+          continue
+        }
+
+        const { durFactor, velFactor } = articulationPlaybackMods(event)
+        const velocity  = Math.max(1, Math.min(127, Math.round(velocityFromDb(volDb) * velFactor)))
+        const noteOffMs = Math.max(50, playDurSec * durFactor * 1000 - 30)
 
         if (event.type === 'note') {
           const n       = event as Note

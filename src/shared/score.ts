@@ -58,7 +58,7 @@ export type NoteEvent = Note | Rest | Chord
 
 export type Articulation =
   | 'staccato' | 'accent' | 'tenuto' | 'marcato'
-  | 'fermata' | 'trill' | 'mordent' | 'turn'
+  | 'fermata' | 'trill' | 'mordent' | 'mordent-upper' | 'turn'
 
 export interface Slur {
   readonly id: string

@@ -10,7 +10,7 @@ import {
   type MeasureLayout,
   type HeadingFieldBound,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Note, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import {
   DURATION_UNITS,
@@ -35,6 +35,7 @@ import { CircleOfFifths } from './CircleOfFifths'
 import { ClefPicker } from './ClefPicker'
 import { DirectivePicker } from './DirectivePicker'
 import { VirtualKeyboard } from './VirtualKeyboard'
+import { TransposeDialog } from './TransposeDialog'
 import { useMidiInput } from '../hooks/useMidiInput'
 import type { NoteInput } from '../services/midiService'
 
@@ -260,6 +261,18 @@ interface DirectivePickerState {
   screenY: number
 }
 
+const ARTICULATION_BUTTONS: { art: Articulation; label: string; title: string }[] = [
+  { art: 'staccato', label: '·',  title: 'Staccato' },
+  { art: 'accent',   label: '>',  title: 'Accent' },
+  { art: 'tenuto',   label: '—',  title: 'Tenuto' },
+  { art: 'marcato',  label: '^',  title: 'Marcato' },
+  { art: 'fermata',  label: '𝄐',  title: 'Fermata' },
+  { art: 'trill',          label: 'tr', title: 'Trill' },
+  { art: 'mordent',        label: 'mw', title: 'Mordent (lower)' },
+  { art: 'mordent-upper',  label: 'mW', title: 'Mordent (upper)' },
+  { art: 'turn',           label: '~',  title: 'Turn' },
+]
+
 export function ScoreCanvas(): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const notePositionsRef = useRef(new Map<string, number>())
@@ -270,20 +283,68 @@ export function ScoreCanvas(): JSX.Element {
   const [directivePickerState, setDirectivePickerState] = useState<DirectivePickerState | null>(null)
   const [editingHeading, setEditingHeading] = useState<HeadingFieldBound | null>(null)
   const [slurPendingId, setSlurPendingId] = useState<string | null>(null)
+  const [transposeDialogOpen, setTransposeDialogOpen] = useState(false)
 
   const {
     score, zoom, inputMode,
     selectedDuration, isDotted, primedAccidental,
     cursorMeasureId, cursorBeatPosition,
-    lastEnteredPitch, selectedNoteId,
-    dispatch, setInputMode,
+    lastEnteredPitch, selectedNoteId, selectedNoteIds, selectedAnchorId,
+    dispatch, dispatchBatch, setInputMode,
     setSelectedDuration, setIsDotted, toggleDot, setPrimedAccidental,
     setCursor, setLastEnteredPitch,
-    setSelectedNote, setSelectedBarline,
+    setSelectedNote, setSelectedNotes, toggleSelectedNote, clearSelection,
+    setSelectedBarline,
     moveCursorToFirstAvailable,
     keyboardVisible, toggleKeyboard,
     soundOnInput, audioMode,
   } = useAppStore()
+
+  // ── Articulation state ──────────────────────────────────────────────────────
+
+  const selectedEventLocations = useMemo(() => {
+    const idSet = new Set(selectedNoteIds)
+    const found: { event: NoteEvent; partId: string; staffId: string; measureId: string; voiceId: string }[] = []
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        for (const measure of staff.measures) {
+          for (const voice of measure.voices) {
+            for (const ev of voice.events) {
+              if (idSet.has(ev.id)) {
+                found.push({ event: ev, partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id })
+              }
+            }
+          }
+        }
+      }
+    }
+    return found
+  }, [score, selectedNoteIds])
+
+  const nonRestLocations = useMemo(
+    () => selectedEventLocations.filter(x => x.event.type !== 'rest'),
+    [selectedEventLocations]
+  )
+
+  const artActive = useMemo((): Partial<Record<Articulation, boolean>> => {
+    if (nonRestLocations.length === 0) return {}
+    const result: Partial<Record<Articulation, boolean>> = {}
+    for (const { art } of ARTICULATION_BUTTONS) {
+      result[art] = nonRestLocations.every(
+        x => ((x.event as any).articulations as Articulation[]).includes(art)
+      )
+    }
+    return result
+  }, [nonRestLocations])
+
+  const handleArticulationClick = useCallback((art: Articulation) => {
+    if (nonRestLocations.length === 0) return
+    const targets = nonRestLocations.map(({ event, partId, staffId, measureId, voiceId }) => ({
+      partId, staffId, measureId, voiceId, noteId: event.id,
+    }))
+    const on = !artActive[art]
+    dispatch({ type: 'SET_ARTICULATION', targets, articulation: art, on })
+  }, [nonRestLocations, artActive, dispatch])
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -297,12 +358,12 @@ export function ScoreCanvas(): JSX.Element {
       canvas,
       score,
       options,
-      selectedNoteId,
+      new Set(selectedNoteIds),
       cursorMeasureId
         ? { cursorMeasureId, cursorBeatPosition, totalCapacityUnits: capacity }
         : null
     )
-  }, [score, zoom, selectedNoteId, cursorMeasureId, cursorBeatPosition])
+  }, [score, zoom, selectedNoteIds, cursorMeasureId, cursorBeatPosition])
 
   // ── Note entry helpers ──────────────────────────────────────────────────────
 
@@ -490,30 +551,44 @@ export function ScoreCanvas(): JSX.Element {
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
       dispatch, setCursor])
 
-  const deleteSelectedNote = useCallback(() => {
-    if (!selectedNoteId) return
+  const findFullNoteLocation = useCallback((noteId: string): {
+    partId: string; staffId: string; measureId: string; voiceId: string
+  } | null => {
     for (const part of score.parts) {
       for (const staff of part.staves) {
         for (const measure of staff.measures) {
           for (const voice of measure.voices) {
-            const idx = voice.events.findIndex(e => e.id === selectedNoteId)
-            if (idx !== -1) {
-              dispatch({
-                type: 'DELETE_NOTE',
-                partId:    part.id,
-                staffId:   staff.id,
-                measureId: measure.id,
-                voiceId:   voice.id,
-                noteId:    selectedNoteId,
-              })
-              setSelectedNote(null)
-              return
+            if (voice.events.some(e => e.id === noteId)) {
+              return { partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id }
             }
           }
         }
       }
     }
-  }, [score, selectedNoteId, dispatch, setSelectedNote])
+    return null
+  }, [score])
+
+  const deleteSelectedNotes = useCallback(() => {
+    if (selectedNoteIds.length === 0) return
+    if (selectedNoteIds.length === 1) {
+      const id = selectedNoteIds[0]
+      const loc = findFullNoteLocation(id)
+      if (loc) {
+        dispatch({ type: 'DELETE_NOTE', ...loc, noteId: id })
+        clearSelection()
+      }
+      return
+    }
+    const deletions: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] = []
+    for (const noteId of selectedNoteIds) {
+      const loc = findFullNoteLocation(noteId)
+      if (loc) deletions.push({ ...loc, noteId })
+    }
+    if (deletions.length > 0) {
+      dispatch({ type: 'DELETE_NOTES', deletions })
+      clearSelection()
+    }
+  }, [score, selectedNoteIds, findFullNoteLocation, dispatch, clearSelection])
 
   // Locate a note event's part and staff (used for tie/slur dispatch)
   const findNoteLocation = useCallback((noteId: string): { partId: string; staffId: string } | null => {
@@ -584,6 +659,66 @@ export function ScoreCanvas(): JSX.Element {
     }
   }, [score, selectedNoteId, dispatch])
 
+  const moveSelectedNotes = useCallback((direction: 'up' | 'down') => {
+    if (selectedNoteIds.length === 0) return
+    const moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] = []
+    for (const noteId of selectedNoteIds) {
+      const loc = findFullNoteLocation(noteId)
+      if (loc) moves.push({ ...loc, noteId })
+    }
+    if (moves.length > 0) dispatch({ type: 'MOVE_NOTES_STEP', moves, direction })
+  }, [selectedNoteIds, findFullNoteLocation, dispatch])
+
+  const transposeSelectedNotes = useCallback((semitones: number) => {
+    if (selectedNoteIds.length === 0) return
+    const moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] = []
+    for (const noteId of selectedNoteIds) {
+      const loc = findFullNoteLocation(noteId)
+      if (loc) moves.push({ ...loc, noteId })
+    }
+    if (moves.length > 0) dispatch({ type: 'TRANSPOSE_NOTES', moves, semitones })
+  }, [selectedNoteIds, findFullNoteLocation, dispatch])
+
+  const selectAllInMeasure = useCallback(() => {
+    // Find the measure that contains the anchor/last selected note, or fall back to cursor
+    const refId = selectedNoteId ?? null
+    let targetPartId: string | null = null
+    let targetStaffId: string | null = null
+    let targetMeasureId: string | null = null
+
+    if (refId) {
+      for (const part of score.parts) {
+        for (const staff of part.staves) {
+          for (const measure of staff.measures) {
+            if (measure.voices.some(v => v.events.some(e => e.id === refId))) {
+              targetPartId    = part.id
+              targetStaffId   = staff.id
+              targetMeasureId = measure.id
+            }
+          }
+        }
+      }
+    }
+    if (!targetMeasureId) targetMeasureId = cursorMeasureId
+    if (!targetMeasureId) return
+
+    const ids: string[] = []
+    for (const part of score.parts) {
+      if (targetPartId && part.id !== targetPartId) continue
+      for (const staff of part.staves) {
+        if (targetStaffId && staff.id !== targetStaffId) continue
+        const measure = staff.measures.find(m => m.id === targetMeasureId)
+        if (!measure) continue
+        for (const voice of measure.voices) {
+          for (const event of voice.events) ids.push(event.id)
+        }
+        break
+      }
+      break
+    }
+    if (ids.length > 0) setSelectedNotes(ids, ids[ids.length - 1])
+  }, [score, selectedNoteId, cursorMeasureId, setSelectedNotes])
+
   // ── Keyboard handler ────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -594,17 +729,47 @@ export function ScoreCanvas(): JSX.Element {
 
       const mod = e.metaKey || e.ctrlKey
 
-      // Escape → select mode + cancel pending slur
-      if (e.key === 'Escape') { setSlurPendingId(null); setInputMode('select'); return }
-
-      // Tie / Slur shortcuts (select mode with a note selected; T otherwise falls through to text mode)
-      if (!mod && inputMode === 'select' && selectedNoteId) {
-        if (e.key === 't' || e.key === 'T') { toggleTie(); return }
-        if (e.key === 'l' || e.key === 'L') { handleSlurKey(); return }
+      // Escape → select mode + cancel pending slur + close transpose dialog
+      if (e.key === 'Escape') {
+        setSlurPendingId(null)
+        setTransposeDialogOpen(false)
+        setInputMode('select')
+        return
       }
 
-      // Mode shortcuts (no modifier)
-      if (!mod) {
+      // Select-all in measure (Ctrl/Cmd+A)
+      if (mod && (e.key === 'a' || e.key === 'A') && inputMode === 'select') {
+        e.preventDefault()
+        selectAllInMeasure()
+        return
+      }
+
+      // Tie shortcut: T (no shift, no mod) in select mode with note selected
+      if (!mod && !e.shiftKey && e.key === 't' && inputMode === 'select' && selectedNoteId) {
+        toggleTie(); return
+      }
+      // Slur shortcut: L in select mode with note selected
+      if (!mod && inputMode === 'select' && selectedNoteId && (e.key === 'l' || e.key === 'L')) {
+        handleSlurKey(); return
+      }
+      // Transpose dialog: Shift+T in select mode with notes selected
+      if (!mod && e.shiftKey && e.key === 'T' && inputMode === 'select' && selectedNoteIds.length > 0) {
+        setTransposeDialogOpen(true); return
+      }
+
+      // Arrow keys: chromatic step move in select mode; accidental priming in note mode
+      if (!mod && inputMode === 'select' && selectedNoteIds.length > 0) {
+        if (e.key === 'ArrowUp')   { e.preventDefault(); moveSelectedNotes('up');   return }
+        if (e.key === 'ArrowDown') { e.preventDefault(); moveSelectedNotes('down'); return }
+      }
+      if (inputMode === 'note' && !mod) {
+        if (e.key === 'ArrowUp')   { e.preventDefault(); setPrimedAccidental('sharp'); return }
+        if (e.key === 'ArrowDown') { e.preventDefault(); setPrimedAccidental('flat');  return }
+        if (e.key === '0')         {                      setPrimedAccidental('natural'); return }
+      }
+
+      // Mode shortcuts (no modifier, no shift)
+      if (!mod && !e.shiftKey) {
         if (e.key === 'n' || e.key === 'N') { setInputMode('note');   return }
         if (e.key === 'r' || e.key === 'R') { setInputMode('rest');   return }
         if (e.key === 's' || e.key === 'S') { setInputMode('select'); return }
@@ -617,41 +782,29 @@ export function ScoreCanvas(): JSX.Element {
       if (!mod && KEY_TO_DURATION[e.key]) {
         const dur = KEY_TO_DURATION[e.key]
         setSelectedDuration(dur)
-        // In select mode, change selected note's duration
-        if (inputMode === 'select' && selectedNoteId) {
+        if (inputMode === 'select' && selectedNoteIds.length > 0) {
+          const idSet = new Set(selectedNoteIds)
+          const cmds: { type: 'SET_NOTE_DURATION'; partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; duration: typeof dur }[] = []
           for (const part of score.parts) {
             for (const staff of part.staves) {
               for (const measure of staff.measures) {
                 for (const voice of measure.voices) {
-                  if (voice.events.some(ev => ev.id === selectedNoteId)) {
-                    dispatch({
-                      type: 'SET_NOTE_DURATION',
-                      partId:    part.id,
-                      staffId:   staff.id,
-                      measureId: measure.id,
-                      voiceId:   voice.id,
-                      noteId:    selectedNoteId,
-                      duration:  dur,
-                    })
-                    return
+                  for (const ev of voice.events) {
+                    if (idSet.has(ev.id)) {
+                      cmds.push({ type: 'SET_NOTE_DURATION', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id, noteId: ev.id, duration: dur })
+                    }
                   }
                 }
               }
             }
           }
+          if (cmds.length > 0) { dispatchBatch(cmds as any); return }
         }
         return
       }
 
       // Dot toggle
       if (!mod && e.key === '.') { toggleDot(); return }
-
-      // Accidental priming (note mode, no modifier)
-      if (inputMode === 'note' && !mod) {
-        if (e.key === 'ArrowUp')   { e.preventDefault(); setPrimedAccidental('sharp');   return }
-        if (e.key === 'ArrowDown') { e.preventDefault(); setPrimedAccidental('flat');    return }
-        if (e.key === '0')         {                      setPrimedAccidental('natural'); return }
-      }
 
       // Octave nudge on selected note (Ctrl/Cmd + arrow)
       if (mod && e.key === 'ArrowUp')   { e.preventDefault(); nudgeOctave(+1); return }
@@ -676,7 +829,7 @@ export function ScoreCanvas(): JSX.Element {
 
       // Delete / Backspace
       if (!mod && (e.key === 'Delete' || e.key === 'Backspace')) {
-        deleteSelectedNote()
+        deleteSelectedNotes()
         return
       }
     }
@@ -684,9 +837,11 @@ export function ScoreCanvas(): JSX.Element {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [
-    inputMode, score, selectedNoteId, slurPendingId,
-    enterNote, enterRest, deleteSelectedNote, nudgeOctave, toggleTie, handleSlurKey,
-    setInputMode, setSelectedDuration, toggleDot, setPrimedAccidental, dispatch, toggleKeyboard,
+    inputMode, score, selectedNoteId, selectedNoteIds, slurPendingId,
+    enterNote, enterRest, deleteSelectedNotes, nudgeOctave,
+    moveSelectedNotes, selectAllInMeasure,
+    toggleTie, handleSlurKey,
+    setInputMode, setSelectedDuration, toggleDot, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
   ])
 
   // Set cursor when first entering note/rest mode
@@ -1008,18 +1163,44 @@ export function ScoreCanvas(): JSX.Element {
           const selVoice = selStaff.measures[selMIdx].voices[0]
           if (selVoice && selVoice.events.length > 0) {
             let closest: { id: string; dist: number } | null = null
-            for (const event of selVoice.events) {
-              const noteX = notePositionsRef.current.get(event.id)
+            for (const ev of selVoice.events) {
+              const noteX = notePositionsRef.current.get(ev.id)
               if (noteX === undefined) continue
               const dist = Math.abs(canvasX - noteX)
-              if (!closest || dist < closest.dist) closest = { id: event.id, dist }
+              if (!closest || dist < closest.dist) closest = { id: ev.id, dist }
             }
             if (closest && closest.dist <= 20) {
-              setSelectedNote(closest.id)
-              const event = selVoice.events.find(e => e.id === closest.id)
-              if (event) {
-                setSelectedDuration(event.duration)
-                setIsDotted(event.dots > 0)
+              if (event.shiftKey) {
+                // Shift+click: range select from anchor to clicked, or toggle
+                const anchorLoc = selectedAnchorId ? findNoteLocation(selectedAnchorId) : null
+                const clickedLoc = { partId: layout.partId, staffId: layout.staffId }
+                if (anchorLoc && anchorLoc.staffId === clickedLoc.staffId) {
+                  // Range-select: collect all note IDs between anchor and clicked note
+                  const allIds: string[] = []
+                  for (const measure of selStaff.measures) {
+                    for (const voice of measure.voices) {
+                      for (const e of voice.events) allIds.push(e.id)
+                    }
+                  }
+                  const fromIdx = allIds.indexOf(selectedAnchorId!)
+                  const toIdx   = allIds.indexOf(closest.id)
+                  if (fromIdx !== -1 && toIdx !== -1) {
+                    const start = Math.min(fromIdx, toIdx)
+                    const end   = Math.max(fromIdx, toIdx)
+                    setSelectedNotes(allIds.slice(start, end + 1), selectedAnchorId)
+                  } else {
+                    toggleSelectedNote(closest.id)
+                  }
+                } else {
+                  toggleSelectedNote(closest.id)
+                }
+              } else {
+                setSelectedNote(closest.id)
+                const ev = selVoice.events.find(e => e.id === closest!.id)
+                if (ev) {
+                  setSelectedDuration(ev.duration)
+                  setIsDotted(ev.dots > 0)
+                }
               }
               return
             }
@@ -1030,7 +1211,7 @@ export function ScoreCanvas(): JSX.Element {
       // No hit — close picker and deselect
       setSelectedBarline(null)
       setPickerState(null)
-      setSelectedNote(null)
+      if (!event.shiftKey) clearSelection()
     }
   }
 
@@ -1133,47 +1314,89 @@ export function ScoreCanvas(): JSX.Element {
         minWidth: '100%',
         position: 'relative',
       }}>
-        {selectedNoteId && inputMode === 'select' && (
+        {selectedNoteIds.length > 0 && inputMode === 'select' && (
           <div style={{
             position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)',
             background: '#fff', border: '1px solid #d0d0d0', borderRadius: 4,
-            padding: '3px 6px', display: 'flex', gap: 4, zIndex: 100,
+            padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 4, zIndex: 100,
             boxShadow: '0 1px 4px rgba(0,0,0,0.12)', fontSize: 12,
           }}>
-            <button
-              onClick={toggleTie}
-              title="Toggle tie (T)"
-              style={{
-                padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc',
-                background: (() => {
-                  for (const part of score.parts) {
-                    for (const staff of part.staves) {
-                      for (const measure of staff.measures) {
-                        for (const voice of measure.voices) {
-                          const ev = voice.events.find(e => e.id === selectedNoteId)
-                          if (ev?.type === 'note' && (ev as Note).tieStart) return '#d0e8ff'
+            {/* Row 1: note operations */}
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              {selectedNoteIds.length > 1 && (
+                <span style={{ color: '#666', fontSize: 11, marginRight: 2 }}>
+                  {selectedNoteIds.length} selected
+                </span>
+              )}
+              {selectedNoteId && (
+                <>
+                  <button
+                    onClick={toggleTie}
+                    title="Toggle tie (T)"
+                    style={{
+                      padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc',
+                      background: (() => {
+                        for (const part of score.parts) {
+                          for (const staff of part.staves) {
+                            for (const measure of staff.measures) {
+                              for (const voice of measure.voices) {
+                                const ev = voice.events.find(e => e.id === selectedNoteId)
+                                if (ev?.type === 'note' && (ev as Note).tieStart) return '#d0e8ff'
+                              }
+                            }
+                          }
                         }
-                      }
-                    }
-                  }
-                  return 'none'
-                })(),
-                cursor: 'pointer',
-              }}
-            >
-              Tie
-            </button>
-            <button
-              onClick={handleSlurKey}
-              title={slurPendingId ? 'Click destination note then press L, or click here to cancel' : 'Start slur (L)'}
-              style={{
-                padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc',
-                background: slurPendingId ? '#ffe0b0' : 'none',
-                cursor: 'pointer',
-              }}
-            >
-              {slurPendingId ? 'Slur…' : 'Slur'}
-            </button>
+                        return 'none'
+                      })(),
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Tie
+                  </button>
+                  <button
+                    onClick={handleSlurKey}
+                    title={slurPendingId ? 'Click destination note then press L, or click here to cancel' : 'Start slur (L)'}
+                    style={{
+                      padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc',
+                      background: slurPendingId ? '#ffe0b0' : 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {slurPendingId ? 'Slur…' : 'Slur'}
+                  </button>
+                </>
+              )}
+              <button
+                onClick={() => setTransposeDialogOpen(true)}
+                title="Transpose selected notes (Shift+T)"
+                style={{
+                  padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc',
+                  background: 'none', cursor: 'pointer',
+                }}
+              >
+                Transpose…
+              </button>
+            </div>
+            {/* Row 2: articulations (hidden when only rests selected) */}
+            {nonRestLocations.length > 0 && (
+              <div style={{ display: 'flex', gap: 3, borderTop: '1px solid #eee', paddingTop: 3 }}>
+                {ARTICULATION_BUTTONS.map(({ art, label, title }) => (
+                  <button
+                    key={art}
+                    onClick={() => handleArticulationClick(art)}
+                    title={title}
+                    style={{
+                      padding: '2px 7px', borderRadius: 3, border: '1px solid #ccc',
+                      background: artActive[art] ? '#3b9ddd' : 'none',
+                      color: artActive[art] ? '#fff' : '#333',
+                      cursor: 'pointer', fontFamily: 'serif', fontSize: 13,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
         <canvas
@@ -1247,6 +1470,12 @@ export function ScoreCanvas(): JSX.Element {
           onAdd={handleDirectiveAdd}
           onRemove={handleDirectiveRemove}
           onClose={() => setDirectivePickerState(null)}
+        />
+      )}
+      {transposeDialogOpen && (
+        <TransposeDialog
+          onTranspose={transposeSelectedNotes}
+          onClose={() => setTransposeDialogOpen(false)}
         />
       )}
     </>

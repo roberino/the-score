@@ -24,7 +24,9 @@ export interface AppState {
   redoStack: Score[]
 
   // Editor state
-  selectedNoteId: string | null
+  selectedNoteId: string | null       // last selected note (derived from selectedNoteIds)
+  selectedNoteIds: string[]           // all selected note/chord event IDs
+  selectedAnchorId: string | null     // pivot for shift+click range selection
   selectedMeasureId: string | null
   selectedBarlineId: string | null   // measure ID whose right barline is selected
   inputMode: InputMode
@@ -63,6 +65,11 @@ export interface AppState {
   setInputMode: (mode: InputMode) => void
   setZoom: (zoom: number) => void
   setSelectedNote: (noteId: string | null) => void
+  setSelectedNotes: (ids: string[], anchorId?: string | null) => void
+  addToSelection: (id: string) => void
+  toggleSelectedNote: (id: string) => void
+  clearSelection: () => void
+  dispatchBatch: (commands: Command[]) => void
   setSelectedMeasure: (measureId: string | null) => void
   setSelectedBarline: (measureId: string | null) => void
   setPlaying: (playing: boolean) => void
@@ -90,6 +97,8 @@ export const useAppStore = create<AppState>()(
     undoStack: [],
     redoStack: [],
     selectedNoteId: null,
+    selectedNoteIds: [],
+    selectedAnchorId: null,
     selectedMeasureId: null,
     selectedBarlineId: null,
     inputMode: 'note',
@@ -158,6 +167,8 @@ export const useAppStore = create<AppState>()(
         state.cursorBeatPosition = 0
         state.lastEnteredPitch = null
         state.selectedNoteId = null
+        state.selectedNoteIds = []
+        state.selectedAnchorId = null
         state.selectedBarlineId = null
         state.isPlaying = false
       })
@@ -175,6 +186,8 @@ export const useAppStore = create<AppState>()(
         state.cursorBeatPosition = 0
         state.lastEnteredPitch = null
         state.selectedNoteId = null
+        state.selectedNoteIds = []
+        state.selectedAnchorId = null
         state.selectedBarlineId = null
         state.isPlaying = false
       })
@@ -220,7 +233,54 @@ export const useAppStore = create<AppState>()(
     },
 
     setZoom: (zoom) => set(s => { s.zoom = Math.max(0.25, Math.min(4, zoom)) }),
-    setSelectedNote: (id) => set(s => { s.selectedNoteId = id }),
+    setSelectedNote: (id) => set(s => {
+      s.selectedNoteId  = id
+      s.selectedNoteIds = id ? [id] : []
+      s.selectedAnchorId = id
+    }),
+    setSelectedNotes: (ids, anchorId) => set(s => {
+      s.selectedNoteIds = ids
+      s.selectedNoteId  = ids[ids.length - 1] ?? null
+      if (anchorId !== undefined) s.selectedAnchorId = anchorId
+    }),
+    addToSelection: (id) => set(s => {
+      if (!s.selectedNoteIds.includes(id)) {
+        s.selectedNoteIds = [...s.selectedNoteIds, id]
+        s.selectedNoteId  = id
+        s.selectedAnchorId = id
+      }
+    }),
+    toggleSelectedNote: (id) => set(s => {
+      const idx = s.selectedNoteIds.indexOf(id)
+      if (idx !== -1) {
+        const next = [...s.selectedNoteIds]
+        next.splice(idx, 1)
+        s.selectedNoteIds = next
+        s.selectedNoteId  = next[next.length - 1] ?? null
+      } else {
+        s.selectedNoteIds = [...s.selectedNoteIds, id]
+        s.selectedNoteId  = id
+        s.selectedAnchorId = id
+      }
+    }),
+    clearSelection: () => set(s => {
+      s.selectedNoteIds = []
+      s.selectedNoteId  = null
+      s.selectedAnchorId = null
+    }),
+    dispatchBatch: (commands) => {
+      if (commands.length === 0) return
+      set(state => {
+        const prev = state.score as Score
+        let s = prev
+        for (const cmd of commands) s = applyCommand(s, cmd)
+        state.undoStack.push(prev as any)
+        if (state.undoStack.length > 100) state.undoStack.shift()
+        state.redoStack = []
+        state.score = s as any
+        state.isDirty = true
+      })
+    },
     setSelectedMeasure: (id) => set(s => { s.selectedMeasureId = id }),
     setSelectedBarline: (id) => set(s => { s.selectedBarlineId = id }),
     setPlaying: (playing) => set(s => { s.isPlaying = playing }),
@@ -245,31 +305,37 @@ export const useAppStore = create<AppState>()(
     setSelectedDuration: (duration) => set(s => { s.selectedDuration = duration }),
     setIsDotted: (dotted) => set(s => { s.isDotted = dotted }),
     toggleDot: () => {
-      const { score, selectedNoteId, inputMode } = get()
-      if (inputMode === 'select' && selectedNoteId) {
+      const { score, selectedNoteIds, inputMode } = get()
+      if (inputMode === 'select' && selectedNoteIds.length > 0) {
+        const idSet = new Set(selectedNoteIds)
+        const cmds: Command[] = []
+        let newDots: 0 | 1 = 0
         for (const part of score.parts) {
           for (const staff of part.staves) {
             for (const measure of staff.measures) {
               for (const voice of measure.voices) {
-                const event = voice.events.find(e => e.id === selectedNoteId)
-                if (event) {
-                  const newDots = (event.dots === 1 ? 0 : 1) as 0 | 1
-                  get().dispatch({
+                for (const event of voice.events) {
+                  if (!idSet.has(event.id)) continue
+                  newDots = (event.dots === 1 ? 0 : 1) as 0 | 1
+                  cmds.push({
                     type:      'SET_NOTE_DURATION',
                     partId:    part.id,
                     staffId:   staff.id,
                     measureId: measure.id,
                     voiceId:   voice.id,
-                    noteId:    selectedNoteId,
+                    noteId:    event.id,
                     duration:  event.duration,
                     dots:      newDots,
                   })
-                  set(s => { s.isDotted = newDots === 1 })
-                  return
                 }
               }
             }
           }
+        }
+        if (cmds.length > 0) {
+          get().dispatchBatch(cmds)
+          set(s => { s.isDotted = newDots === 1 })
+          return
         }
       }
       set(s => { s.isDotted = !s.isDotted })

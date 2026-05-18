@@ -12,8 +12,8 @@
 import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
-import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur } from './score'
-import { measureCapacityUnits, eventDurationUnits, resolveClef, pitchToStep, stepToPitch } from './musicUtils'
+import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation } from './score'
+import { measureCapacityUnits, eventDurationUnits, resolveClef, pitchToStep, stepToPitch, shiftPitchBySemitones } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
 
@@ -44,6 +44,10 @@ export type Command =
   | { type: 'TOGGLE_TIE';            partId: string; staffId: string; noteId: string }
   | { type: 'ADD_SLUR';              partId: string; staffId: string; slur: Slur }
   | { type: 'REMOVE_SLUR';           partId: string; staffId: string; slurId: string }
+  | { type: 'SET_ARTICULATION';      targets: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[]; articulation: Articulation; on: boolean }
+  | { type: 'MOVE_NOTES_STEP';       moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[]; direction: 'up' | 'down' }
+  | { type: 'TRANSPOSE_NOTES';       moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[]; semitones: number }
+  | { type: 'DELETE_NOTES';          deletions: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -491,6 +495,86 @@ export function applyCommand(score: Score, command: Command): Score {
         const staff = part?.staves.find(s => s.id === command.staffId) as any
         if (!staff?.slurs) break
         staff.slurs = staff.slurs.filter((s: any) => s.id !== command.slurId)
+        break
+      }
+
+      case 'SET_ARTICULATION': {
+        for (const { partId, staffId, measureId, voiceId, noteId } of command.targets) {
+          const part    = draft.parts.find(p => p.id === partId)
+          const staff   = part?.staves.find(s => s.id === staffId)
+          const measure = staff?.measures.find(m => m.id === measureId)
+          const voice   = measure?.voices.find(v => v.id === voiceId)
+          if (!voice) continue
+          const event = voice.events.find(e => e.id === noteId) as any
+          if (!event || event.type === 'rest') continue
+          if (!event.articulations) event.articulations = []
+          if (command.on) {
+            if (!event.articulations.includes(command.articulation)) {
+              event.articulations.push(command.articulation)
+            }
+          } else {
+            event.articulations = event.articulations.filter((a: string) => a !== command.articulation)
+          }
+        }
+        break
+      }
+
+      case 'MOVE_NOTES_STEP':
+      case 'TRANSPOSE_NOTES': {
+        const delta = command.type === 'MOVE_NOTES_STEP'
+          ? (command.direction === 'up' ? 1 : -1)
+          : command.semitones
+        for (const { partId, staffId, measureId, voiceId, noteId } of command.moves) {
+          const part    = draft.parts.find(p => p.id === partId)
+          const staff   = part?.staves.find(s => s.id === staffId)
+          const measure = staff?.measures.find(m => m.id === measureId)
+          const voice   = measure?.voices.find(v => v.id === voiceId)
+          if (!voice) continue
+          const event = voice.events.find(e => e.id === noteId) as any
+          if (!event) continue
+          if (event.type === 'note') {
+            const s = shiftPitchBySemitones(event.pitch.noteName, event.pitch.octave, event.pitch.accidental, delta)
+            event.pitch.noteName   = s.noteName
+            event.pitch.octave     = s.octave
+            event.pitch.accidental = s.accidental
+          } else if (event.type === 'chord') {
+            for (const pitch of event.pitches ?? []) {
+              const s = shiftPitchBySemitones(pitch.noteName, pitch.octave, pitch.accidental, delta)
+              pitch.noteName   = s.noteName
+              pitch.octave     = s.octave
+              pitch.accidental = s.accidental
+            }
+          }
+        }
+        break
+      }
+
+      case 'DELETE_NOTES': {
+        for (const { partId, staffId, measureId, voiceId, noteId } of command.deletions) {
+          const part    = draft.parts.find(p => p.id === partId)
+          const staff   = part?.staves.find(s => s.id === staffId)
+          const measure = staff?.measures.find(m => m.id === measureId)
+          const voice   = measure?.voices.find(v => v.id === voiceId)
+          if (!voice) continue
+          const events = voice.events as NoteEvent[]
+          const idx = events.findIndex(e => e.id === noteId)
+          if (idx === -1) continue
+          const deleted = events[idx]
+          if (deleted.type === 'note' && (deleted as Note).tieEnd && idx > 0) {
+            const prev = events[idx - 1]
+            if (prev.type === 'note') (prev as any).tieStart = false
+          }
+          if (deleted.type === 'note' && (deleted as Note).tieStart && idx + 1 < events.length) {
+            const next = events[idx + 1]
+            if (next.type === 'note') (next as any).tieEnd = false
+          }
+          events.splice(idx, 1)
+          if ((staff as any).slurs) {
+            ;(staff as any).slurs = (staff as any).slurs.filter(
+              (sl: any) => sl.fromNoteId !== noteId && sl.toNoteId !== noteId
+            )
+          }
+        }
         break
       }
     }

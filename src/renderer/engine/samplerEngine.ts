@@ -1,6 +1,6 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord } from '@shared/score'
-import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, buildPlaybackSequence, buildFlatSchedule } from '@shared/musicUtils'
+import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, articulationPlaybackMods, expandOrnamentNotes } from '@shared/musicUtils'
 import { pitchToHz, type PlaybackController } from './audioEngine'
 
 // ── Salamander Grand Piano samples (Tone.js CDN) ──────────────────────────────
@@ -86,19 +86,38 @@ export async function playScoreWithSampler(
       const effectiveMidi = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
       const isPizz        = effectiveMidi === 45
 
+      const keySig     = resolveKeySig(staff.measures, mIdx, score.keySignature)
+      const bpmAtEvent = resolveDirectiveTempo(tempoStaff.measures, mIdx, bpm)
+      const ornNotes   = expandOrnamentNotes(event, startSec, playDurSec, bpmAtEvent, keySig)
+      if (ornNotes) {
+        for (const on of ornNotes) {
+          const hz = pitchToHz(on.noteName, on.octave, on.accidental, part.transposeSemitones)
+          const db = volDb
+          Tone.Transport.schedule((time) => {
+            sampler.volume.value = db
+            sampler.triggerAttackRelease(hz, on.durSec, time)
+          }, on.startSec)
+        }
+        continue
+      }
+
+      const { durFactor, volDbBonus } = articulationPlaybackMods(event)
+      const effectiveDur = isPizz ? Math.min(playDurSec * durFactor, 0.3) : playDurSec * durFactor
+      const effectiveDb  = volDb + volDbBonus
+
       if (event.type === 'note') {
         const n  = event as Note
         const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
         Tone.Transport.schedule((time) => {
-          sampler.volume.value = volDb
-          sampler.triggerAttackRelease(hz, isPizz ? Math.min(playDurSec, 0.3) : playDurSec, time)
+          sampler.volume.value = effectiveDb
+          sampler.triggerAttackRelease(hz, effectiveDur, time)
         }, startSec)
       } else if (event.type === 'chord') {
         const freqs = (event as unknown as Chord).pitches
           .map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
         Tone.Transport.schedule((time) => {
-          sampler.volume.value = volDb
-          freqs.forEach(hz => sampler.triggerAttackRelease(hz, isPizz ? Math.min(playDurSec, 0.3) : playDurSec, time))
+          sampler.volume.value = effectiveDb
+          freqs.forEach(hz => sampler.triggerAttackRelease(hz, effectiveDur, time))
         }, startSec)
       }
     }

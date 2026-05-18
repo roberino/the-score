@@ -16,11 +16,13 @@ import {
   Dot,
   Fraction,
   Accidental as VexAccidental,
+  Articulation as VexArticulation,
+  Ornament,
   BarlineType,
   type RenderContext
 } from 'vexflow'
 
-import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature } from '@shared/score'
+import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation } from '@shared/score'
 import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
@@ -71,6 +73,29 @@ const CLEF_REST_KEY: Record<string, string> = {
 
 // ── Convert a NoteEvent to a VexFlow StaveNote ────────────────────────────────
 
+const ARTICULATION_CODE: Partial<Record<Articulation, string>> = {
+  staccato: 'a.',
+  accent:   'a>',
+  tenuto:   'a-',
+  marcato:  'a^',
+  fermata:  'a@a',
+}
+const ORNAMENT_CODE: Partial<Record<Articulation, string>> = {
+  trill:           'tr',
+  mordent:         'mordent',
+  'mordent-upper': 'mordentInverted',
+  turn:            'turn',
+}
+
+function attachArticulations(staveNote: StaveNote, articulations: readonly Articulation[]): void {
+  for (const art of articulations) {
+    const ac = ARTICULATION_CODE[art]
+    if (ac) { staveNote.addModifier(new VexArticulation(ac)); continue }
+    const oc = ORNAMENT_CODE[art]
+    if (oc) staveNote.addModifier(new Ornament(oc))
+  }
+}
+
 function noteEventToStaveNote(event: NoteEvent, selected: boolean, clef: string): StaveNote {
   switch (event.type) {
     case 'note': {
@@ -89,6 +114,7 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean, clef: string)
           : 'bb'
         staveNote.addModifier(new VexAccidental(acc), 0)
       }
+      if (n.articulations.length > 0) attachArticulations(staveNote, n.articulations)
       if (selected) staveNote.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
       return staveNote
     }
@@ -111,6 +137,8 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean, clef: string)
         duration: DURATION_MAP[c.duration] + (c.dots > 0 ? 'd'.repeat(c.dots) : '')
       })
       if (c.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
+      if (c.articulations.length > 0) attachArticulations(staveNote, c.articulations)
+      if (selected) staveNote.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
       return staveNote
     }
   }
@@ -407,7 +435,7 @@ export function renderScore(
   canvas: HTMLCanvasElement,
   score: Score,
   options: RenderOptions = DEFAULT_RENDER_OPTIONS,
-  selectedNoteId: string | null = null,
+  selectedNoteIds: ReadonlySet<string> = new Set(),
   cursor: RenderCursorOptions | null = null
 ): Map<string, number> {
   const notePositions = new Map<string, number>()
@@ -430,7 +458,7 @@ export function renderScore(
   const ctx = renderer.getContext()
   ctx.clear()
 
-  renderFromLayouts(ctx, score, layouts, selectedNoteId, notePositions)
+  renderFromLayouts(ctx, score, layouts, selectedNoteIds, notePositions)
   drawHeadings(ctx, score, options)
 
   if (cursor?.cursorMeasureId) {
@@ -446,7 +474,7 @@ function renderFromLayouts(
   ctx: RenderContext,
   score: Score,
   layouts: MeasureLayout[],
-  selectedNoteId: string | null,
+  selectedNoteIds: ReadonlySet<string>,
   notePositions: Map<string, number>
 ): void {
   // Build fast lookup: staffId → staff / part
@@ -484,7 +512,7 @@ function renderFromLayouts(
       layout.clef, layout.transposeSemitones,
       layout.x, layout.staveY, layout.width,
       layout.measureIndex, layout.isLineStart, layout.showClef,
-      selectedNoteId, notePositions
+      selectedNoteIds, notePositions
     )
 
     events.forEach((e, i) => {
@@ -628,7 +656,7 @@ function renderMeasure(
   measureIndex: number,
   isLineStart: boolean,
   showClef: boolean,
-  selectedNoteId: string | null,
+  selectedNoteIds: ReadonlySet<string>,
   notePositions: Map<string, number>
 ): MeasureRenderResult {
   const stave = new Stave(x, y, width)
@@ -701,7 +729,7 @@ function renderMeasure(
     return { stave, staveNotes: [], events: [] as NoteEvent[] }
   }
 
-  const staveNotes = events.map(e => noteEventToStaveNote(e, e.id === selectedNoteId, clefType))
+  const staveNotes = events.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType))
   const vexVoice   = new VexVoice({
     numBeats: effectiveSig.numerator,
     beatValue: effectiveSig.denominator,

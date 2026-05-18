@@ -1,4 +1,4 @@
-import type { Duration, NoteName, Pitch, NoteEvent, Note, Staff, TimeSignature, KeySignature, ClefType, Measure } from './score'
+import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, TimeSignature, KeySignature, ClefType, Measure } from './score'
 
 // ── Duration arithmetic (64th-note units) ─────────────────────────────────────
 
@@ -107,6 +107,38 @@ const NOTE_SEMITONES: Record<NoteName, number> = {
 
 function midiNote(name: NoteName, octave: number): number {
   return (octave + 1) * 12 + NOTE_SEMITONES[name]
+}
+
+const CHROMATIC_PITCH: Array<{ noteName: NoteName; accidental: 'sharp' | null }> = [
+  { noteName: 'C', accidental: null },
+  { noteName: 'C', accidental: 'sharp' },
+  { noteName: 'D', accidental: null },
+  { noteName: 'D', accidental: 'sharp' },
+  { noteName: 'E', accidental: null },
+  { noteName: 'F', accidental: null },
+  { noteName: 'F', accidental: 'sharp' },
+  { noteName: 'G', accidental: null },
+  { noteName: 'G', accidental: 'sharp' },
+  { noteName: 'A', accidental: null },
+  { noteName: 'A', accidental: 'sharp' },
+  { noteName: 'B', accidental: null },
+]
+
+export function shiftPitchBySemitones(
+  noteName: NoteName,
+  octave: number,
+  accidental: Accidental,
+  semitones: number,
+): { noteName: NoteName; octave: number; accidental: 'sharp' | null } {
+  let midi = (octave + 1) * 12 + NOTE_SEMITONES[noteName]
+  if (accidental === 'sharp')           midi += 1
+  else if (accidental === 'flat')       midi -= 1
+  else if (accidental === 'doubleSharp') midi += 2
+  else if (accidental === 'doubleFlat')  midi -= 2
+  midi = Math.max(0, Math.min(127, midi + semitones))
+  const newOctave = Math.floor(midi / 12) - 1
+  const pc = ((midi % 12) + 12) % 12
+  return { ...CHROMATIC_PITCH[pc], octave: newOctave }
 }
 
 export function closestOctave(noteName: NoteName, prevPitch: Pitch | null): number {
@@ -220,6 +252,129 @@ export function resolveDirectiveMidiProgram(measures: readonly Measure[], idx: n
     if (d?.midiProgram != null) return d.midiProgram
   }
   return partMidiProgram
+}
+
+// ── Articulation playback modifiers ───────────────────────────────────────────
+
+export function articulationPlaybackMods(event: NoteEvent): {
+  durFactor: number
+  volDbBonus: number  // add to volDb in audio/sampler engines
+  velFactor: number   // multiply MIDI velocity
+} {
+  const arts: readonly string[] = (event as any).articulations ?? []
+  let durFactor = 1
+  let volDbBonus = 0
+  let velFactor = 1
+  for (const art of arts) {
+    if (art === 'staccato') durFactor *= 0.45
+    if (art === 'fermata')  durFactor *= 2.0
+    if (art === 'marcato')  { durFactor *= 0.85; volDbBonus += 4; velFactor *= 1.45 }
+    if (art === 'accent')   { volDbBonus += 2;   velFactor *= 1.30 }
+  }
+  return { durFactor, volDbBonus, velFactor }
+}
+
+// ── Ornament expansion ────────────────────────────────────────────────────────
+
+const SHARPS_ORDER: NoteName[] = ['F', 'C', 'G', 'D', 'A', 'E', 'B']
+const FLATS_ORDER:  NoteName[] = ['B', 'E', 'A', 'D', 'G', 'C', 'F']
+
+function keyAccidental(noteName: NoteName, fifths: number): 'sharp' | 'flat' | null {
+  if (fifths > 0) return SHARPS_ORDER.slice(0, fifths).includes(noteName) ? 'sharp' : null
+  if (fifths < 0) return FLATS_ORDER.slice(0, -fifths).includes(noteName) ? 'flat' : null
+  return null
+}
+
+function diatonicNeighbor(
+  noteName: NoteName,
+  octave: number,
+  direction: 'up' | 'down',
+  fifths: number,
+): { noteName: NoteName; octave: number; accidental: 'sharp' | 'flat' | null } {
+  const idx = DIATONIC.indexOf(noteName)
+  let newIdx: number
+  let newOctave: number
+  if (direction === 'up') {
+    newIdx = (idx + 1) % 7
+    newOctave = octave + (newIdx === 0 ? 1 : 0)
+  } else {
+    newIdx = (idx + 6) % 7
+    newOctave = octave - (newIdx === 6 ? 1 : 0)
+  }
+  const newName = DIATONIC[newIdx]
+  return { noteName: newName, octave: newOctave, accidental: keyAccidental(newName, fifths) }
+}
+
+export interface OrnamentNote {
+  noteName: NoteName
+  octave: number
+  accidental: 'sharp' | 'flat' | null
+  startSec: number
+  durSec: number
+}
+
+export function expandOrnamentNotes(
+  event: NoteEvent,
+  startSec: number,
+  playDurSec: number,
+  bpm: number,
+  keySig: KeySignature,
+): OrnamentNote[] | null {
+  if (event.type !== 'note') return null
+  const arts: readonly string[] = (event as any).articulations ?? []
+  const hasTrill     = arts.includes('trill')
+  const hasMordent   = arts.includes('mordent')
+  const hasMordentUp = arts.includes('mordent-upper')
+  const hasTurn      = arts.includes('turn')
+  if (!hasTrill && !hasMordent && !hasMordentUp && !hasTurn) return null
+
+  const n = event as Note
+  const { noteName, octave } = n.pitch
+  const { fifths } = keySig
+  const upper = diatonicNeighbor(noteName, octave, 'up',   fifths)
+  const lower = diatonicNeighbor(noteName, octave, 'down', fifths)
+  const principal = { noteName, octave, accidental: null as 'sharp' | 'flat' | null }
+
+  if (hasTrill) {
+    const unitSec = Math.min((60 / bpm) / 8, playDurSec / 3)
+    const rawCount = Math.max(3, Math.floor(playDurSec / unitSec))
+    const count = rawCount % 2 === 0 ? rawCount - 1 : rawCount
+    const notes: OrnamentNote[] = []
+    for (let i = 0; i < count; i++) {
+      const pitch = i % 2 === 0 ? principal : upper
+      const isLast = i === count - 1
+      const dur = isLast ? Math.max(0.02, playDurSec - (count - 1) * unitSec) : unitSec
+      notes.push({ ...pitch, startSec: startSec + i * unitSec, durSec: dur })
+    }
+    return notes
+  }
+
+  if (hasMordent) {
+    const u = playDurSec / 3
+    return [
+      { ...principal, startSec: startSec,        durSec: u },
+      { ...lower,     startSec: startSec + u,     durSec: u },
+      { ...principal, startSec: startSec + 2 * u, durSec: u },
+    ]
+  }
+
+  if (hasMordentUp) {
+    const u = playDurSec / 3
+    return [
+      { ...principal, startSec: startSec,        durSec: u },
+      { ...upper,     startSec: startSec + u,     durSec: u },
+      { ...principal, startSec: startSec + 2 * u, durSec: u },
+    ]
+  }
+
+  // turn: upper → principal → lower → principal
+  const u = playDurSec / 4
+  return [
+    { ...upper,     startSec: startSec,        durSec: u },
+    { ...principal, startSec: startSec + u,     durSec: u },
+    { ...lower,     startSec: startSec + 2 * u, durSec: u },
+    { ...principal, startSec: startSec + 3 * u, durSec: u },
+  ]
 }
 
 export function buildPlaybackSequence(measures: readonly Measure[]): number[] {
