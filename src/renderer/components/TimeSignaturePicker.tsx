@@ -44,10 +44,11 @@ interface TimeSignaturePickerProps {
   screenY: number
   onClose: () => void
   onSelect: (sig: TimeSignature) => void
+  onReset?: () => void
 }
 
 export function TimeSignaturePicker({
-  current, screenX, screenY, onClose, onSelect,
+  current, screenX, screenY, onClose, onSelect, onReset,
 }: TimeSignaturePickerProps): JSX.Element {
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -73,6 +74,19 @@ export function TimeSignaturePicker({
         zIndex: 1000, minWidth: 160,
       }}
     >
+      {onReset && (
+        <button
+          onClick={onReset}
+          style={{
+            display: 'block', width: '100%', textAlign: 'left',
+            padding: '4px 8px', marginBottom: 8, fontSize: 11,
+            borderRadius: 3, border: '1px solid #555',
+            cursor: 'pointer', background: '#1e1e1e', color: '#aaa',
+          }}
+        >
+          ↩ Reset to inherited
+        </button>
+      )}
       {PRESET_GROUPS.map(({ group, presets }) => (
         <div key={group} style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 10, color: '#777', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 1 }}>

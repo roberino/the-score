@@ -28,8 +28,10 @@ export type Command =
   | { type: 'SET_CLEF';         partId: string; staffId: string; measureId: string; clef: ClefType }
   | { type: 'SET_KEY';          partId: string; staffId: string; measureId: string; key: KeySignature }
   | { type: 'SET_SCORE_KEY';    key: KeySignature }
+  | { type: 'CLEAR_KEY';        partId: string; staffId: string; measureId: string }
   | { type: 'SET_TIME';         partId: string; staffId: string; measureId: string; time: TimeSignature }
   | { type: 'SET_SCORE_TIME';   time: TimeSignature }
+  | { type: 'CLEAR_TIME';       partId: string; staffId: string; measureId: string }
   | { type: 'SET_TEMPO';            measureId: string; bpm: number }
   | { type: 'SET_TITLE';            title: string }
   | { type: 'SET_COMPOSER';         composer: string }
@@ -381,6 +383,23 @@ export function applyCommand(score: Score, command: Command): Score {
         break
       }
 
+      case 'CLEAR_KEY': {
+        const part  = draft.parts.find(p => p.id === command.partId)
+        const staff = part?.staves.find(s => s.id === command.staffId)
+        if (!staff) break
+        const measures = staff.measures as any[]
+        const mIdx = measures.findIndex(m => m.id === command.measureId)
+        if (mIdx === -1) break
+        delete measures[mIdx].keySignature
+        // Determine the key now inherited at this measure and strip implied accidentals forward
+        let inheritedKey: KeySignature = draft.keySignature as KeySignature
+        for (let k = mIdx - 1; k >= 0; k--) {
+          if (measures[k].keySignature) { inheritedKey = measures[k].keySignature; break }
+        }
+        stripAccidentalsFrom(measures, command.measureId, inheritedKey)
+        break
+      }
+
       case 'SET_TIME': {
         const part  = draft.parts.find(p => p.id === command.partId)
         const staff = part?.staves.find(s => s.id === command.staffId)
@@ -399,6 +418,18 @@ export function applyCommand(score: Score, command: Command): Score {
             spillOverFrom(staff.measures as any[], (staff.measures as any[])[0]?.id, command.time)
           }
         }
+        break
+      }
+
+      case 'CLEAR_TIME': {
+        const part  = draft.parts.find(p => p.id === command.partId)
+        const staff = part?.staves.find(s => s.id === command.staffId)
+        if (!staff) break
+        const measures = staff.measures as any[]
+        const measure = measures.find(m => m.id === command.measureId)
+        if (!measure) break
+        delete measure.timeSignature
+        spillOverFrom(measures, command.measureId, draft.timeSignature as TimeSignature)
         break
       }
 

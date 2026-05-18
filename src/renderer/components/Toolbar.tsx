@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { useAppStore, type InputMode } from '../store/appStore'
-import { DURATION_LABELS, KEY_TO_DURATION, resolveTimeSig, resolveKeySig, keyLabel } from '@shared/musicUtils'
+import { DURATION_LABELS, KEY_TO_DURATION, resolveTimeSig, resolveKeySig, keyLabel, measureCapacityUnits, usedUnits } from '@shared/musicUtils'
 import type { Duration, TimeSignature, KeySignature } from '@shared/score'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
@@ -36,7 +36,10 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     soundOnInput, toggleSoundOnInput,
     audioMode,
     midiInputDeviceId, midiInputDeviceName,
+    selectedMeasureId,
   } = useAppStore()
+
+  const [timeSigError, setTimeSigError] = useState<string | null>(null)
 
   const [audioSettingsPos, setAudioSettingsPos] = useState<{ x: number; y: number } | null>(null)
   const audioSettingsBtnRef = useRef<HTMLButtonElement>(null)
@@ -49,29 +52,37 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
   const [keySigPickerPos, setKeySigPickerPos] = useState<{ x: number; y: number } | null>(null)
   const keySigBtnRef = useRef<HTMLButtonElement>(null)
 
-  // Resolve the display time sig: cursor measure's effective sig, else score default
-  const displayTimeSig: TimeSignature = (() => {
-    if (!cursorMeasureId) return score.timeSignature
+  // Selected measure context — resolved once, used for display + sig routing
+  const refMeasureId = selectedMeasureId ?? cursorMeasureId
+
+  interface SelMeasureCtx {
+    partId: string; staffId: string
+    measure: import('@shared/score').Measure
+    mIdx: number
+    staff: import('@shared/score').Staff
+  }
+  const selMeasureCtx: SelMeasureCtx | null = (() => {
+    if (!refMeasureId) return null
     for (const part of score.parts) {
       for (const staff of part.staves) {
-        const idx = staff.measures.findIndex(m => m.id === cursorMeasureId)
-        if (idx !== -1) return resolveTimeSig(staff.measures, idx, score.timeSignature)
+        const mIdx = staff.measures.findIndex(m => m.id === refMeasureId)
+        if (mIdx !== -1) return { partId: part.id, staffId: staff.id, measure: staff.measures[mIdx], mIdx, staff }
       }
     }
-    return score.timeSignature
+    return null
   })()
 
-  // Resolve display key sig
-  const displayKeySig: KeySignature = (() => {
-    if (!cursorMeasureId) return score.keySignature
-    for (const part of score.parts) {
-      for (const staff of part.staves) {
-        const idx = staff.measures.findIndex(m => m.id === cursorMeasureId)
-        if (idx !== -1) return resolveKeySig(staff.measures, idx, score.keySignature)
-      }
-    }
-    return score.keySignature
-  })()
+  const displayTimeSig: TimeSignature = selMeasureCtx
+    ? resolveTimeSig(selMeasureCtx.staff.measures, selMeasureCtx.mIdx, score.timeSignature)
+    : score.timeSignature
+
+  const displayKeySig: KeySignature = selMeasureCtx
+    ? resolveKeySig(selMeasureCtx.staff.measures, selMeasureCtx.mIdx, score.keySignature)
+    : score.keySignature
+
+  // Only show Reset when a specific measure is selected and it has an explicit override
+  const hasTimeSigOverride = selectedMeasureId !== null && selMeasureCtx?.measure.timeSignature !== undefined
+  const hasKeySigOverride  = selectedMeasureId !== null && selMeasureCtx?.measure.keySignature  !== undefined
 
   const handleAudioClick = () => {
     const btn = audioSettingsBtnRef.current
@@ -98,7 +109,17 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
   }
 
   const handleKeySigSelect = (key: KeySignature) => {
-    dispatch({ type: 'SET_SCORE_KEY', key })
+    if (selectedMeasureId && selMeasureCtx) {
+      dispatch({ type: 'SET_KEY', partId: selMeasureCtx.partId, staffId: selMeasureCtx.staffId, measureId: selectedMeasureId, key })
+    } else {
+      dispatch({ type: 'SET_SCORE_KEY', key })
+    }
+    setKeySigPickerPos(null)
+  }
+
+  const handleKeySigReset = () => {
+    if (!selectedMeasureId || !selMeasureCtx) return
+    dispatch({ type: 'CLEAR_KEY', partId: selMeasureCtx.partId, staffId: selMeasureCtx.staffId, measureId: selectedMeasureId })
     setKeySigPickerPos(null)
   }
 
@@ -111,7 +132,26 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
   }
 
   const handleTimeSigSelect = (sig: TimeSignature) => {
-    dispatch({ type: 'SET_SCORE_TIME', time: sig })
+    if (selectedMeasureId && selMeasureCtx) {
+      // Guard: refuse if new time sig would make the measure over-full
+      const used    = usedUnits(selMeasureCtx.measure.voices[0]?.events ?? [])
+      const newCap  = measureCapacityUnits(sig)
+      if (used > newCap) {
+        setTimeSigError('Measure is too full for this time signature — delete some notes first')
+        setTimeSigPickerPos(null)
+        setTimeout(() => setTimeSigError(null), 4000)
+        return
+      }
+      dispatch({ type: 'SET_TIME', partId: selMeasureCtx.partId, staffId: selMeasureCtx.staffId, measureId: selectedMeasureId, time: sig })
+    } else {
+      dispatch({ type: 'SET_SCORE_TIME', time: sig })
+    }
+    setTimeSigPickerPos(null)
+  }
+
+  const handleTimeSigReset = () => {
+    if (!selectedMeasureId || !selMeasureCtx) return
+    dispatch({ type: 'CLEAR_TIME', partId: selMeasureCtx.partId, staffId: selMeasureCtx.staffId, measureId: selectedMeasureId })
     setTimeSigPickerPos(null)
   }
 
@@ -227,11 +267,12 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
         <button
           ref={timeSigBtnRef}
           onClick={handleTimeSigClick}
-          title="Time signature"
+          title={selectedMeasureId ? 'Time signature for selected measure' : 'Time signature'}
           style={{
             padding: '4px 10px', fontSize: 12, borderRadius: 3, border: 'none',
-            cursor: 'pointer', background: timeSigPickerPos ? '#0e639c' : 'transparent',
-            color: timeSigPickerPos ? '#fff' : '#9d9d9d',
+            cursor: 'pointer',
+            background: timeSigPickerPos ? '#0e639c' : hasTimeSigOverride ? '#1a4a6e' : 'transparent',
+            color: timeSigPickerPos ? '#fff' : hasTimeSigOverride ? '#7ec8e3' : '#9d9d9d',
           }}
         >
           {displayTimeSig.numerator}/{displayTimeSig.denominator}
@@ -240,16 +281,28 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
         <button
           ref={keySigBtnRef}
           onClick={handleKeySigClick}
-          title="Key signature"
+          title={selectedMeasureId ? 'Key signature for selected measure' : 'Key signature'}
           style={{
             padding: '4px 10px', fontSize: 12, borderRadius: 3, border: 'none',
-            cursor: 'pointer', background: keySigPickerPos ? '#0e639c' : 'transparent',
-            color: keySigPickerPos ? '#fff' : '#9d9d9d',
+            cursor: 'pointer',
+            background: keySigPickerPos ? '#0e639c' : hasKeySigOverride ? '#1a4a6e' : 'transparent',
+            color: keySigPickerPos ? '#fff' : hasKeySigOverride ? '#7ec8e3' : '#9d9d9d',
           }}
         >
           {keyLabel(displayKeySig)}
         </button>
       </div>
+
+      {timeSigError && (
+        <div style={{
+          position: 'fixed', bottom: 48, left: '50%', transform: 'translateX(-50%)',
+          background: '#5a1a1a', border: '1px solid #a04040', borderRadius: 4,
+          padding: '6px 14px', color: '#ffbbbb', fontSize: 12, zIndex: 2000,
+          pointerEvents: 'none',
+        }}>
+          {timeSigError}
+        </div>
+      )}
 
       {timeSigPickerPos && (
         <TimeSignaturePicker
@@ -258,6 +311,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           screenY={timeSigPickerPos.y}
           onClose={() => setTimeSigPickerPos(null)}
           onSelect={handleTimeSigSelect}
+          {...(hasTimeSigOverride ? { onReset: handleTimeSigReset } : {})}
         />
       )}
       {audioSettingsPos && (
@@ -281,6 +335,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           screenY={keySigPickerPos.y}
           onClose={() => setKeySigPickerPos(null)}
           onSelect={handleKeySigSelect}
+          {...(hasKeySigOverride ? { onReset: handleKeySigReset } : {})}
         />
       )}
 

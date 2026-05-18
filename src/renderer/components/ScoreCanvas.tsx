@@ -295,6 +295,7 @@ export function ScoreCanvas(): JSX.Element {
     setCursor, setLastEnteredPitch,
     setSelectedNote, setSelectedNotes, toggleSelectedNote, clearSelection,
     setSelectedBarline,
+    selectedMeasureId, setSelectedMeasure,
     moveCursorToFirstAvailable,
     keyboardVisible, toggleKeyboard,
     soundOnInput, audioMode,
@@ -362,9 +363,10 @@ export function ScoreCanvas(): JSX.Element {
       new Set(selectedNoteIds),
       cursorMeasureId
         ? { cursorMeasureId, cursorBeatPosition, totalCapacityUnits: capacity }
-        : null
+        : null,
+      selectedMeasureId
     )
-  }, [score, zoom, selectedNoteIds, cursorMeasureId, cursorBeatPosition])
+  }, [score, zoom, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId])
 
   // ── Note entry helpers ──────────────────────────────────────────────────────
 
@@ -413,6 +415,7 @@ export function ScoreCanvas(): JSX.Element {
 
         setPrimedAccidental(null)
         setLastEnteredPitch(noteWithDot.pitch)
+        setSelectedMeasure(null)
 
         // Advance cursor
         const newBeat = cursorBeatPosition + units
@@ -437,7 +440,7 @@ export function ScoreCanvas(): JSX.Element {
     }
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
       primedAccidental, lastEnteredPitch, dispatch, setPrimedAccidental,
-      setLastEnteredPitch, setCursor, soundOnInput, audioMode])
+      setLastEnteredPitch, setCursor, setSelectedMeasure, soundOnInput, audioMode])
 
   // Explicit-octave variant used by virtual keyboard and MIDI input
   const enterNoteAtPitch = useCallback((noteName: NoteName, octave: number, accidental?: Accidental, skipPreview = false) => {
@@ -477,6 +480,7 @@ export function ScoreCanvas(): JSX.Element {
           triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
         }
         setLastEnteredPitch(noteWithDot.pitch)
+        setSelectedMeasure(null)
         const newBeat  = cursorBeatPosition + units
         const capacity = measureCapacityUnits(timeSig)
         if (newBeat >= capacity) {
@@ -491,7 +495,7 @@ export function ScoreCanvas(): JSX.Element {
       }
     }
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
-      dispatch, setLastEnteredPitch, setCursor, setInputMode, soundOnInput, audioMode])
+      dispatch, setLastEnteredPitch, setCursor, setInputMode, setSelectedMeasure, soundOnInput, audioMode])
 
   // Multi-pitch variant for chord entry from MIDI
   const enterChordAtPitch = useCallback((inputs: import('../services/midiService').NoteInput[]) => {
@@ -526,6 +530,7 @@ export function ScoreCanvas(): JSX.Element {
         })
         // MIDI keyboard already produced sound — no preview
         setLastEnteredPitch(pitches[pitches.length - 1])
+        setSelectedMeasure(null)
         const newBeat  = cursorBeatPosition + units
         const capacity = measureCapacityUnits(timeSig)
         if (newBeat >= capacity) {
@@ -540,7 +545,7 @@ export function ScoreCanvas(): JSX.Element {
       }
     }
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
-      dispatch, setLastEnteredPitch, setCursor, setInputMode])
+      dispatch, setLastEnteredPitch, setCursor, setInputMode, setSelectedMeasure])
 
   // ── Chord assembly buffer for MIDI input ─────────────────────────────────────
   const CHORD_WINDOW_MS = 50
@@ -817,11 +822,12 @@ export function ScoreCanvas(): JSX.Element {
 
       const mod = e.metaKey || e.ctrlKey
 
-      // Escape → select mode + cancel pending slur + close transpose dialog
+      // Escape → select mode + cancel pending slur + close transpose dialog + deselect measure
       if (e.key === 'Escape') {
         setSlurPendingId(null)
         setTransposeDialogOpen(false)
         setInputMode('select')
+        setSelectedMeasure(null)
         return
       }
 
@@ -993,7 +999,11 @@ export function ScoreCanvas(): JSX.Element {
     }
 
     const layout  = findClickedLayout(canvasX, canvasY, layouts)
-    if (!layout) return
+    if (!layout) {
+      // Clicked outside all measures — clear measure selection
+      setSelectedMeasure(null)
+      return
+    }
 
     if (inputMode === 'note') {
       // Set cursor to end of existing events in the clicked measure
@@ -1291,6 +1301,7 @@ export function ScoreCanvas(): JSX.Element {
                 }
               } else {
                 setSelectedNote(closest.id)
+                setSelectedMeasure(null)
                 const ev = selVoice.events.find(e => e.id === closest!.id)
                 if (ev) {
                   setSelectedDuration(ev.duration)
@@ -1316,10 +1327,13 @@ export function ScoreCanvas(): JSX.Element {
         }
       }
 
-      // No hit — close picker and deselect
+      // No note hit — select the measure (empty space click)
       setSelectedBarline(null)
       setPickerState(null)
-      if (!event.shiftKey) clearSelection()
+      if (!event.shiftKey) {
+        clearSelection()
+        setSelectedMeasure(layout.measureId)
+      }
     }
   }
 

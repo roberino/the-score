@@ -436,7 +436,8 @@ export function renderScore(
   score: Score,
   options: RenderOptions = DEFAULT_RENDER_OPTIONS,
   selectedNoteIds: ReadonlySet<string> = new Set(),
-  cursor: RenderCursorOptions | null = null
+  cursor: RenderCursorOptions | null = null,
+  selectedMeasureId: string | null = null
 ): Map<string, number> {
   const notePositions = new Map<string, number>()
   const renderer = new VexRenderer(canvas, VexRenderer.Backends.CANVAS)
@@ -460,6 +461,10 @@ export function renderScore(
 
   renderFromLayouts(ctx, score, layouts, selectedNoteIds, notePositions)
   drawHeadings(ctx, score, options)
+
+  if (selectedMeasureId) {
+    drawMeasureHighlight(canvas, selectedMeasureId, layouts)
+  }
 
   if (cursor?.cursorMeasureId) {
     drawCursor(canvas, cursor, layouts)
@@ -869,6 +874,34 @@ function drawSlursForStaff(
 
 const LINE_SPACING_PX  = 10
 const STAVE_HEIGHT_PX  = 4 * LINE_SPACING_PX
+
+function drawMeasureHighlight(
+  canvas: HTMLCanvasElement,
+  selectedMeasureId: string,
+  layouts: MeasureLayout[]
+): void {
+  const anchor = layouts.find(l => l.measureId === selectedMeasureId)
+  if (!anchor) return
+
+  // Collect all part staves rendered at this measure column
+  const column = layouts.filter(l => l.measureIndex === anchor.measureIndex)
+
+  const top    = Math.min(...column.map(l => l.staveTopY)) - 8
+  const bottom = Math.max(...column.map(l => l.staveTopY)) + STAVE_HEIGHT_PX + 8
+  const left   = anchor.x
+  const width  = anchor.width
+
+  const ctx2d = canvas.getContext('2d')
+  if (!ctx2d) return
+
+  ctx2d.save()
+  ctx2d.fillStyle   = 'rgba(33, 150, 243, 0.07)'
+  ctx2d.strokeStyle = 'rgba(33, 150, 243, 0.35)'
+  ctx2d.lineWidth   = 1.5
+  ctx2d.fillRect(left, top, width, bottom - top)
+  ctx2d.strokeRect(left, top, width, bottom - top)
+  ctx2d.restore()
+}
 
 function drawCursor(
   canvas: HTMLCanvasElement,

@@ -53,10 +53,11 @@ interface CircleOfFifthsProps {
   screenY: number
   onClose: () => void
   onSelect: (key: KeySignature) => void
+  onReset?: () => void
 }
 
 export function CircleOfFifths({
-  current, screenX, screenY, onClose, onSelect,
+  current, screenX, screenY, onClose, onSelect, onReset,
 }: CircleOfFifthsProps): JSX.Element {
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -86,6 +87,19 @@ export function CircleOfFifths({
         zIndex: 1000,
       }}
     >
+      {onReset && (
+        <button
+          onClick={onReset}
+          style={{
+            display: 'block', width: '100%', textAlign: 'left',
+            padding: '4px 8px', marginBottom: 8, fontSize: 11,
+            borderRadius: 3, border: '1px solid #555',
+            cursor: 'pointer', background: '#1e1e1e', color: '#aaa',
+          }}
+        >
+          ↩ Reset to inherited
+        </button>
+      )}
       <svg width={280} height={280} viewBox="0 0 280 280">
         {POSITIONS.map((pos, i) => {
           const startDeg = -90 + i * 30
