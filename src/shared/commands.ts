@@ -13,7 +13,7 @@ import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
 import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation } from './score'
-import { measureCapacityUnits, eventDurationUnits, resolveClef, pitchToStep, stepToPitch, shiftPitchBySemitones } from './musicUtils'
+import { measureCapacityUnits, eventDurationUnits, dottedUnits, DURATION_UNITS, resolveClef, pitchToStep, stepToPitch, shiftPitchBySemitones } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
 
@@ -48,6 +48,7 @@ export type Command =
   | { type: 'MOVE_NOTES_STEP';       moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[]; direction: 'up' | 'down' }
   | { type: 'TRANSPOSE_NOTES';       moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[]; semitones: number }
   | { type: 'DELETE_NOTES';          deletions: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] }
+  | { type: 'RESIZE_NOTE';           partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; newDuration: Duration; newDots: 0 | 1 | 2 }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -171,6 +172,37 @@ function repitchNotes(
       }
     }
   }
+}
+
+// ── fillWithRests ─────────────────────────────────────────────────────────────
+// Converts a duration in 64th-note units into the minimal list of rests that
+// cover it exactly, using a greedy largest-first algorithm.
+
+const FILL_REST_TABLE: { units: number; duration: Duration; dots: 0 | 1 | 2 }[] = [
+  { units: 64, duration: 'whole',   dots: 0 },
+  { units: 48, duration: 'half',    dots: 1 },
+  { units: 32, duration: 'half',    dots: 0 },
+  { units: 24, duration: 'quarter', dots: 1 },
+  { units: 16, duration: 'quarter', dots: 0 },
+  { units: 12, duration: 'eighth',  dots: 1 },
+  { units:  8, duration: 'eighth',  dots: 0 },
+  { units:  6, duration: '16th',    dots: 1 },
+  { units:  4, duration: '16th',    dots: 0 },
+  { units:  3, duration: '32nd',    dots: 1 },
+  { units:  2, duration: '32nd',    dots: 0 },
+  { units:  1, duration: '64th',    dots: 0 },
+]
+
+function fillWithRests(units: number): NoteEvent[] {
+  const result: NoteEvent[] = []
+  let remaining = units
+  for (const row of FILL_REST_TABLE) {
+    while (remaining >= row.units) {
+      result.push({ id: uuid(), type: 'rest', duration: row.duration, dots: row.dots } as NoteEvent)
+      remaining -= row.units
+    }
+  }
+  return result
 }
 
 // ── Command executor ─────────────────────────────────────────────────────────
@@ -546,6 +578,54 @@ export function applyCommand(score: Score, command: Command): Score {
             }
           }
         }
+        break
+      }
+
+      case 'RESIZE_NOTE': {
+        const part    = draft.parts.find(p => p.id === command.partId)
+        const staff   = part?.staves.find(s => s.id === command.staffId)
+        const measure = staff?.measures.find(m => m.id === command.measureId)
+        const voice   = measure?.voices.find(v => v.id === command.voiceId)
+        if (!voice) break
+        const events = voice.events as NoteEvent[]
+        const idx = events.findIndex(e => e.id === command.noteId)
+        if (idx === -1) break
+
+        const event   = events[idx]
+        const oldUnits = dottedUnits(DURATION_UNITS[event.duration], event.dots)
+        const newUnits = dottedUnits(DURATION_UNITS[command.newDuration], command.newDots)
+
+        if (newUnits < oldUnits) {
+          // Shrink: merge freed space into adjacent rest, or insert new rest(s)
+          const delta = oldUnits - newUnits
+          const next  = events[idx + 1]
+          let freeUnits = delta
+          if (next && next.type === 'rest') {
+            freeUnits += dottedUnits(DURATION_UNITS[next.duration], next.dots)
+            events.splice(idx + 1, 1)
+          }
+          events.splice(idx + 1, 0, ...fillWithRests(freeUnits))
+        } else if (newUnits > oldUnits) {
+          // Grow: consume subsequent events greedily
+          const need = newUnits - oldUnits
+          let accumulated = 0
+          let count = 0
+          for (let j = idx + 1; j < events.length && accumulated < need; j++) {
+            accumulated += dottedUnits(DURATION_UNITS[events[j].duration], events[j].dots)
+            count++
+          }
+          if (accumulated < need) break  // not enough room — no-op (blocked pre-dispatch)
+          events.splice(idx + 1, count)
+          const remainder = accumulated - need
+          if (remainder > 0) events.splice(idx + 1, 0, ...fillWithRests(remainder))
+          // Clear tieStart on the resized note if it tied into a consumed event
+          if (event.type === 'note' && (event as Note).tieStart) {
+            ;(event as any).tieStart = false
+          }
+        }
+
+        ;(event as any).duration = command.newDuration
+        ;(event as any).dots     = command.newDots
         break
       }
 

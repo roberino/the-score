@@ -298,6 +298,7 @@ export function ScoreCanvas(): JSX.Element {
     moveCursorToFirstAvailable,
     keyboardVisible, toggleKeyboard,
     soundOnInput, audioMode,
+    pendingResize, resizeError, resizeNote, confirmResize, cancelResize, clearResizeError,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -568,6 +569,12 @@ export function ScoreCanvas(): JSX.Element {
     return null
   }, [score])
 
+  useEffect(() => {
+    if (!resizeError) return
+    const t = setTimeout(() => clearResizeError(), 3000)
+    return () => clearTimeout(t)
+  }, [resizeError])
+
   const deleteSelectedNotes = useCallback(() => {
     if (selectedNoteIds.length === 0) return
     if (selectedNoteIds.length === 1) {
@@ -781,25 +788,32 @@ export function ScoreCanvas(): JSX.Element {
       // Duration keys 1–7 (no modifier)
       if (!mod && KEY_TO_DURATION[e.key]) {
         const dur = KEY_TO_DURATION[e.key]
-        setSelectedDuration(dur)
-        if (inputMode === 'select' && selectedNoteIds.length > 0) {
-          const idSet = new Set(selectedNoteIds)
-          const cmds: { type: 'SET_NOTE_DURATION'; partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; duration: typeof dur }[] = []
-          for (const part of score.parts) {
-            for (const staff of part.staves) {
-              for (const measure of staff.measures) {
-                for (const voice of measure.voices) {
-                  for (const ev of voice.events) {
-                    if (idSet.has(ev.id)) {
-                      cmds.push({ type: 'SET_NOTE_DURATION', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id, noteId: ev.id, duration: dur })
+        if (inputMode === 'select') {
+          if (selectedNoteIds.length === 1) {
+            resizeNote(dur, 0)
+            return
+          }
+          if (selectedNoteIds.length > 1) {
+            setSelectedDuration(dur)
+            const idSet = new Set(selectedNoteIds)
+            const cmds: { type: 'SET_NOTE_DURATION'; partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; duration: typeof dur }[] = []
+            for (const part of score.parts) {
+              for (const staff of part.staves) {
+                for (const measure of staff.measures) {
+                  for (const voice of measure.voices) {
+                    for (const ev of voice.events) {
+                      if (idSet.has(ev.id)) {
+                        cmds.push({ type: 'SET_NOTE_DURATION', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id, noteId: ev.id, duration: dur })
+                      }
                     }
                   }
                 }
               }
             }
+            if (cmds.length > 0) { dispatchBatch(cmds as any); return }
           }
-          if (cmds.length > 0) { dispatchBatch(cmds as any); return }
         }
+        setSelectedDuration(dur)
         return
       }
 
@@ -841,7 +855,7 @@ export function ScoreCanvas(): JSX.Element {
     enterNote, enterRest, deleteSelectedNotes, nudgeOctave,
     moveSelectedNotes, selectAllInMeasure,
     toggleTie, handleSlurKey,
-    setInputMode, setSelectedDuration, toggleDot, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
+    setInputMode, setSelectedDuration, toggleDot, resizeNote, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
   ])
 
   // Set cursor when first entering note/rest mode
@@ -1200,6 +1214,19 @@ export function ScoreCanvas(): JSX.Element {
                 if (ev) {
                   setSelectedDuration(ev.duration)
                   setIsDotted(ev.dots > 0)
+                  if (soundOnInput && selPart && ev.type !== 'rest') {
+                    const mIdx  = selMIdx
+                    const dyn   = resolveDirectiveDynamic(selStaff.measures, mIdx)
+                    const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? selPart.volume))
+                    const midi  = resolveDirectiveMidiProgram(selStaff.measures, mIdx, selPart.midiProgram)
+                    const isPizz = midi === 45
+                    if (ev.type === 'note') {
+                      triggerInputPreview(ev.pitch.noteName, ev.pitch.octave, ev.pitch.accidental, volDb, isPizz, selPart.transposeSemitones)
+                    } else if (ev.type === 'chord') {
+                      const top = ev.pitches[ev.pitches.length - 1]
+                      triggerInputPreview(top.noteName, top.octave, top.accidental, volDb, isPizz, selPart.transposeSemitones)
+                    }
+                  }
                 }
               }
               return
@@ -1477,6 +1504,53 @@ export function ScoreCanvas(): JSX.Element {
           onTranspose={transposeSelectedNotes}
           onClose={() => setTransposeDialogOpen(false)}
         />
+      )}
+
+      {pendingResize && (
+        <div style={{
+          position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 2000, background: 'rgba(0,0,0,0.3)',
+        }}
+          onKeyDown={e => {
+            if (e.key === 'Escape') { e.stopPropagation(); cancelResize() }
+            if (e.key === 'Enter')  { e.stopPropagation(); confirmResize() }
+          }}
+        >
+          <div style={{
+            background: '#fff', border: '1px solid #ccc', borderRadius: 6,
+            padding: '16px 20px', boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+            minWidth: 280, display: 'flex', flexDirection: 'column', gap: 16,
+          }}>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>Resize note?</div>
+            <div style={{ fontSize: 13, color: '#444' }}>
+              This will remove {pendingResize.pitchedCount} note{pendingResize.pitchedCount > 1 ? 's' : ''} after the selected note.
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={cancelResize}
+                style={{ padding: '4px 14px', borderRadius: 4, border: '1px solid #ccc', background: '#f5f5f5', cursor: 'pointer', fontSize: 13 }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmResize}
+                style={{ padding: '4px 14px', borderRadius: 4, border: '1px solid #0e639c', background: '#0e639c', color: '#fff', cursor: 'pointer', fontSize: 13 }}
+              >
+                Resize
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resizeError && (
+        <div style={{
+          position: 'fixed', bottom: 72, left: '50%', transform: 'translateX(-50%)',
+          background: '#c0392b', color: '#fff', padding: '6px 18px', borderRadius: 6,
+          fontSize: 13, zIndex: 2000, pointerEvents: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+        }}>
+          {resizeError}
+        </div>
       )}
     </>
   )

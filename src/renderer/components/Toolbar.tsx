@@ -28,8 +28,8 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     inputMode, setInputMode,
     undo, redo, isPlaying, startPlayback, stopPlayback,
     undoStack, redoStack,
-    selectedDuration, setSelectedDuration,
-    isDotted, toggleDot,
+    selectedDuration,
+    isDotted, toggleDot, resizeNote,
     score, cursorMeasureId, dispatch,
     keyboardVisible, toggleKeyboard,
     soundOnInput, toggleSoundOnInput,
@@ -265,7 +265,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           {DURATION_BUTTONS.map(({ duration, key }) => (
             <button
               key={duration}
-              onClick={() => setSelectedDuration(duration)}
+              onClick={() => resizeNote(duration, 0)}
               title={`${DURATION_LABELS[duration]} (${key})`}
               style={{
                 padding: '3px 8px',

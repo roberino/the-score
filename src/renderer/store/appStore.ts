@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { createScore, type Score, type Pitch, type Duration, type Accidental } from '@shared/score'
 import { applyCommand, type Command } from '@shared/commands'
-import { measureCapacityUnits, usedUnits, resolveTimeSig } from '@shared/musicUtils'
+import { measureCapacityUnits, usedUnits, resolveTimeSig, dottedUnits, DURATION_UNITS } from '@shared/musicUtils'
 import type { PlaybackController } from '../engine/audioEngine'
 import { playScoreWithSampler } from '../engine/samplerEngine'
 import { midiOutputEngine } from '../engine/midiOutputEngine'
@@ -52,6 +52,16 @@ export interface AppState {
   isPlaying: boolean
   playbackPositionTick: number
 
+  // Duration resize
+  pendingResize: {
+    noteId: string
+    loc: { partId: string; staffId: string; measureId: string; voiceId: string }
+    newDuration: Duration
+    newDots: 0 | 1 | 2
+    pitchedCount: number
+  } | null
+  resizeError: string | null
+
   // Actions
   startPlayback: () => Promise<void>
   stopPlayback: () => void
@@ -76,6 +86,10 @@ export interface AppState {
   setSelectedDuration: (duration: Duration) => void
   setIsDotted: (dotted: boolean) => void
   toggleDot: () => void
+  resizeNote: (newDuration: Duration, newDots?: 0 | 1 | 2) => void
+  confirmResize: () => void
+  cancelResize: () => void
+  clearResizeError: () => void
   setPrimedAccidental: (acc: Accidental | null) => void
   setCursor: (measureId: string | null, beatPosition: number) => void
   setLastEnteredPitch: (pitch: Pitch | null) => void
@@ -119,6 +133,9 @@ export const useAppStore = create<AppState>()(
 
     isPlaying: false,
     playbackPositionTick: 0,
+
+    pendingResize: null,
+    resizeError: null,
 
     dispatch: (command: Command) => {
       set(state => {
@@ -306,7 +323,25 @@ export const useAppStore = create<AppState>()(
     setIsDotted: (dotted) => set(s => { s.isDotted = dotted }),
     toggleDot: () => {
       const { score, selectedNoteIds, inputMode } = get()
-      if (inputMode === 'select' && selectedNoteIds.length > 0) {
+      if (inputMode === 'select' && selectedNoteIds.length === 1) {
+        // Single note: use resize path so surrounding notes are adjusted
+        const noteId = selectedNoteIds[0]
+        outer: for (const part of score.parts) {
+          for (const staff of part.staves) {
+            for (const measure of staff.measures) {
+              for (const voice of measure.voices) {
+                const ev = voice.events.find(e => e.id === noteId)
+                if (ev) {
+                  get().resizeNote(ev.duration, (ev.dots > 0 ? 0 : 1) as 0 | 1)
+                  break outer
+                }
+              }
+            }
+          }
+        }
+        return
+      }
+      if (inputMode === 'select' && selectedNoteIds.length > 1) {
         const idSet = new Set(selectedNoteIds)
         const cmds: Command[] = []
         let newDots: 0 | 1 = 0
@@ -340,6 +375,79 @@ export const useAppStore = create<AppState>()(
       }
       set(s => { s.isDotted = !s.isDotted })
     },
+
+    resizeNote: (newDuration, newDots = 0) => {
+      const { score, selectedNoteIds, inputMode } = get()
+      if (inputMode !== 'select' || selectedNoteIds.length !== 1) {
+        get().setSelectedDuration(newDuration)
+        return
+      }
+
+      const noteId = selectedNoteIds[0]
+      let loc: { partId: string; staffId: string; measureId: string; voiceId: string } | null = null
+      let events: ReturnType<typeof score.parts[0]['staves'][0]['measures'][0]['voices'][0]['events']['slice']> = []
+      let idx = -1
+
+      outer: for (const part of score.parts) {
+        for (const staff of part.staves) {
+          for (const measure of staff.measures) {
+            for (const voice of measure.voices) {
+              const i = (voice.events as any[]).findIndex((e: any) => e.id === noteId)
+              if (i !== -1) {
+                loc = { partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id }
+                events = voice.events as any
+                idx = i
+                break outer
+              }
+            }
+          }
+        }
+      }
+      if (!loc || idx === -1) return
+
+      const event   = (events as any[])[idx]
+      const oldUnits = dottedUnits(DURATION_UNITS[event.duration as Duration], event.dots)
+      const newUnits = dottedUnits(DURATION_UNITS[newDuration], newDots)
+
+      if (newUnits === oldUnits) {
+        set(s => { s.selectedDuration = newDuration; s.isDotted = newDots > 0 })
+        return
+      }
+
+      if (newUnits > oldUnits) {
+        const need = newUnits - oldUnits
+        let available = 0
+        let pitchedCount = 0
+        for (let j = idx + 1; j < (events as any[]).length; j++) {
+          const ev = (events as any[])[j]
+          available += dottedUnits(DURATION_UNITS[ev.duration as Duration], ev.dots)
+          if (ev.type !== 'rest') pitchedCount++
+          if (available >= need) break
+        }
+        if (available < need) {
+          set(s => { s.resizeError = 'Not enough space in this measure' })
+          return
+        }
+        if (pitchedCount > 0) {
+          set(s => { s.pendingResize = { noteId, loc: loc!, newDuration, newDots: newDots as 0 | 1 | 2, pitchedCount } })
+          return
+        }
+      }
+
+      get().dispatch({ type: 'RESIZE_NOTE', ...loc, noteId, newDuration, newDots: newDots as 0 | 1 | 2 })
+      set(s => { s.selectedDuration = newDuration; s.isDotted = newDots > 0 })
+    },
+
+    confirmResize: () => {
+      const { pendingResize } = get()
+      if (!pendingResize) return
+      get().dispatch({ type: 'RESIZE_NOTE', ...pendingResize.loc, noteId: pendingResize.noteId, newDuration: pendingResize.newDuration, newDots: pendingResize.newDots })
+      set(s => { s.selectedDuration = pendingResize.newDuration; s.isDotted = pendingResize.newDots > 0; s.pendingResize = null })
+    },
+
+    cancelResize: () => set(s => { s.pendingResize = null }),
+
+    clearResizeError: () => set(s => { s.resizeError = null }),
     setPrimedAccidental: (acc) => set(s => { s.primedAccidental = acc }),
     setCursor: (measureId, beatPosition) => set(s => {
       s.cursorMeasureId = measureId
