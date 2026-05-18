@@ -6,6 +6,7 @@ import { measureCapacityUnits, usedUnits, resolveTimeSig, dottedUnits, DURATION_
 import type { PlaybackController } from '../engine/audioEngine'
 import { playScoreWithSampler } from '../engine/samplerEngine'
 import { midiOutputEngine } from '../engine/midiOutputEngine'
+import { midiService } from '../services/midiService'
 
 let _playback: PlaybackController | null = null
 
@@ -47,6 +48,10 @@ export interface AppState {
   // Audio
   audioMode: 'builtin' | 'midi-out'
   midiOutputDeviceId: string | null
+
+  // MIDI input
+  midiInputDeviceId: string | null
+  midiInputDeviceName: string | null
 
   // Playback
   isPlaying: boolean
@@ -99,6 +104,7 @@ export interface AppState {
   toggleSoundOnInput: () => void
   setAudioMode: (mode: 'builtin' | 'midi-out') => void
   setMidiOutputDevice: (deviceId: string | null) => void
+  setMidiInputDevice: (id: string | null, name: string | null) => void
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -130,6 +136,9 @@ export const useAppStore = create<AppState>()(
 
     audioMode: 'builtin',
     midiOutputDeviceId: null,
+
+    midiInputDeviceId: localStorage.getItem('midiInputDeviceId') ?? null,
+    midiInputDeviceName: localStorage.getItem('midiInputDeviceName') ?? null,
 
     isPlaying: false,
     playbackPositionTick: 0,
@@ -491,6 +500,13 @@ export const useAppStore = create<AppState>()(
       set(s => { s.midiOutputDeviceId = deviceId })
       if (deviceId) void midiOutputEngine.selectOutput(deviceId)
       else          midiOutputEngine.deselect()
+    },
+
+    setMidiInputDevice: (id, name) => {
+      set(s => { s.midiInputDeviceId = id; s.midiInputDeviceName = name })
+      midiService.selectInput(id)
+      if (id)   { localStorage.setItem('midiInputDeviceId', id); localStorage.setItem('midiInputDeviceName', name ?? '') }
+      else       { localStorage.removeItem('midiInputDeviceId'); localStorage.removeItem('midiInputDeviceName') }
     },
 
     checkAndAutoAddBar: () => {

@@ -13,6 +13,12 @@ export interface NoteInput {
   octave:      number
   accidental?: 'sharp' | 'flat' | 'natural'
   velocity:    number   // 0–127
+  source?:     'midi' | 'keyboard'
+}
+
+export interface MidiInputInfo {
+  id:   string
+  name: string
 }
 
 export type NoteInputHandler = (input: NoteInput) => void
@@ -37,20 +43,41 @@ function midiNoteToInput(midiNote: number, velocity: number): NoteInput {
   const octave       = Math.floor(midiNote / 12) - 1
   const noteInOctave = midiNote % 12
   const { noteName, accidental } = CHROMATIC[noteInOctave] ?? { noteName: 'C' }
-  return { noteName, octave, ...(accidental ? { accidental } : {}), velocity }
+  return { noteName, octave, ...(accidental ? { accidental } : {}), velocity, source: 'midi' }
 }
 
 class MidiService {
-  private access:        MIDIAccess | null = null
-  private handlers:      Set<NoteInputHandler> = new Set()
-  private _connected     = false
-  private _outputFilter: string | null = null
+  private access:          MIDIAccess | null = null
+  private handlers:        Set<NoteInputHandler> = new Set()
+  private _connected       = false
+  private _outputFilter:   string | null = null
+  private _selectedInputId: string | null = null
+  private _disconnectCb:   ((portId: string) => void) | null = null
 
   get connected(): boolean { return this._connected }
 
   get inputNames(): string[] {
     if (!this.access) return []
     return Array.from(this.access.inputs.values()).map(i => i.name ?? 'Unknown')
+  }
+
+  get inputInfos(): MidiInputInfo[] {
+    if (!this.access) return []
+    return Array.from(this.access.inputs.values()).map(i => ({
+      id:   i.id,
+      name: i.name ?? 'Unknown',
+    }))
+  }
+
+  // Restrict input to a single port; pass null to accept all ports.
+  selectInput(portId: string | null): void {
+    this._selectedInputId = portId
+    this.wireListeners()
+  }
+
+  // Register a callback that fires when the selected port disappears.
+  onInputDisconnected(cb: ((portId: string) => void) | null): void {
+    this._disconnectCb = cb
   }
 
   // Call this whenever the active MIDI output changes so the loopback
@@ -66,7 +93,18 @@ class MidiService {
       this.access = await navigator.requestMIDIAccess()
       this._connected = true
       this.wireListeners()
-      this.access.onstatechange = () => this.wireListeners()
+      this.access.onstatechange = () => {
+        // Detect if the currently selected port disappeared
+        if (this._selectedInputId) {
+          const stillExists = this.access?.inputs.has(this._selectedInputId)
+          if (!stillExists && this._disconnectCb) {
+            const id = this._selectedInputId
+            this._selectedInputId = null
+            this._disconnectCb(id)
+          }
+        }
+        this.wireListeners()
+      }
       return true
     } catch {
       return false
@@ -92,6 +130,11 @@ class MidiService {
       // like IAC Driver, input and output share the same name and any note
       // sent to the output immediately loops back as input.
       if (this._outputFilter && input.name === this._outputFilter) {
+        input.onmidimessage = null
+        return
+      }
+      // If a specific input port is selected, silence all others.
+      if (this._selectedInputId !== null && input.id !== this._selectedInputId) {
         input.onmidimessage = null
         return
       }

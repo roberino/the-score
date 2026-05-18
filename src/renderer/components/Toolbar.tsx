@@ -5,6 +5,7 @@ import type { Duration, TimeSignature, KeySignature } from '@shared/score'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
 import { AudioSettingsPanel } from './AudioSettingsPanel'
+import { MidiInputPanel } from './MidiInputPanel'
 
 const MODES: { mode: InputMode; label: string; key: string }[] = [
   { mode: 'select', label: 'Select', key: 'S' },
@@ -34,10 +35,14 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     keyboardVisible, toggleKeyboard,
     soundOnInput, toggleSoundOnInput,
     audioMode,
+    midiInputDeviceId, midiInputDeviceName,
   } = useAppStore()
 
   const [audioSettingsPos, setAudioSettingsPos] = useState<{ x: number; y: number } | null>(null)
   const audioSettingsBtnRef = useRef<HTMLButtonElement>(null)
+
+  const [midiInputPos, setMidiInputPos] = useState<{ x: number; y: number } | null>(null)
+  const midiInputBtnRef = useRef<HTMLButtonElement>(null)
 
   const [timeSigPickerPos, setTimeSigPickerPos] = useState<{ x: number; y: number } | null>(null)
   const timeSigBtnRef = useRef<HTMLButtonElement>(null)
@@ -74,6 +79,14 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     if (audioSettingsPos) { setAudioSettingsPos(null); return }
     const rect = btn.getBoundingClientRect()
     setAudioSettingsPos({ x: rect.left, y: rect.bottom + 4 })
+  }
+
+  const handleMidiInputClick = () => {
+    const btn = midiInputBtnRef.current
+    if (!btn) return
+    if (midiInputPos) { setMidiInputPos(null); return }
+    const rect = btn.getBoundingClientRect()
+    setMidiInputPos({ x: rect.left, y: rect.bottom + 4 })
   }
 
   const handleKeySigClick = () => {
@@ -195,6 +208,20 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           Audio {audioMode === 'midi-out' ? '⇝' : ''}
         </button>
 
+        <button
+          ref={midiInputBtnRef}
+          onClick={handleMidiInputClick}
+          title="MIDI input device"
+          style={{
+            padding: '4px 10px', fontSize: 12, borderRadius: 3, border: 'none',
+            cursor: 'pointer',
+            background: midiInputPos ? '#0e639c' : midiInputDeviceId ? '#1a4a6e' : 'transparent',
+            color: midiInputPos ? '#fff' : midiInputDeviceId ? '#7ec8e3' : '#9d9d9d',
+          }}
+        >
+          {midiInputDeviceName ? `MIDI In: ${midiInputDeviceName}` : 'MIDI In'}
+        </button>
+
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
 
         <button
@@ -238,6 +265,13 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           screenX={audioSettingsPos.x}
           screenY={audioSettingsPos.y}
           onClose={() => setAudioSettingsPos(null)}
+        />
+      )}
+      {midiInputPos && (
+        <MidiInputPanel
+          screenX={midiInputPos.x}
+          screenY={midiInputPos.y}
+          onClose={() => setMidiInputPos(null)}
         />
       )}
       {keySigPickerPos && (

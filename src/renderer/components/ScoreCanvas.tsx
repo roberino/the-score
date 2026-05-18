@@ -10,7 +10,7 @@ import {
   type MeasureLayout,
   type HeadingFieldBound,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import {
   DURATION_UNITS,
@@ -440,7 +440,7 @@ export function ScoreCanvas(): JSX.Element {
       setLastEnteredPitch, setCursor, soundOnInput, audioMode])
 
   // Explicit-octave variant used by virtual keyboard and MIDI input
-  const enterNoteAtPitch = useCallback((noteName: NoteName, octave: number, accidental?: Accidental) => {
+  const enterNoteAtPitch = useCallback((noteName: NoteName, octave: number, accidental?: Accidental, skipPreview = false) => {
     if (!cursorMeasureId) {
       // Keyboard/MIDI note pressed without cursor — auto-place cursor and switch to note mode
       setInputMode('note')
@@ -469,7 +469,7 @@ export function ScoreCanvas(): JSX.Element {
           voiceId:   voice.id,
           event:     noteWithDot,
         })
-        if (soundOnInput) {
+        if (soundOnInput && !skipPreview) {
           const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
@@ -493,14 +493,95 @@ export function ScoreCanvas(): JSX.Element {
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
       dispatch, setLastEnteredPitch, setCursor, setInputMode, soundOnInput, audioMode])
 
-  // Stable handler ref so useMidiInput/VirtualKeyboard don't re-subscribe on every render
-  const noteInputHandler = useCallback((input: NoteInput) => {
+  // Multi-pitch variant for chord entry from MIDI
+  const enterChordAtPitch = useCallback((inputs: import('../services/midiService').NoteInput[]) => {
+    if (!cursorMeasureId) {
+      setInputMode('note')
+      return
+    }
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        const measure = staff.measures.find(m => m.id === cursorMeasureId)
+        if (!measure) continue
+        const voice   = measure.voices[0]
+        const timeSig = measure.timeSignature ?? score.timeSignature
+        const dots    = isDotted ? 1 : 0 as 0 | 1
+        const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
+        if (remainingUnits(voice.events, timeSig) < units) {
+          canvasRef.current?.classList.add('cursor-reject')
+          setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+          return
+        }
+        const pitches: Pitch[] = inputs
+          .map(inp => ({ noteName: inp.noteName as NoteName, octave: inp.octave, accidental: (inp.accidental ?? null) as Accidental }))
+          .sort((a, b) => (a.octave * 7 + 'CDEFGAB'.indexOf(a.noteName)) - (b.octave * 7 + 'CDEFGAB'.indexOf(b.noteName)))
+        const chord: Chord = { id: uuid(), type: 'chord', pitches, duration: selectedDuration, dots, articulations: [] }
+        dispatch({
+          type: 'ADD_NOTE',
+          partId:    part.id,
+          staffId:   staff.id,
+          measureId: measure.id,
+          voiceId:   voice.id,
+          event:     chord,
+        })
+        // MIDI keyboard already produced sound — no preview
+        setLastEnteredPitch(pitches[pitches.length - 1])
+        const newBeat  = cursorBeatPosition + units
+        const capacity = measureCapacityUnits(timeSig)
+        if (newBeat >= capacity) {
+          const mIdx        = staff.measures.findIndex(m => m.id === cursorMeasureId)
+          const nextMeasure = staff.measures[mIdx + 1]
+          if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[0]?.events ?? []))
+          else             setCursor(null, 0)
+        } else {
+          setCursor(cursorMeasureId, newBeat)
+        }
+        return
+      }
+    }
+  }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
+      dispatch, setLastEnteredPitch, setCursor, setInputMode])
+
+  // ── Chord assembly buffer for MIDI input ─────────────────────────────────────
+  const CHORD_WINDOW_MS = 50
+  const chordBufRef  = useRef<NoteInput[]>([])
+  const chordTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Always-current refs so the timer callback gets the latest callbacks
+  const enterNoteRef  = useRef(enterNoteAtPitch)
+  const enterChordRef = useRef(enterChordAtPitch)
+  useEffect(() => { enterNoteRef.current  = enterNoteAtPitch  }, [enterNoteAtPitch])
+  useEffect(() => { enterChordRef.current = enterChordAtPitch }, [enterChordAtPitch])
+
+  // MIDI handler — buffers notes for CHORD_WINDOW_MS then dispatches note or chord
+  const midiInputHandler = useCallback((input: NoteInput) => {
+    if (inputMode === 'text') return
+    if (inputMode !== 'note') setInputMode('note')
+
+    chordBufRef.current.push(input)
+    if (chordTimerRef.current !== null) clearTimeout(chordTimerRef.current)
+    chordTimerRef.current = setTimeout(() => {
+      chordTimerRef.current = null
+      const buf = chordBufRef.current
+      chordBufRef.current = []
+      if (buf.length === 1) {
+        enterNoteRef.current(buf[0].noteName, buf[0].octave, buf[0].accidental as Accidental | undefined, true)
+      } else if (buf.length > 1) {
+        enterChordRef.current(buf)
+      }
+    }, CHORD_WINDOW_MS)
+  }, [inputMode, setInputMode])
+
+  // Virtual keyboard still uses direct (non-buffered) path so it feels instant
+  const keyboardInputHandler = useCallback((input: NoteInput) => {
     if (inputMode !== 'note') setInputMode('note')
     enterNoteAtPitch(input.noteName, input.octave, input.accidental as Accidental | undefined)
   }, [enterNoteAtPitch, inputMode, setInputMode])
 
-  const stableNoteInputHandler = useMemo(() => noteInputHandler, [noteInputHandler])
-  useMidiInput(stableNoteInputHandler)
+  const stableMidiHandler     = useMemo(() => midiInputHandler,     [midiInputHandler])
+  const stableKeyboardHandler = useMemo(() => keyboardInputHandler, [keyboardInputHandler])
+
+  useMidiInput(stableMidiHandler)
 
   const enterRest = useCallback(() => {
     if (!cursorMeasureId) return
@@ -1484,7 +1565,7 @@ export function ScoreCanvas(): JSX.Element {
       )}
       {keyboardVisible && (
         <VirtualKeyboard
-          onNotePress={noteInputHandler}
+          onNotePress={stableKeyboardHandler}
           onClose={toggleKeyboard}
         />
       )}
