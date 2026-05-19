@@ -264,6 +264,21 @@ function drawHeadings(ctx: RenderContext, score: Score, options: RenderOptions):
   nativeCtx.restore()
 }
 
+// ── Flag right-clearance ──────────────────────────────────────────────────────
+// Flags on short notes extend to the right of the stem tip. VexFlow's formatter
+// does not account for this when distributing notes across the note area, so the
+// last note's flags can bleed into (or past) the end barline. We reduce the
+// formatter width by the flag extent of the shortest note in the measure.
+
+function flagRightClearance(events: readonly NoteEvent[]): number {
+  for (const ev of events) {
+    if (ev.duration === '64th')  return 20  // 4 flags
+    if (ev.duration === '32nd')  return 16  // 3 flags
+    if (ev.duration === '16th')  return 12  // 2 flags
+  }
+  return 0
+}
+
 // ── Width calculation constants ───────────────────────────────────────────────
 
 const PX_PER_64TH_UNIT  = 3.2   // px per 64th-note unit (drives duration-based width)
@@ -703,8 +718,13 @@ function renderMeasure(
 
   stave.setContext(ctx).draw()
 
-  // Exact note area after VexFlow has placed clef/key/time preamble
-  const noteAreaWidth = stave.getNoteEndX() - stave.getNoteStartX()
+  // Exact note area after VexFlow has placed clef/key/time preamble.
+  // Short notes (16th and below) have flags that extend right of the stem —
+  // beyond where VexFlow accounts for them when computing note positions.
+  // Reducing the formatter width by a flag-width margin keeps the last note
+  // clear of the end barline.
+  const rawNoteAreaWidth = stave.getNoteEndX() - stave.getNoteStartX()
+  const noteAreaWidth = rawNoteAreaWidth - flagRightClearance(measure.voices[0]?.events ?? [])
 
   // Bar numbers at system starts (not the first measure)
   if (measureIndex > 0 && isLineStart) {
