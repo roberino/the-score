@@ -37,6 +37,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     audioMode,
     midiInputDeviceId, midiInputDeviceName,
     selectedMeasureId,
+    insertMeasure,
   } = useAppStore()
 
   const [timeSigError, setTimeSigError] = useState<string | null>(null)
@@ -201,6 +202,15 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
 
         <ToolbarButton onClick={undo} disabled={undoStack.length === 0} title="Undo (⌘Z)"  label="↩ Undo" />
         <ToolbarButton onClick={redo} disabled={redoStack.length === 0} title="Redo (⌘⇧Z)" label="↪ Redo" />
+
+        <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
+
+        <ToolbarButton
+          onClick={insertMeasure}
+          disabled={!(selectedMeasureId ?? cursorMeasureId)}
+          title="Insert bar after selection (⌘B)"
+          label="+ Bar"
+        />
 
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
 

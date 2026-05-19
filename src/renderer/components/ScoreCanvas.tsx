@@ -300,6 +300,8 @@ export function ScoreCanvas(): JSX.Element {
     keyboardVisible, toggleKeyboard,
     soundOnInput, audioMode,
     pendingResize, resizeError, resizeNote, confirmResize, cancelResize, clearResizeError,
+    insertMeasure,
+    deleteMeasure,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -583,10 +585,9 @@ export function ScoreCanvas(): JSX.Element {
     enterNoteAtPitch(input.noteName, input.octave, input.accidental as Accidental | undefined)
   }, [enterNoteAtPitch, inputMode, setInputMode])
 
-  const stableMidiHandler     = useMemo(() => midiInputHandler,     [midiInputHandler])
   const stableKeyboardHandler = useMemo(() => keyboardInputHandler, [keyboardInputHandler])
 
-  useMidiInput(stableMidiHandler)
+  useMidiInput(midiInputHandler)
 
   const enterRest = useCallback(() => {
     if (!cursorMeasureId) return
@@ -838,6 +839,13 @@ export function ScoreCanvas(): JSX.Element {
         return
       }
 
+      // Insert bar after cursor/selected measure (Ctrl/Cmd+B)
+      if (mod && (e.key === 'b' || e.key === 'B')) {
+        e.preventDefault()
+        insertMeasure()
+        return
+      }
+
       // Tie shortcut: T (no shift, no mod) in select mode with note selected
       if (!mod && !e.shiftKey && e.key === 't' && inputMode === 'select' && selectedNoteId) {
         toggleTie(); return
@@ -928,9 +936,13 @@ export function ScoreCanvas(): JSX.Element {
         return
       }
 
-      // Delete / Backspace
+      // Delete / Backspace — measure takes priority over notes when a bar is selected
       if (!mod && (e.key === 'Delete' || e.key === 'Backspace')) {
-        deleteSelectedNotes()
+        if (selectedMeasureId) {
+          deleteMeasure(selectedMeasureId)
+        } else {
+          deleteSelectedNotes()
+        }
         return
       }
     }
@@ -943,6 +955,7 @@ export function ScoreCanvas(): JSX.Element {
     moveSelectedNotes, selectAllInMeasure,
     toggleTie, handleSlurKey,
     setInputMode, setSelectedDuration, toggleDot, resizeNote, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
+    insertMeasure, deleteMeasure, selectedMeasureId,
   ])
 
   // Set cursor when first entering note/rest mode

@@ -100,6 +100,8 @@ export interface AppState {
   setLastEnteredPitch: (pitch: Pitch | null) => void
   moveCursorToFirstAvailable: () => void
   checkAndAutoAddBar: () => void
+  insertMeasure: () => void
+  deleteMeasure: (measureId: string) => void
   toggleKeyboard: () => void
   toggleSoundOnInput: () => void
   setAudioMode: (mode: 'builtin' | 'midi-out') => void
@@ -507,6 +509,57 @@ export const useAppStore = create<AppState>()(
       midiService.selectInput(id)
       if (id)   { localStorage.setItem('midiInputDeviceId', id); localStorage.setItem('midiInputDeviceName', name ?? '') }
       else       { localStorage.removeItem('midiInputDeviceId'); localStorage.removeItem('midiInputDeviceName') }
+    },
+
+    insertMeasure: () => {
+      const { score, selectedMeasureId, cursorMeasureId } = get()
+      const refId = selectedMeasureId ?? cursorMeasureId
+      if (!refId) return
+
+      let afterIndex = -1
+      outer: for (const part of score.parts) {
+        for (const staff of part.staves) {
+          const idx = staff.measures.findIndex(m => m.id === refId)
+          if (idx !== -1) { afterIndex = idx; break outer }
+        }
+      }
+      if (afterIndex === -1) return
+
+      get().dispatch({ type: 'INSERT_MEASURE', afterMeasureIndex: afterIndex })
+
+      // Move cursor into the new bar
+      const newStaff = get().score.parts[0]?.staves[0]
+      const newMeasure = newStaff?.measures[afterIndex + 1]
+      if (newMeasure) {
+        get().setCursor(newMeasure.id, 0)
+        get().setSelectedMeasure(null)
+      }
+    },
+
+    deleteMeasure: (measureId) => {
+      const { score } = get()
+      let measureIndex = -1
+      outer: for (const part of score.parts) {
+        for (const staff of part.staves) {
+          const idx = staff.measures.findIndex(m => m.id === measureId)
+          if (idx !== -1) { measureIndex = idx; break outer }
+        }
+      }
+      if (measureIndex === -1) return
+
+      // Guard: refuse to delete the only remaining bar
+      const firstStaff = score.parts[0]?.staves[0]
+      if (!firstStaff || firstStaff.measures.length <= 1) return
+
+      get().dispatch({ type: 'REMOVE_MEASURE', measureIndex })
+
+      // Move cursor to the bar that now occupies the same slot (or the one before)
+      const newStaff = get().score.parts[0]?.staves[0]
+      if (!newStaff) return
+      const landingIndex = Math.min(measureIndex, newStaff.measures.length - 1)
+      const landingMeasure = newStaff.measures[landingIndex]
+      if (landingMeasure) get().setCursor(landingMeasure.id, 0)
+      get().setSelectedMeasure(null)
     },
 
     checkAndAutoAddBar: () => {

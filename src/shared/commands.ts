@@ -23,6 +23,8 @@ export type Command =
   | { type: 'REPLACE_NOTE';     partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; event: NoteEvent }
   | { type: 'SET_NOTE_DURATION'; partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; duration: Duration; dots?: 0 | 1 | 2 }
   | { type: 'ADD_MEASURE';      partId: string; staffId: string; afterMeasureId: string }
+  | { type: 'INSERT_MEASURE';   afterMeasureIndex: number }
+  | { type: 'REMOVE_MEASURE';   measureIndex: number }
   | { type: 'DELETE_MEASURE';   partId: string; staffId: string; measureId: string }
   | { type: 'SET_BARLINE';      partId: string; staffId: string; measureId: string; barline: BarlineType }
   | { type: 'SET_CLEF';         partId: string; staffId: string; measureId: string; clef: ClefType }
@@ -298,6 +300,48 @@ export function applyCommand(score: Score, command: Command): Score {
         measures.splice(afterIdx + 1, 0, newMeasure as any)
         for (let i = afterIdx + 2; i < measures.length; i++) {
           ;(measures[i] as any).number = i + 1
+        }
+        break
+      }
+
+      case 'INSERT_MEASURE': {
+        const { afterMeasureIndex } = command
+        for (const part of draft.parts) {
+          for (const staff of part.staves) {
+            const measures = staff.measures as any[]
+            if (afterMeasureIndex < 0 || afterMeasureIndex >= measures.length) continue
+            const isLast = afterMeasureIndex === measures.length - 1
+            // If inserting at the end, demote the current final barline first
+            if (isLast) measures[afterMeasureIndex].barline = 'single'
+            const newMeasure = createMeasure(
+              measures[afterMeasureIndex].number + 1,
+              isLast ? 'final' : 'single',
+            )
+            measures.splice(afterMeasureIndex + 1, 0, newMeasure)
+            for (let i = afterMeasureIndex + 2; i < measures.length; i++) {
+              measures[i].number = i + 1
+            }
+          }
+        }
+        break
+      }
+
+      case 'REMOVE_MEASURE': {
+        const { measureIndex } = command
+        for (const part of draft.parts) {
+          for (const staff of part.staves) {
+            const measures = staff.measures as any[]
+            if (measures.length <= 1) continue  // never remove the last bar
+            if (measureIndex < 0 || measureIndex >= measures.length) continue
+            const wasLast = measureIndex === measures.length - 1
+            measures.splice(measureIndex, 1)
+            // If the deleted bar was last, promote the new last bar to 'final'
+            if (wasLast) measures[measures.length - 1].barline = 'final'
+            // Renumber from the deletion point onward
+            for (let i = measureIndex; i < measures.length; i++) {
+              measures[i].number = i + 1
+            }
+          }
         }
         break
       }

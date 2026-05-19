@@ -88,6 +88,7 @@ class MidiService {
   }
 
   async connect(): Promise<boolean> {
+    if (this._connected) return true
     if (!navigator.requestMIDIAccess) return false
     try {
       this.access = await navigator.requestMIDIAccess()
@@ -133,8 +134,8 @@ class MidiService {
         input.onmidimessage = null
         return
       }
-      // If a specific input port is selected, silence all others.
-      if (this._selectedInputId !== null && input.id !== this._selectedInputId) {
+      // Silence all ports until the user explicitly selects one (null = "None").
+      if (this._selectedInputId === null || input.id !== this._selectedInputId) {
         input.onmidimessage = null
         return
       }
