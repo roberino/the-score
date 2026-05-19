@@ -88,17 +88,20 @@ function InstrumentRow({ inst, onSelect }: { inst: InstrumentDef; onSelect: (i: 
 
 // ── Part row ──────────────────────────────────────────────────────────────────
 
+const MIDI_CHANNELS = Array.from({ length: 16 }, (_, i) => i + 1)
+
 interface PartRowProps {
   partId: string
   name: string
   shortName: string
   labelVisible: boolean
+  midiChannel: number
   isFirst: boolean
   isLast: boolean
   canDelete: boolean
 }
 
-function PartRow({ partId, name, shortName, labelVisible, isFirst, isLast, canDelete }: PartRowProps): JSX.Element {
+function PartRow({ partId, name, shortName, labelVisible, midiChannel, isFirst, isLast, canDelete }: PartRowProps): JSX.Element {
   const { dispatch } = useAppStore()
   const [expanded, setExpanded]           = useState(false)
   const [editName, setEditName]           = useState(name)
@@ -228,6 +231,22 @@ function PartRow({ partId, name, shortName, labelVisible, isFirst, isLast, canDe
             />
             Show label on score
           </label>
+
+          {/* MIDI channel */}
+          <div>
+            <label style={labelStyle}>MIDI Channel</label>
+            <select
+              value={midiChannel}
+              onChange={e => dispatch({ type: 'SET_PART_METADATA', partId, midiChannel: Number(e.target.value) })}
+              style={{ ...inputStyle, cursor: 'pointer' }}
+            >
+              {MIDI_CHANNELS.map(ch => (
+                <option key={ch} value={ch}>
+                  {ch === 10 ? '10 (Perc)' : ch}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       )}
     </div>
@@ -291,6 +310,7 @@ export function PartsPanel({ onClose }: PartsPanelProps): JSX.Element {
             name={part.name}
             shortName={part.shortName}
             labelVisible={part.labelVisible}
+            midiChannel={part.midiChannel ?? Math.min(idx + 1, 16)}
             isFirst={idx === 0}
             isLast={idx === score.parts.length - 1}
             canDelete={score.parts.length > 1}

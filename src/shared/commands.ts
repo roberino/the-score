@@ -38,10 +38,10 @@ export type Command =
   | { type: 'SET_TITLE';            title: string }
   | { type: 'SET_COMPOSER';         composer: string }
   | { type: 'SET_HEADING';          field: 'title' | 'subtitle' | 'composer' | 'arranger'; value: string }
-  | { type: 'ADD_PART';             name: string; shortName: string; clef: ClefType; midiProgram: number; transposeSemitones: number }
+  | { type: 'ADD_PART';             name: string; shortName: string; clef: ClefType; midiProgram: number; transposeSemitones: number; midiChannel?: number }
   | { type: 'DELETE_PART';          partId: string }
   | { type: 'MOVE_PART';            partId: string; direction: 'up' | 'down' }
-  | { type: 'SET_PART_METADATA';    partId: string; name?: string; shortName?: string; midiProgram?: number; transposeSemitones?: number; labelVisible?: boolean }
+  | { type: 'SET_PART_METADATA';    partId: string; name?: string; shortName?: string; midiProgram?: number; midiChannel?: number | null; transposeSemitones?: number; labelVisible?: boolean }
   | { type: 'SET_SCORE_SHOW_LABELS'; visible: boolean }
   | { type: 'ADD_DIRECTIVE';         partId: string; staffId: string; measureId: string; directive: Directive }
   | { type: 'REMOVE_DIRECTIVE';      partId: string; staffId: string; measureId: string; directiveId: string }
@@ -486,11 +486,13 @@ export function applyCommand(score: Score, command: Command): Score {
       case 'ADD_PART': {
         const measureCount = (draft.parts[0]?.staves[0]?.measures as any[])?.length ?? 8
         const staff = createStaff(command.clef, measureCount)
+        const defaultChannel = Math.min(draft.parts.length + 1, 16)
         const newPart = {
           id: uuid(),
           name:               command.name,
           shortName:          command.shortName,
           midiProgram:        command.midiProgram,
+          midiChannel:        command.midiChannel ?? defaultChannel,
           transposeSemitones: command.transposeSemitones,
           staves:             [staff],
           volume:             0.8,
@@ -524,6 +526,10 @@ export function applyCommand(score: Score, command: Command): Score {
         if (command.name               !== undefined) part.name               = command.name
         if (command.shortName          !== undefined) part.shortName          = command.shortName
         if (command.midiProgram        !== undefined) part.midiProgram        = command.midiProgram
+        if (command.midiChannel        !== undefined) {
+          if (command.midiChannel === null) delete part.midiChannel
+          else part.midiChannel = command.midiChannel
+        }
         if (command.transposeSemitones !== undefined) part.transposeSemitones = command.transposeSemitones
         if (command.labelVisible       !== undefined) part.labelVisible       = command.labelVisible
         break

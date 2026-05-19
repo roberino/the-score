@@ -128,7 +128,8 @@ class MidiOutputEngine {
       const staff = part.staves[0]
       if (!staff || !tempoStaff) return
 
-      const channel = Math.min(partIdx, 15)
+      // midiChannel is 1-based (1–16); fall back to partIndex+1 for old scores
+      const channel = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
 
       const pgm = Math.max(0, Math.min(127, part.midiProgram - 1))
       Tone.Transport.schedule((time) => {

@@ -124,6 +124,7 @@ export interface Part {
   readonly name: string              // e.g. "Violin I"
   readonly shortName: string         // e.g. "Vln. I"
   readonly midiProgram: number       // GM program 0–127
+  readonly midiChannel?: number      // 1–16; undefined → falls back to partIndex + 1
   readonly transposeSemitones: number // 0 = concert pitch; positive = written above concert
   readonly staves: readonly Staff[]  // usually 1, piano has 2
   readonly volume: number            // 0–1
@@ -188,12 +189,14 @@ export function createPart(
   transposeSemitones: number = 0,
   clef: ClefType = 'treble',
   measureCount: number = INITIAL_MEASURE_COUNT,
+  midiChannel?: number,
 ): Part {
   return {
     id: uuid(),
     name,
     shortName,
     midiProgram,
+    ...(midiChannel !== undefined ? { midiChannel } : {}),
     transposeSemitones,
     staves: [createStaff(clef, measureCount)],
     volume: 0.8,
