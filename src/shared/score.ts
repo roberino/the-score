@@ -112,11 +112,23 @@ export interface Measure {
   readonly directives?: readonly Directive[]  // performance directives at this measure
 }
 
+// ── Hairpins ─────────────────────────────────────────────────────────────────
+
+export type HairpinType = 'crescendo' | 'decrescendo'
+
+export interface Hairpin {
+  readonly id: string
+  readonly type: HairpinType
+  readonly fromNoteId: string
+  readonly toNoteId:   string
+}
+
 export interface Staff {
   readonly id: string
   readonly clef: ClefType
   readonly measures: readonly Measure[]
   readonly slurs?: readonly Slur[]
+  readonly hairpins?: readonly Hairpin[]
 }
 
 export interface Part {

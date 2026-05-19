@@ -566,7 +566,10 @@ function renderFromLayouts(
   for (const part of score.parts) {
     for (const staff of part.staves) {
       drawTiesForStaff(ctx, staff, staveNoteMap)
-      if (nativeCtx) drawSlursForStaff(nativeCtx, staff, staveNoteMap, eventStaveMap)
+      if (nativeCtx) {
+        drawSlursForStaff(nativeCtx, staff, staveNoteMap, eventStaveMap)
+        drawHairpinsForStaff(nativeCtx, staff, staveNoteMap, eventStaveMap)
+      }
     }
   }
 }
@@ -884,6 +887,84 @@ function drawSlursForStaff(
       ctx2d.moveTo(leftEdge, y2)
       ctx2d.quadraticCurveTo((leftEdge + x2) / 2, y2 + arc2, x2, y2)
       ctx2d.stroke()
+    }
+
+    ctx2d.restore()
+  }
+}
+
+// ── Hairpin rendering ─────────────────────────────────────────────────────────
+// Draws crescendo / decrescendo wedges below the staff bottom line.
+// Cross-row hairpins are split at the stave boundary.
+
+const HAIRPIN_HALF_SPREAD = 7   // px at the open end
+const HAIRPIN_BELOW_STAFF = 16  // px below bottom staff line (line 4)
+
+function drawHairpinWedge(
+  ctx2d: CanvasRenderingContext2D,
+  x1: number, x2: number, y: number,
+  isCrescendo: boolean,
+  fractionStart: number,
+  fractionEnd: number,
+): void {
+  const s1 = isCrescendo
+    ? HAIRPIN_HALF_SPREAD * fractionStart
+    : HAIRPIN_HALF_SPREAD * (1 - fractionStart)
+  const s2 = isCrescendo
+    ? HAIRPIN_HALF_SPREAD * fractionEnd
+    : HAIRPIN_HALF_SPREAD * (1 - fractionEnd)
+
+  ctx2d.beginPath()
+  ctx2d.moveTo(x1, y - s1)
+  ctx2d.lineTo(x2, y - s2)
+  ctx2d.stroke()
+
+  ctx2d.beginPath()
+  ctx2d.moveTo(x1, y + s1)
+  ctx2d.lineTo(x2, y + s2)
+  ctx2d.stroke()
+}
+
+function drawHairpinsForStaff(
+  ctx2d: CanvasRenderingContext2D,
+  staff: Staff,
+  staveNoteMap: Map<string, StaveNote>,
+  eventStaveMap: Map<string, Stave>,
+): void {
+  if (!staff.hairpins?.length) return
+
+  for (const hairpin of staff.hairpins) {
+    const fromSN    = staveNoteMap.get(hairpin.fromNoteId)
+    const toSN      = staveNoteMap.get(hairpin.toNoteId)
+    const fromStave = eventStaveMap.get(hairpin.fromNoteId)
+    const toStave   = eventStaveMap.get(hairpin.toNoteId)
+    if (!fromSN || !toSN || !fromStave || !toStave) continue
+
+    const x1 = fromSN.getAbsoluteX()
+    const x2 = toSN.getAbsoluteX() + 10
+    const isCrescendo = hairpin.type === 'crescendo'
+
+    ctx2d.save()
+    ctx2d.strokeStyle = '#111'
+    ctx2d.lineWidth   = 1.4
+
+    if (fromStave === toStave) {
+      const y = fromStave.getYForLine(4) + HAIRPIN_BELOW_STAFF
+      drawHairpinWedge(ctx2d, x1, x2, y, isCrescendo, 0, 1)
+    } else {
+      // Split at each stave row boundary
+      const rightEdge = fromStave.getX() + fromStave.getWidth()
+      const leftEdge  = toStave.getX()
+      const seg1 = rightEdge - x1
+      const seg2 = x2 - leftEdge
+      const total = seg1 + seg2
+      const splitFrac = total > 0 ? seg1 / total : 0.5
+
+      const y1 = fromStave.getYForLine(4) + HAIRPIN_BELOW_STAFF
+      const y2 = toStave.getYForLine(4)   + HAIRPIN_BELOW_STAFF
+
+      drawHairpinWedge(ctx2d, x1, rightEdge, y1, isCrescendo, 0, splitFrac)
+      drawHairpinWedge(ctx2d, leftEdge, x2,  y2, isCrescendo, splitFrac, 1)
     }
 
     ctx2d.restore()

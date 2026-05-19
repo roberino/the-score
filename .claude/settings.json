@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(gh auth *)",
+      "Bash(git --version)",
+      "Bash(git init *)",
+      "Bash(git checkout *)",
+      "Bash(git -C /Users/rob/Documents/dev/notation-app add README.md package.json package-lock.json tsconfig.json electron.vite.config.ts forge.config.ts vitest.config.ts .gitignore)",
+      "Bash(git commit -m ' *)",
+      "Bash(git add *)",
+      "Bash(brew --version)",
+      "Bash(curl --version)",
+      "Bash(curl -s https://api.github.com/repos/cli/cli/releases/latest)",
+      "Bash(curl -fsSL \"https://github.com/cli/cli/releases/download/v2.92.0/gh_2.92.0_macOS_arm64.tar.gz\" -o /tmp/gh.tar.gz)",
+      "Bash(tar -xzf /tmp/gh.tar.gz -C /tmp)",
+      "Bash(sudo mv /tmp/gh_2.92.0_macOS_arm64/bin/gh /usr/local/bin/gh)",
+      "Bash(curl -fsSL \"https://github.com/cli/cli/releases/download/v2.92.0/gh_2.92.0_macOS_arm64.zip\" -o /tmp/gh.zip)",
+      "Bash(unzip -q /tmp/gh.zip -d /tmp/gh-install)",
+      "Bash(sudo mv /tmp/gh-install/gh_2.92.0_macOS_arm64/bin/gh /usr/local/bin/gh)",
+      "Bash(mkdir -p ~/.local/bin)",
+      "Bash(mv /tmp/gh-install/gh_2.92.0_macOS_arm64/bin/gh ~/.local/bin/gh)",
+      "Bash(~/.local/bin/gh --version)",
+      "Read(//Users/rob/**)",
+      "Bash(echo 'export PATH=\"$HOME/.local/bin:$PATH\"')",
+      "Bash(export PATH=\"$HOME/.local/bin:$PATH\")",
+      "Bash(gh repo *)",
+      "Bash(git remote *)",
+      "Bash(git push *)",
+      "Bash(node -e \"const vf = require\\('./node_modules/vexflow/build/cjs/vexflow.js'\\); console.log\\(Object.keys\\(vf\\).filter\\(k => k.toLowerCase\\(\\).includes\\('barline'\\)\\)\\)\")",
+      "Bash(node -e \"const vf = require\\('./node_modules/vexflow/build/cjs/vexflow.js'\\); const {BarlineType} = vf; console.log\\(BarlineType\\)\")",
+      "Bash(node -e \"const vf = require\\('./node_modules/vexflow/build/cjs/vexflow.js'\\); const f = new vf.Formatter\\(\\); console.log\\(typeof f.preCalculateMinTotalWidth\\); console.log\\(Object.getOwnPropertyNames\\(vf.Formatter\\).filter\\(k => k.toLowerCase\\(\\).includes\\('width'\\) || k.toLowerCase\\(\\).includes\\('min'\\)\\)\\)\")",
+      "Bash(node -e \"const vf = require\\('./node_modules/vexflow/build/cjs/vexflow.js'\\); const f = new vf.Formatter\\(\\); const { StaveNote, Voice, Formatter } = vf; const n = new StaveNote\\({ keys: ['c/4'], duration: 'q' }\\); const v = new Voice\\({ numBeats: 4, beatValue: 4 }\\).setStrict\\(false\\); v.addTickables\\([n]\\); console.log\\(f.preCalculateMinTotalWidth\\([v]\\)\\)\")",
+      "Bash(node -e ' *)"
+    ]
+  }
+}

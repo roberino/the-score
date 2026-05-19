@@ -1,6 +1,6 @@
 import * as Tone from 'tone'
-import type { Score, Note, Chord } from '@shared/score'
-import { resolveDirectiveDynamic, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, articulationPlaybackMods, expandOrnamentNotes } from '@shared/musicUtils'
+import type { Score, Note, Chord, Hairpin } from '@shared/score'
+import { resolveDirectiveDynamic, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, articulationPlaybackMods, expandOrnamentNotes, type FlatScheduleEntry } from '@shared/musicUtils'
 import { type PlaybackController } from './audioEngine'
 import { midiService } from '../services/midiService'
 
@@ -26,6 +26,28 @@ export function pitchToMidi(
 
 function velocityFromDb(db: number): number {
   return Math.max(1, Math.min(127, Math.round(Math.pow(10, db / 20) * 100)))
+}
+
+// Returns a map of eventId → velocity multiplier (0.5–1.0) for hairpin ramps.
+function buildHairpinFactorMap(
+  hairpins: readonly Hairpin[] | undefined,
+  schedule: FlatScheduleEntry[],
+): Map<string, number> {
+  const map = new Map<string, number>()
+  if (!hairpins?.length) return map
+  const START = 0.5, END = 1.0
+  for (const hairpin of hairpins) {
+    const fromIdx = schedule.findIndex(fe => fe.event.id === hairpin.fromNoteId)
+    const toIdx   = schedule.findIndex(fe => fe.event.id === hairpin.toNoteId)
+    if (fromIdx === -1 || toIdx === -1) continue
+    const lo = Math.min(fromIdx, toIdx), hi = Math.max(fromIdx, toIdx)
+    for (let i = lo; i <= hi; i++) {
+      const t = hi > lo ? (i - lo) / (hi - lo) : 0
+      map.set(schedule[i].event.id,
+        hairpin.type === 'crescendo' ? START + (END - START) * t : END - (END - START) * t)
+    }
+  }
+  return map
 }
 
 // ── MIDI Output Engine ────────────────────────────────────────────────────────
@@ -137,21 +159,23 @@ class MidiOutputEngine {
         output.send([0xC0 | channel, pgm], ts)
       }, 0)
 
-      const schedule = buildFlatSchedule(staff, sequence, tempoStaff, bpm)
+      const schedule       = buildFlatSchedule(staff, sequence, tempoStaff, bpm)
+      const hairpinFactors = buildHairpinFactorMap(staff.hairpins, schedule)
 
       for (const fe of schedule) {
         if (fe.skip) continue
         const { event, mIdx, startSec, playDurSec } = fe
 
-        const dynMultiplier = resolveDirectiveDynamic(staff.measures, mIdx)
-        const volumeScale   = dynMultiplier ?? part.volume
-        const volDb         = 20 * Math.log10(Math.max(0.001, volumeScale))
+        const dynMultiplier  = resolveDirectiveDynamic(staff.measures, mIdx)
+        const volumeScale    = dynMultiplier ?? part.volume
+        const volDb          = 20 * Math.log10(Math.max(0.001, volumeScale))
+        const hairpinFactor  = hairpinFactors.get(event.id) ?? 1.0
 
         const keySig     = resolveKeySig(staff.measures, mIdx, score.keySignature)
         const bpmAtEvent = resolveDirectiveTempo(tempoStaff.measures, mIdx, bpm)
         const ornNotes   = expandOrnamentNotes(event, startSec, playDurSec, bpmAtEvent, keySig)
         if (ornNotes) {
-          const baseVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(volDb))))
+          const baseVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(volDb) * hairpinFactor)))
           for (const on of ornNotes) {
             const midiNum   = pitchToMidi(on.noteName, on.octave, on.accidental, part.transposeSemitones)
             const noteOffMs = Math.max(20, on.durSec * 1000 - 20)
@@ -165,7 +189,7 @@ class MidiOutputEngine {
         }
 
         const { durFactor, velFactor } = articulationPlaybackMods(event)
-        const velocity  = Math.max(1, Math.min(127, Math.round(velocityFromDb(volDb) * velFactor)))
+        const velocity  = Math.max(1, Math.min(127, Math.round(velocityFromDb(volDb) * velFactor * hairpinFactor)))
         const noteOffMs = Math.max(50, playDurSec * durFactor * 1000 - 30)
 
         if (event.type === 'note') {

@@ -12,7 +12,7 @@
 import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
-import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox } from './score'
+import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin } from './score'
 import { measureCapacityUnits, eventDurationUnits, dottedUnits, DURATION_UNITS, resolveClef, pitchToStep, stepToPitch, shiftPitchBySemitones } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
@@ -56,6 +56,8 @@ export type Command =
   | { type: 'ADD_TEXT_BOX';          box: TextBox }
   | { type: 'UPDATE_TEXT_BOX';       id: string; html?: string; x?: number; y?: number; width?: number }
   | { type: 'DELETE_TEXT_BOX';       id: string }
+  | { type: 'ADD_HAIRPIN';           partId: string; staffId: string; hairpin: Hairpin }
+  | { type: 'REMOVE_HAIRPIN';        partId: string; staffId: string; hairpinId: string }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -763,6 +765,34 @@ export function applyCommand(score: Score, command: Command): Score {
       case 'DELETE_TEXT_BOX': {
         if (!(draft as any).textBoxes) break
         ;(draft as any).textBoxes = (draft as any).textBoxes.filter((b: any) => b.id !== command.id)
+        break
+      }
+
+      case 'ADD_HAIRPIN': {
+        for (const part of draft.parts) {
+          if (part.id !== command.partId) continue
+          for (const staff of part.staves) {
+            if (staff.id !== command.staffId) continue
+            const s = staff as any
+            if (!s.hairpins) s.hairpins = []
+            // Replace any existing hairpin that starts at the same note
+            s.hairpins = s.hairpins.filter((h: any) => h.fromNoteId !== command.hairpin.fromNoteId)
+            s.hairpins.push(command.hairpin)
+          }
+        }
+        break
+      }
+
+      case 'REMOVE_HAIRPIN': {
+        for (const part of draft.parts) {
+          if (part.id !== command.partId) continue
+          for (const staff of part.staves) {
+            if (staff.id !== command.staffId) continue
+            const s = staff as any
+            if (!s.hairpins) break
+            s.hairpins = s.hairpins.filter((h: any) => h.id !== command.hairpinId)
+          }
+        }
         break
       }
     }

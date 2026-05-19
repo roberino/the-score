@@ -38,6 +38,8 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     midiInputDeviceId, midiInputDeviceName,
     selectedMeasureId,
     insertMeasure,
+    selectedNoteIds,
+    addHairpin,
   } = useAppStore()
 
   const [timeSigError, setTimeSigError] = useState<string | null>(null)
@@ -210,6 +212,21 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           disabled={!(selectedMeasureId ?? cursorMeasureId)}
           title="Insert bar after selection (⌘B)"
           label="+ Bar"
+        />
+
+        <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
+
+        <ToolbarButton
+          onClick={() => addHairpin('crescendo')}
+          disabled={inputMode !== 'select' || selectedNoteIds.length < 2}
+          title="Add crescendo (select 2+ notes)"
+          label="< cresc"
+        />
+        <ToolbarButton
+          onClick={() => addHairpin('decrescendo')}
+          disabled={inputMode !== 'select' || selectedNoteIds.length < 2}
+          title="Add decrescendo (select 2+ notes)"
+          label="> dim"
         />
 
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />

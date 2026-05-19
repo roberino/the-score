@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import { createScore, type Score, type Pitch, type Duration, type Accidental } from '@shared/score'
+import { createScore, type Score, type Pitch, type Duration, type Accidental, type HairpinType, type Hairpin } from '@shared/score'
+import { v4 as uuid } from 'uuid'
 import { applyCommand, type Command } from '@shared/commands'
 import { measureCapacityUnits, usedUnits, resolveTimeSig, dottedUnits, DURATION_UNITS } from '@shared/musicUtils'
 import type { PlaybackController } from '../engine/audioEngine'
@@ -102,6 +103,8 @@ export interface AppState {
   checkAndAutoAddBar: () => void
   insertMeasure: () => void
   deleteMeasure: (measureId: string) => void
+  addHairpin: (hairpinType: HairpinType) => void
+  removeHairpin: (partId: string, staffId: string, hairpinId: string) => void
   toggleKeyboard: () => void
   toggleSoundOnInput: () => void
   setAudioMode: (mode: 'builtin' | 'midi-out') => void
@@ -561,6 +564,36 @@ export const useAppStore = create<AppState>()(
       const landingMeasure = newStaff.measures[landingIndex]
       if (landingMeasure) get().setCursor(landingMeasure.id, 0)
       get().setSelectedMeasure(null)
+    },
+
+    addHairpin: (hairpinType) => {
+      const { score, selectedNoteIds } = get()
+      if (selectedNoteIds.length < 2) return
+      const selectedSet = new Set(selectedNoteIds)
+
+      for (const part of score.parts) {
+        for (const staff of part.staves) {
+          const ordered: string[] = []
+          for (const measure of staff.measures) {
+            for (const event of measure.voices[0]?.events ?? []) {
+              if (selectedSet.has(event.id)) ordered.push(event.id)
+            }
+          }
+          if (ordered.length < 2) continue
+          const hairpin: Hairpin = {
+            id: uuid(),
+            type: hairpinType,
+            fromNoteId: ordered[0],
+            toNoteId:   ordered[ordered.length - 1],
+          }
+          get().dispatch({ type: 'ADD_HAIRPIN', partId: part.id, staffId: staff.id, hairpin })
+          return
+        }
+      }
+    },
+
+    removeHairpin: (partId, staffId, hairpinId) => {
+      get().dispatch({ type: 'REMOVE_HAIRPIN', partId, staffId, hairpinId })
     },
 
     checkAndAutoAddBar: () => {

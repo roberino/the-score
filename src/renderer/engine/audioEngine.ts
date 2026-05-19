@@ -6,8 +6,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as Tone from 'tone'
-import type { Score, Note, Chord } from '@shared/score'
-import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, eventToSeconds, articulationPlaybackMods, expandOrnamentNotes } from '@shared/musicUtils'
+import type { Score, Note, Chord, Hairpin } from '@shared/score'
+import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, eventToSeconds, articulationPlaybackMods, expandOrnamentNotes, type FlatScheduleEntry } from '@shared/musicUtils'
 
 // Re-export so callers that import from here continue to work
 export { eventToSeconds }
@@ -57,12 +57,34 @@ export async function playScore(
   const tempoStaff = score.parts[0]?.staves[0]
   const sequence   = buildPlaybackSequence(tempoStaff?.measures ?? [])
 
+  function buildHairpinDbMap(
+    hairpins: readonly Hairpin[] | undefined,
+    schedule: FlatScheduleEntry[],
+  ): Map<string, number> {
+    const map = new Map<string, number>()
+    if (!hairpins?.length) return map
+    const START_DB = -6, END_DB = 0   // dB bonus: softer → louder
+    for (const hairpin of hairpins) {
+      const fromIdx = schedule.findIndex(fe => fe.event.id === hairpin.fromNoteId)
+      const toIdx   = schedule.findIndex(fe => fe.event.id === hairpin.toNoteId)
+      if (fromIdx === -1 || toIdx === -1) continue
+      const lo = Math.min(fromIdx, toIdx), hi = Math.max(fromIdx, toIdx)
+      for (let i = lo; i <= hi; i++) {
+        const t = hi > lo ? (i - lo) / (hi - lo) : 0
+        map.set(schedule[i].event.id,
+          hairpin.type === 'crescendo' ? START_DB + (END_DB - START_DB) * t : END_DB + (START_DB - END_DB) * t)
+      }
+    }
+    return map
+  }
+
   for (const part of score.parts) {
     if (part.muted) continue
     const staff = part.staves[0]
     if (!staff || !tempoStaff) continue
 
-    const schedule = buildFlatSchedule(staff, sequence, tempoStaff, bpm)
+    const schedule    = buildFlatSchedule(staff, sequence, tempoStaff, bpm)
+    const hairpinDbs  = buildHairpinDbMap(staff.hairpins, schedule)
 
     for (const fe of schedule) {
       if (fe.skip) continue
@@ -71,6 +93,7 @@ export async function playScore(
       const dynMultiplier = resolveDirectiveDynamic(staff.measures, mIdx)
       const volumeScale   = dynMultiplier ?? part.volume
       const volDb         = 20 * Math.log10(Math.max(0.001, volumeScale))
+      const hairpinDb     = hairpinDbs.get(event.id) ?? 0
       const effectiveMidi = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
       const isPizz        = effectiveMidi === 45
 
@@ -80,7 +103,7 @@ export async function playScore(
       if (ornNotes) {
         for (const on of ornNotes) {
           const hz = pitchToHz(on.noteName, on.octave, on.accidental, part.transposeSemitones)
-          const db = volDb
+          const db = volDb + hairpinDb
           Tone.Transport.schedule((time) => {
             synth.set({ envelope: { attack: 0.005, decay: 0.1, sustain: 0.7, release: 0.1 } })
             synth.volume.value = db
@@ -92,7 +115,7 @@ export async function playScore(
 
       const { durFactor, volDbBonus } = articulationPlaybackMods(event)
       const effectiveDur = playDurSec * durFactor
-      const effectiveDb  = volDb + volDbBonus
+      const effectiveDb  = volDb + volDbBonus + hairpinDb
 
       if (event.type === 'note') {
         const n   = event as Note

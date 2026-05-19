@@ -391,6 +391,19 @@ function partListLines(score: Score): string[] {
 
 // ── Part / measure sections ───────────────────────────────────────────────────
 
+function buildHairpinMaps(staff: Staff): {
+  starts: Map<string, 'crescendo' | 'decrescendo'>
+  stops:  Set<string>
+} {
+  const starts = new Map<string, 'crescendo' | 'decrescendo'>()
+  const stops  = new Set<string>()
+  for (const h of staff.hairpins ?? []) {
+    starts.set(h.fromNoteId, h.type)
+    stops.add(h.toNoteId)
+  }
+  return { starts, stops }
+}
+
 function buildSlurMap(staff: Staff): Map<string, SlurNotation> {
   const map = new Map<string, SlurNotation>()
   let num = 1
@@ -411,7 +424,8 @@ function partLines(score: Score, partIdx: number): string[] {
 
   const partId  = `P${partIdx + 1}`
   const lines: string[] = [`  <part id="${partId}">`]
-  const slurMap = buildSlurMap(staff)
+  const slurMap   = buildSlurMap(staff)
+  const hairpinMaps = buildHairpinMaps(staff)
 
   for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
     const measure     = staff.measures[mIdx]
@@ -448,7 +462,23 @@ function partLines(score: Score, partIdx: number): string[] {
     // Notes — voice 0 only
     const beamState: BeamState = { active: false }
     for (const event of measure.voices[0]?.events ?? []) {
+      const hairpinType = hairpinMaps.starts.get(event.id)
+      if (hairpinType) {
+        const wedgeType = hairpinType === 'crescendo' ? 'crescendo' : 'diminuendo'
+        lines.push(
+          `      <direction placement="below">`,
+          `        <direction-type><wedge type="${wedgeType}" spread="0"/></direction-type>`,
+          `      </direction>`,
+        )
+      }
       lines.push(...noteLines(event, beamState, lvl + 1, slurMap))
+      if (hairpinMaps.stops.has(event.id)) {
+        lines.push(
+          `      <direction placement="below">`,
+          `        <direction-type><wedge type="stop"/></direction-type>`,
+          `      </direction>`,
+        )
+      }
     }
 
     // Right barline for non-default barlines (repeat-start is handled as left of next measure)
