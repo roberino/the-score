@@ -91,6 +91,12 @@ function svgToCanvas(svg: string): Promise<HTMLCanvasElement> {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+// Strip HTML tags to get plain text for PDF rendering
+function stripHtml(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  return doc.body.textContent ?? ''
+}
+
 export async function exportScorePdf(score: Score): Promise<Uint8Array> {
   const tk = await getToolkit()
 
@@ -117,6 +123,11 @@ export async function exportScorePdf(score: Score): Promise<Uint8Array> {
 
   const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' })
 
+  // Scale factor: canvas px at zoom=1 (1200px wide) → A4 mm
+  const CANVAS_WIDTH_PX = 1200
+  const pxToMm = A4_MM.w / CANVAS_WIDTH_PX
+  const textBoxes = score.textBoxes ?? []
+
   for (let page = 1; page <= pageCount; page++) {
     const svg    = tk.renderToSVG(page)
     const canvas = await svgToCanvas(svg)
@@ -124,6 +135,17 @@ export async function exportScorePdf(score: Score): Promise<Uint8Array> {
     if (page > 1) pdf.addPage()
     // PNG preserves notation's sharp edges cleanly; JPEG would introduce artefacts
     pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, A4_MM.w, A4_MM.h)
+
+    // Overlay text boxes (all on every page — multi-page mapping is future work)
+    pdf.setTextColor(0, 0, 0)
+    pdf.setFontSize(10)
+    for (const box of textBoxes) {
+      const text = stripHtml(box.html).trim()
+      if (!text) continue
+      const xMm = Math.max(0, Math.min(box.x * pxToMm, A4_MM.w - 10))
+      const yMm = Math.max(5, Math.min(box.y * pxToMm, A4_MM.h - 5))
+      pdf.text(text, xMm, yMm, { maxWidth: box.width * pxToMm })
+    }
   }
 
   return new Uint8Array(pdf.output('arraybuffer') as ArrayBuffer)

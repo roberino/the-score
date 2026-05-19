@@ -205,7 +205,8 @@ export const useAppStore = create<AppState>()(
     loadScore: (score: Score, path: string) => {
       _playback?.stop(); _playback = null
       set(state => {
-        state.score = score as any
+        // Normalise fields added after the initial file format
+        state.score = { ...score, textBoxes: score.textBoxes ?? [] } as any
         state.filePath = path
         state.isDirty = false
         state.undoStack = []

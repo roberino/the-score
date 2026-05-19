@@ -38,6 +38,7 @@ import { VirtualKeyboard } from './VirtualKeyboard'
 import { TransposeDialog } from './TransposeDialog'
 import { useMidiInput } from '../hooks/useMidiInput'
 import type { NoteInput } from '../services/midiService'
+import { TextBoxLayer, makeTextBox } from './TextBoxLayer'
 
 // ── Preview helper ────────────────────────────────────────────────────────────
 
@@ -817,9 +818,10 @@ export function ScoreCanvas(): JSX.Element {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
-      // Skip if user is typing in an input
+      // Skip if user is typing in an input or a rich-text editor
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      if ((e.target as HTMLElement).isContentEditable) return
 
       const mod = e.metaKey || e.ctrlKey
 
@@ -1352,6 +1354,23 @@ export function ScoreCanvas(): JSX.Element {
 
   // ── Barline picker handlers ─────────────────────────────────────────────────
 
+  // ── Double-click: create text box on empty space (select/eraser mode) ────────
+
+  const handleCanvasDblClick = useCallback((event: React.MouseEvent<HTMLCanvasElement>): void => {
+    if (inputMode !== 'select' && inputMode !== 'eraser') return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
+    // Don't create a text box if we're in the heading area or on notation
+    if (canvasY < HEADING_MARGIN_Y) return
+    const options = getRenderOptions(zoom, score.showPartLabels)
+    const layouts = computeLayout(score, options)
+    const layout  = findClickedLayout(canvasX, canvasY, layouts)
+    if (layout) return  // clicked on a stave — not empty space
+    const box = makeTextBox(canvasX / zoom, canvasY / zoom)
+    dispatch({ type: 'ADD_TEXT_BOX', box })
+  }, [inputMode, zoom, score, dispatch])
+
   const closePicker = useCallback(() => {
     setPickerState(null)
     setSelectedBarline(null)
@@ -1537,8 +1556,10 @@ export function ScoreCanvas(): JSX.Element {
         <canvas
           ref={canvasRef}
           onClick={handleCanvasClick}
+          onDoubleClick={handleCanvasDblClick}
           style={{ cursor: cursorStyle, display: 'block' }}
         />
+        <TextBoxLayer zoom={zoom} />
         {editingHeading && (
           <HeadingEditor
             bound={editingHeading}

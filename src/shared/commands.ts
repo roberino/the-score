@@ -12,7 +12,7 @@
 import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
-import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation } from './score'
+import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox } from './score'
 import { measureCapacityUnits, eventDurationUnits, dottedUnits, DURATION_UNITS, resolveClef, pitchToStep, stepToPitch, shiftPitchBySemitones } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
@@ -53,6 +53,9 @@ export type Command =
   | { type: 'TRANSPOSE_NOTES';       moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[]; semitones: number }
   | { type: 'DELETE_NOTES';          deletions: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] }
   | { type: 'RESIZE_NOTE';           partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; newDuration: Duration; newDots: 0 | 1 | 2 }
+  | { type: 'ADD_TEXT_BOX';          box: TextBox }
+  | { type: 'UPDATE_TEXT_BOX';       id: string; html?: string; x?: number; y?: number; width?: number }
+  | { type: 'DELETE_TEXT_BOX';       id: string }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -736,6 +739,30 @@ export function applyCommand(score: Score, command: Command): Score {
             )
           }
         }
+        break
+      }
+
+      case 'ADD_TEXT_BOX': {
+        if (!(draft as any).textBoxes) (draft as any).textBoxes = []
+        ;(draft as any).textBoxes.push(command.box)
+        break
+      }
+
+      case 'UPDATE_TEXT_BOX': {
+        const boxes = (draft as any).textBoxes as TextBox[]
+        if (!boxes) break
+        const box = boxes.find((b: any) => b.id === command.id) as any
+        if (!box) break
+        if (command.html  !== undefined) box.html  = command.html
+        if (command.x     !== undefined) box.x     = command.x
+        if (command.y     !== undefined) box.y     = command.y
+        if (command.width !== undefined) box.width = command.width
+        break
+      }
+
+      case 'DELETE_TEXT_BOX': {
+        if (!(draft as any).textBoxes) break
+        ;(draft as any).textBoxes = (draft as any).textBoxes.filter((b: any) => b.id !== command.id)
         break
       }
     }

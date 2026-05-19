@@ -143,6 +143,14 @@ export interface ScoreMetadata {
   readonly updatedAt: string
 }
 
+export interface TextBox {
+  readonly id: string
+  readonly x: number       // canvas px at zoom=1
+  readonly y: number
+  readonly width: number   // box width at zoom=1
+  readonly html: string    // sanitised HTML
+}
+
 export interface Score {
   readonly id: string
   readonly metadata: ScoreMetadata
@@ -151,6 +159,7 @@ export interface Score {
   readonly timeSignature: TimeSignature
   readonly tempo: number             // BPM
   readonly showPartLabels: boolean   // master label visibility
+  readonly textBoxes?: readonly TextBox[]
   readonly version: number           // file format version
 }
 
@@ -178,6 +187,7 @@ export function createScore(title: string = 'Untitled'): Score {
     timeSignature: { numerator: 4, denominator: 4 },
     tempo: 120,
     showPartLabels: true,
+    textBoxes: [],
     version: 1
   }
 }
