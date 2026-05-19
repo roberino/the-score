@@ -143,6 +143,7 @@ function TextBoxItem({
         top:        box.y * zoom,
         width:      box.width * zoom,
         minWidth:   100,
+        minHeight:  80,
         background: '#fff',
         border,
         borderRadius: 8,
@@ -350,5 +351,5 @@ export function TextBoxLayer({ zoom }: { zoom: number }): JSX.Element {
 // ── Public helper ─────────────────────────────────────────────────────────────
 
 export function makeTextBox(x: number, y: number): TextBox {
-  return { id: uuid(), x, y, width: 320, html: '' }
+  return { id: uuid(), x, y, width: 260, html: '' }
 }
