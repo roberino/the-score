@@ -248,7 +248,7 @@ function TextBoxItem({
       {/* ── Editor content ── */}
       <EditorContent
         editor={editor}
-        style={{ padding: '7px 11px 9px', cursor: isEditing ? 'text' : 'default' }}
+        style={{ padding: '7px 11px 9px', cursor: isEditing ? 'text' : 'default', color: '#111111' }}
       />
     </div>
   )
@@ -350,5 +350,5 @@ export function TextBoxLayer({ zoom }: { zoom: number }): JSX.Element {
 // ── Public helper ─────────────────────────────────────────────────────────────
 
 export function makeTextBox(x: number, y: number): TextBox {
-  return { id: uuid(), x, y, width: 220, html: '' }
+  return { id: uuid(), x, y, width: 320, html: '' }
 }

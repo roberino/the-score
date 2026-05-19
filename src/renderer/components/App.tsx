@@ -41,6 +41,8 @@ export function App(): JSX.Element {
   // ── Keyboard shortcuts ──────────────────────────────────────────────────────
   useEffect(() => {
     const handleKey = (e: KeyboardEvent): void => {
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
       const mod = e.metaKey || e.ctrlKey
       if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo() }
       if (mod && e.key === 'z' &&  e.shiftKey) { e.preventDefault(); redo() }
