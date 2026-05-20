@@ -743,6 +743,7 @@ function parseMusicXmlPart(
         }
 
         const soundEl  = child.querySelector('sound')
+        const metEl    = child.querySelector('direction-type metronome')
         const dynEl    = child.querySelector('direction-type dynamics')
         const wordsEl  = child.querySelector('direction-type words')
         if (soundEl?.getAttribute('tempo')) {
@@ -750,6 +751,18 @@ function parseMusicXmlPart(
           if (!isNaN(t) && t > 0) {
             const bpm = Math.round(t)
             const text = wordsEl?.textContent?.trim() || `♩=${bpm}`
+            directives.push({ id: uuid(), category: 'tempo', text, bpm })
+          }
+        } else if (metEl) {
+          const beatUnit  = metEl.querySelector('beat-unit')?.textContent?.trim() ?? 'quarter'
+          const perMinute = parseFloat(metEl.querySelector('per-minute')?.textContent ?? '0')
+          if (!isNaN(perMinute) && perMinute > 0) {
+            const BEAT_DIVS: Record<string, number> = {
+              whole: 64, half: 32, quarter: 16, eighth: 8, '16th': 4, '32nd': 2, '64th': 1,
+            }
+            const units = BEAT_DIVS[beatUnit] ?? 16
+            const bpm   = Math.round(perMinute * 16 / units)
+            const text  = wordsEl?.textContent?.trim() || `♩=${bpm}`
             directives.push({ id: uuid(), category: 'tempo', text, bpm })
           }
         } else if (dynEl && dynEl.children.length > 0) {
@@ -843,6 +856,20 @@ export function musicxmlToScore(xml: string): Score {
   if (firstSoundEl) {
     const t = parseFloat(firstSoundEl.getAttribute('tempo') ?? '120')
     if (!isNaN(t) && t > 0) scoreTempo = Math.round(t)
+  } else {
+    // Sibelius exports <metronome> without a <sound tempo> sibling
+    const metEl = doc.querySelector('metronome')
+    if (metEl) {
+      const beatUnit  = metEl.querySelector('beat-unit')?.textContent?.trim() ?? 'quarter'
+      const perMinute = parseFloat(metEl.querySelector('per-minute')?.textContent ?? '120')
+      if (!isNaN(perMinute) && perMinute > 0) {
+        const BEAT_DIVS: Record<string, number> = {
+          whole: 64, half: 32, quarter: 16, eighth: 8, '16th': 4, '32nd': 2, '64th': 1,
+        }
+        const units = BEAT_DIVS[beatUnit] ?? 16
+        scoreTempo = Math.round(perMinute * 16 / units)
+      }
+    }
   }
 
   // ── Build parts ───────────────────────────────────────────────────────────

@@ -148,19 +148,21 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean, clef: string)
 
 export interface RenderOptions {
   canvasWidth: number
-  measuresPerLine: number   // maximum measures per line (hard cap)
+  measuresPerLine: number   // hard cap on measures per line (safety valve)
   staveWidth: number        // fallback / minimum stave width
   staveHeight: number
-  marginX: number
+  marginX: number           // left margin (wider when part labels are shown)
+  marginRight: number       // right margin (always ~2 cm)
   marginY: number
 }
 
 export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
   canvasWidth: 1200,
-  measuresPerLine: 4,
+  measuresPerLine: 8,
   staveWidth: 260,
   staveHeight: 120,
-  marginX: 40,
+  marginX: 75,
+  marginRight: 75,
   marginY: HEADING_MARGIN_Y,
 }
 
@@ -338,9 +340,10 @@ const VEXFLOW_HEADROOM_PX = 40
 export function computeLayout(score: Score, options: RenderOptions): MeasureLayout[] {
   const layouts: MeasureLayout[] = []
   const { canvasWidth, staveHeight, marginX, marginY, measuresPerLine } = options
-  const totalParts = score.parts.length
-  const rowHeight  = staveHeight * totalParts + 40
-  const maxLineX   = canvasWidth - marginX   // rightmost allowed x + width
+  const marginRight = options.marginRight ?? marginX
+  const totalParts  = score.parts.length
+  const rowHeight   = staveHeight * totalParts + 40
+  const lineWidth   = canvasWidth - marginX - marginRight   // usable px per line
 
   const firstPart  = score.parts[0]
   if (!firstPart) return layouts
@@ -348,9 +351,20 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
   if (!firstStaff) return layouts
   const measureCount = firstStaff.measures.length
 
-  let lineIndex           = 0
-  let currentX            = marginX
-  let measuresInLine      = 0
+  // ── Phase 1: determine natural widths and assign each measure to a line ─────
+
+  interface MeasureInfo {
+    mIdx:         number
+    naturalWidth: number
+    isLineStart:  boolean
+    lineIndex:    number
+    showClefMap:  Map<string, boolean>   // staffId → showClef
+  }
+
+  const infos: MeasureInfo[] = []
+  let lineIndex      = 0
+  let lineUsed       = 0
+  let measuresInLine = 0
 
   for (let mIdx = 0; mIdx < measureCount; mIdx++) {
     const effectiveSig  = resolveTimeSig(firstStaff.measures, mIdx, score.timeSignature)
@@ -363,17 +377,13 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
     const sigChanged  = prevSig  !== null && !timeSigsEqual(effectiveSig, prevSig)
     const clefChanged = prevClef !== null && prevClef !== effectiveClef
 
-    // Width if NOT a line start (no repeat clef/key/time unless first measure or changed)
     const showClef_mid    = clefChanged
     const showKeySig_mid  = keyChanged
     const showTimeSig_mid = sigChanged
-
-    // Width if IS a line start (clef always; key if non-C; time if differs from score default)
     const showClef_start    = true
     const showKeySig_start  = effectiveKey.fifths !== 0
     const showTimeSig_start = !timeSigsEqual(effectiveSig, score.timeSignature) || mIdx === 0
 
-    // Width must accommodate the densest part at this measure column — parts share stave width.
     let width_mid   = MIN_STAVE_WIDTH
     let width_start = MIN_STAVE_WIDTH
     for (const part of score.parts) {
@@ -383,39 +393,86 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
     }
 
     let isLineStart: boolean
-    let width: number
+    let naturalWidth: number
 
     if (mIdx === 0) {
-      // First measure is always a line start
-      isLineStart = true
-      width       = width_start
-      currentX    = marginX
+      isLineStart  = true
+      naturalWidth = width_start
+      lineUsed     = 0
     } else {
-      const wouldExceed = currentX + width_mid > maxLineX
+      const wouldExceed = lineUsed + width_mid > lineWidth
       const hitCap      = measuresInLine >= measuresPerLine
       if (wouldExceed || hitCap) {
-        // Wrap to new line
         lineIndex++
-        currentX    = marginX
+        lineUsed       = 0
         measuresInLine = 0
-        isLineStart = true
-        width       = width_start
+        isLineStart    = true
+        naturalWidth   = width_start
       } else {
-        isLineStart = false
-        width       = width_mid
+        isLineStart  = false
+        naturalWidth = width_mid
       }
     }
 
-    const x      = currentX
-    const yBase  = marginY + lineIndex * rowHeight
+    const showClefMap = new Map<string, boolean>()
+    for (const part of score.parts) {
+      const staff = part.staves[0]
+      if (!staff) continue
+      const staffClef        = resolveClef(staff.measures, mIdx, staff.clef)
+      const prevStaffClef    = mIdx > 0 ? resolveClef(staff.measures, mIdx - 1, staff.clef) : null
+      const staffClefChanged = prevStaffClef !== null && prevStaffClef !== staffClef
+      showClefMap.set(staff.id, isLineStart || staffClefChanged)
+    }
+
+    infos.push({ mIdx, naturalWidth, isLineStart, lineIndex, showClefMap })
+    lineUsed += naturalWidth
+    measuresInLine++
+  }
+
+  const totalLines = lineIndex + 1
+
+  // ── Phase 2: justify all non-last lines to fill lineWidth exactly ──────────
+
+  const byLine = new Map<number, MeasureInfo[]>()
+  for (const m of infos) {
+    if (!byLine.has(m.lineIndex)) byLine.set(m.lineIndex, [])
+    byLine.get(m.lineIndex)!.push(m)
+  }
+
+  const finalWidth = new Map<number, number>()   // mIdx → justified width
+
+  for (const [li, group] of byLine.entries()) {
+    const isLastLine   = li === totalLines - 1
+    const totalNatural = group.reduce((s, m) => s + m.naturalWidth, 0)
+
+    if (!isLastLine && group.length >= 2 && totalNatural < lineWidth) {
+      // Distribute remaining space proportionally; give rounding remainder to last measure
+      let used = 0
+      for (let i = 0; i < group.length - 1; i++) {
+        const w = Math.floor(group[i].naturalWidth * lineWidth / totalNatural)
+        finalWidth.set(group[i].mIdx, w)
+        used += w
+      }
+      finalWidth.set(group[group.length - 1].mIdx, lineWidth - used)
+    } else {
+      for (const m of group) finalWidth.set(m.mIdx, m.naturalWidth)
+    }
+  }
+
+  // ── Phase 3: build MeasureLayout[] with justified widths ──────────────────
+
+  const lineX = new Map<number, number>()
+
+  for (const m of infos) {
+    const width = finalWidth.get(m.mIdx) ?? m.naturalWidth
+    const x     = lineX.get(m.lineIndex) ?? marginX
+    const yBase = marginY + m.lineIndex * rowHeight
 
     score.parts.forEach((part, partIndex) => {
       part.staves.forEach((staff) => {
-        const staffMeasure = staff.measures[mIdx]
+        const staffMeasure = staff.measures[m.mIdx]
         if (!staffMeasure) return
-        const staffClef     = resolveClef(staff.measures, mIdx, staff.clef)
-        const prevStaffClef = mIdx > 0 ? resolveClef(staff.measures, mIdx - 1, staff.clef) : null
-        const staffClefChanged = prevStaffClef !== null && prevStaffClef !== staffClef
+        const staffClef = resolveClef(staff.measures, m.mIdx, staff.clef)
         const y = yBase + partIndex * staveHeight
         layouts.push({
           measureId:          staffMeasure.id,
@@ -428,15 +485,14 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
           staveTopY:          y + VEXFLOW_HEADROOM_PX,
           staveY:             y,
           width,
-          measureIndex:       mIdx,
-          isLineStart,
-          showClef:           isLineStart || staffClefChanged,
+          measureIndex:       m.mIdx,
+          isLineStart:        m.isLineStart,
+          showClef:           m.showClefMap.get(staff.id) ?? m.isLineStart,
         })
       })
     })
 
-    currentX += width
-    measuresInLine++
+    lineX.set(m.lineIndex, x + width)
   }
 
   return layouts

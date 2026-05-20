@@ -141,6 +141,7 @@ function getRenderOptions(zoom: number, showLabels: boolean) {
     canvasWidth: Math.floor(DEFAULT_RENDER_OPTIONS.canvasWidth * zoom),
     staveWidth:  Math.floor(DEFAULT_RENDER_OPTIONS.staveWidth  * zoom),
     marginX:     showLabels ? LABEL_MARGIN_X : DEFAULT_RENDER_OPTIONS.marginX,
+    marginRight: DEFAULT_RENDER_OPTIONS.marginRight,
   }
 }
 
