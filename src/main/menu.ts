@@ -46,23 +46,19 @@ export function buildAppMenu(win: BrowserWindow): Menu {
         },
         { type: 'separator' },
         {
-          label: 'Export as PDF…',
-          accelerator: 'CmdOrCtrl+Shift+E',
-          click: () => send('menu:exportPdf')
+          label: 'Import',
+          submenu: [
+            { label: 'MIDI…',     click: () => send('menu:importMidi') },
+            { label: 'MusicXML…', click: () => send('menu:importMusicXml') },
+          ]
         },
         {
-          label: 'Export as MusicXML…',
-          accelerator: 'CmdOrCtrl+Shift+X',
-          click: () => send('menu:exportMusicXml')
-        },
-        {
-          label: 'Export as MIDI…',
-          accelerator: 'CmdOrCtrl+Shift+M',
-          click: () => send('menu:exportMidi')
-        },
-        {
-          label: 'Import MIDI…',
-          click: () => send('menu:importMidi')
+          label: 'Export',
+          submenu: [
+            { label: 'PDF…',      accelerator: 'CmdOrCtrl+Shift+E', click: () => send('menu:exportPdf') },
+            { label: 'MusicXML…', accelerator: 'CmdOrCtrl+Shift+X', click: () => send('menu:exportMusicXml') },
+            { label: 'MIDI…',     accelerator: 'CmdOrCtrl+Shift+M', click: () => send('menu:exportMidi') },
+          ]
         },
         { type: 'separator' },
         isMac ? { role: 'close' as const } : { role: 'quit' as const }

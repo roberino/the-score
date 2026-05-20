@@ -57,10 +57,7 @@ app.on('window-all-closed', () => {
 
 ipcMain.handle('file:open', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
-    filters: [
-      { name: 'Notation Files', extensions: ['notation'] },
-      { name: 'MusicXML', extensions: ['xml', 'mxl', 'musicxml'] }
-    ],
+    filters: [{ name: 'Notation Files', extensions: ['notation'] }],
     properties: ['openFile']
   })
   if (canceled || filePaths.length === 0) return null
@@ -127,4 +124,15 @@ ipcMain.handle('musicxml:export', async (_event, { xml }: { xml: string }) => {
 
   await writeFile(filePath, xml, 'utf8')
   return { success: true }
+})
+
+ipcMain.handle('musicxml:import', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    filters: [{ name: 'MusicXML Files', extensions: ['xml', 'musicxml'] }],
+    properties: ['openFile']
+  })
+  if (canceled || filePaths.length === 0) return null
+
+  const xml = await readFile(filePaths[0], 'utf-8')
+  return { xml, path: filePaths[0] }
 })

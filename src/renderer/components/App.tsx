@@ -8,7 +8,7 @@ import type { Score } from '@shared/score'
 import { scoreToMidi, midiToScore } from '../engine/midiEngine'
 import { loadSampler } from '../engine/samplerEngine'
 import { exportScorePdf } from '../engine/pdfExporter'
-import { scoreToMusicXml } from '../engine/musicxmlEngine'
+import { scoreToMusicXml, musicxmlToScore } from '../engine/musicxmlEngine'
 
 export function App(): JSX.Element {
   const { undo, redo, newScore, loadScore, saveScore, saveScoreAs, setZoom, zoom,
@@ -30,10 +30,11 @@ export function App(): JSX.Element {
       window.electronAPI.onMenuEvent('menu:zoomIn',  () => setZoom(zoom + 0.1)),
       window.electronAPI.onMenuEvent('menu:zoomOut', () => setZoom(zoom - 0.1)),
       window.electronAPI.onMenuEvent('menu:zoomFit', () => setZoom(1.0)),
-      window.electronAPI.onMenuEvent('menu:exportMidi',     () => handleExportMidi()),
-      window.electronAPI.onMenuEvent('menu:importMidi',     () => handleImportMidi()),
-      window.electronAPI.onMenuEvent('menu:exportPdf',      () => handleExportPdf()),
-      window.electronAPI.onMenuEvent('menu:exportMusicXml', () => handleExportMusicXml()),
+      window.electronAPI.onMenuEvent('menu:exportMidi',      () => handleExportMidi()),
+      window.electronAPI.onMenuEvent('menu:importMidi',      () => handleImportMidi()),
+      window.electronAPI.onMenuEvent('menu:exportPdf',       () => handleExportPdf()),
+      window.electronAPI.onMenuEvent('menu:exportMusicXml',  () => handleExportMusicXml()),
+      window.electronAPI.onMenuEvent('menu:importMusicXml',  () => handleImportMusicXml()),
     ]
     return () => cleanups.forEach(cleanup => cleanup())
   }, [zoom])   // re-register when zoom changes so closure captures latest value
@@ -95,6 +96,17 @@ export function App(): JSX.Element {
     const score = useAppStore.getState().score
     const xml = scoreToMusicXml(score)
     await window.electronAPI.exportMusicXml(xml)
+  }
+
+  async function handleImportMusicXml(): Promise<void> {
+    const result = await window.electronAPI.importMusicXml()
+    if (!result) return
+    try {
+      const score = musicxmlToScore(result.xml)
+      loadScore(score, result.path)
+    } catch {
+      console.error('Failed to import MusicXML file')
+    }
   }
 
   return (

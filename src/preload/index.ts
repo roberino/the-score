@@ -29,11 +29,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportMusicXml: (xml: string) =>
     ipcRenderer.invoke('musicxml:export', { xml }) as Promise<{ success: boolean }>,
 
+  importMusicXml: () =>
+    ipcRenderer.invoke('musicxml:import') as Promise<{ xml: string; path: string } | null>,
+
   // ── Menu events → renderer ─────────────────────────────────────────────────
   // The main process sends these when native menu items are clicked.
   onMenuEvent: (
     event: 'menu:new' | 'menu:open' | 'menu:save' | 'menu:saveAs' |
-           'menu:exportPdf' | 'menu:exportMusicXml' | 'menu:undo' | 'menu:redo' |
+           'menu:exportPdf' | 'menu:exportMusicXml' | 'menu:importMusicXml' | 'menu:undo' | 'menu:redo' |
            'menu:zoomIn' | 'menu:zoomOut' | 'menu:zoomFit' |
            'menu:exportMidi' | 'menu:importMidi',
     handler: () => void
