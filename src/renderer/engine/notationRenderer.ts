@@ -353,15 +353,12 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
   let measuresInLine      = 0
 
   for (let mIdx = 0; mIdx < measureCount; mIdx++) {
-    const measure      = firstStaff.measures[mIdx]
     const effectiveSig  = resolveTimeSig(firstStaff.measures, mIdx, score.timeSignature)
     const effectiveKey  = resolveKeySig(firstStaff.measures, mIdx, score.keySignature)
     const effectiveClef = resolveClef(firstStaff.measures, mIdx, firstStaff.clef)
     const prevKey       = mIdx > 0 ? resolveKeySig(firstStaff.measures, mIdx - 1, score.keySignature) : null
     const prevSig       = mIdx > 0 ? resolveTimeSig(firstStaff.measures, mIdx - 1, score.timeSignature) : null
     const prevClef      = mIdx > 0 ? resolveClef(firstStaff.measures, mIdx - 1, firstStaff.clef) : null
-    const events        = measure.voices[0]?.events ?? []
-
     const keyChanged  = prevKey  !== null && prevKey.fifths !== effectiveKey.fifths
     const sigChanged  = prevSig  !== null && !timeSigsEqual(effectiveSig, prevSig)
     const clefChanged = prevClef !== null && prevClef !== effectiveClef
@@ -370,13 +367,20 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
     const showClef_mid    = clefChanged
     const showKeySig_mid  = keyChanged
     const showTimeSig_mid = sigChanged
-    const width_mid = computeMeasureWidth(events, effectiveSig, showClef_mid, showKeySig_mid, showTimeSig_mid, effectiveKey)
 
     // Width if IS a line start (clef always; key if non-C; time if differs from score default)
     const showClef_start    = true
     const showKeySig_start  = effectiveKey.fifths !== 0
     const showTimeSig_start = !timeSigsEqual(effectiveSig, score.timeSignature) || mIdx === 0
-    const width_start = computeMeasureWidth(events, effectiveSig, showClef_start, showKeySig_start, showTimeSig_start, effectiveKey)
+
+    // Width must accommodate the densest part at this measure column — parts share stave width.
+    let width_mid   = MIN_STAVE_WIDTH
+    let width_start = MIN_STAVE_WIDTH
+    for (const part of score.parts) {
+      const pEvents = part.staves[0]?.measures[mIdx]?.voices[0]?.events ?? []
+      width_mid   = Math.max(width_mid,   computeMeasureWidth(pEvents, effectiveSig, showClef_mid,   showKeySig_mid,   showTimeSig_mid,   effectiveKey))
+      width_start = Math.max(width_start, computeMeasureWidth(pEvents, effectiveSig, showClef_start, showKeySig_start, showTimeSig_start, effectiveKey))
+    }
 
     let isLineStart: boolean
     let width: number
