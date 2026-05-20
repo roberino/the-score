@@ -574,6 +574,15 @@ function hasDirectChild(el: Element, tag: string): boolean {
   return Array.from(el.children).some(c => c.tagName.toLowerCase() === tag)
 }
 
+function xmlSlurPlacement(slurEl: Element): 'above' | 'below' | null {
+  const p = slurEl.getAttribute('placement')
+  if (p === 'above' || p === 'below') return p
+  const o = slurEl.getAttribute('orientation')
+  if (o === 'over')  return 'above'
+  if (o === 'under') return 'below'
+  return null
+}
+
 function parseMusicXmlPart(
   partEl: Element,
   scoreKeyFifths: number,
@@ -668,7 +677,7 @@ function parseMusicXmlPart(
 
         for (const slurEl of Array.from(el.querySelectorAll('notations slur'))) {
           const num = slurEl.getAttribute('number') ?? '1'
-          const plc = slurEl.getAttribute('placement') as 'above' | 'below' | null
+          const plc = xmlSlurPlacement(slurEl)
           if (slurEl.getAttribute('type') === 'start') {
             pendingSlurStarts.set(num, { fromNoteId: noteId, ...(plc ? { placement: plc } : {}) })
           } else if (slurEl.getAttribute('type') === 'stop') {
@@ -687,7 +696,7 @@ function parseMusicXmlPart(
         const firstEl = noteBuffer[0]
         for (const slurEl of Array.from(firstEl.querySelectorAll('notations slur'))) {
           const num = slurEl.getAttribute('number') ?? '1'
-          const plc = slurEl.getAttribute('placement') as 'above' | 'below' | null
+          const plc = xmlSlurPlacement(slurEl)
           if (slurEl.getAttribute('type') === 'start') {
             pendingSlurStarts.set(num, { fromNoteId: chordId, ...(plc ? { placement: plc } : {}) })
           } else if (slurEl.getAttribute('type') === 'stop') {

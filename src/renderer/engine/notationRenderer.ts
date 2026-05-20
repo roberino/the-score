@@ -282,7 +282,7 @@ function flagRightClearance(events: readonly NoteEvent[]): number {
 // ── Width calculation constants ───────────────────────────────────────────────
 
 const PX_PER_64TH_UNIT  = 3.2   // px per 64th-note unit (drives duration-based width)
-const MIN_PX_PER_NOTE   = 22    // minimum px per note head
+const MIN_PX_PER_NOTE   = 24    // minimum px per note head (extra room for accidentals/beams)
 const MIN_NOTE_AREA     = 80    // minimum note area for any measure
 const RIGHT_PADDING     = 24    // right margin inside stave
 const PREAMBLE_CLEF     = 30
@@ -309,7 +309,7 @@ function computeMeasureWidth(
     capacity * PX_PER_64TH_UNIT,
     events.length * MIN_PX_PER_NOTE,
     MIN_NOTE_AREA
-  )
+  ) + flagRightClearance(events)
 
   return Math.max(preamble + noteArea + RIGHT_PADDING, MIN_STAVE_WIDTH)
 }
@@ -855,8 +855,15 @@ function drawSlursForStaff(
 
     const x1 = fromSN.getAbsoluteX() + 4
     const x2 = toSN.getAbsoluteX()   + 4
-    const y1 = above ? fromStave.getYForLine(0) - 6 : fromStave.getYForLine(4) + 6
-    const y2 = above ? toStave.getYForLine(0)   - 6 : toStave.getYForLine(4)   + 6
+
+    const fromYs = fromSN.getYs()
+    const toYs   = toSN.getYs()
+    const y1 = above
+      ? Math.min(fromStave.getYForLine(0) - 6, Math.min(...fromYs) - 8)
+      : Math.max(fromStave.getYForLine(4) + 6, Math.max(...fromYs) + 8)
+    const y2 = above
+      ? Math.min(toStave.getYForLine(0) - 6, Math.min(...toYs) - 8)
+      : Math.max(toStave.getYForLine(4) + 6, Math.max(...toYs) + 8)
 
     const sameLine = fromStave === toStave
 
@@ -925,6 +932,37 @@ function drawHairpinWedge(
   ctx2d.stroke()
 }
 
+// Returns the Y coordinate below which a hairpin wedge should sit, scanning
+// the stem extents of all notes in the hairpin range so beamed stems don't
+// overlap the wedge.
+function hairpinY(
+  staff: Staff,
+  fromNoteId: string,
+  toNoteId: string,
+  staveNoteMap: Map<string, StaveNote>,
+  defaultY: number,
+): number {
+  let inRange = false
+  let done    = false
+  let maxY    = defaultY
+
+  for (const measure of staff.measures) {
+    if (done) break
+    for (const event of measure.voices[0]?.events ?? []) {
+      if (event.id === fromNoteId) inRange = true
+      if (inRange && event.type !== 'rest') {
+        const sn = staveNoteMap.get(event.id)
+        if (sn) {
+          try { maxY = Math.max(maxY, sn.getStemExtents().baseY + 8) } catch { /* no stem */ }
+        }
+      }
+      if (event.id === toNoteId) { done = true; break }
+    }
+  }
+
+  return maxY
+}
+
 function drawHairpinsForStaff(
   ctx2d: CanvasRenderingContext2D,
   staff: Staff,
@@ -949,7 +987,8 @@ function drawHairpinsForStaff(
     ctx2d.lineWidth   = 1.4
 
     if (fromStave === toStave) {
-      const y = fromStave.getYForLine(4) + HAIRPIN_BELOW_STAFF
+      const defaultY = fromStave.getYForLine(4) + HAIRPIN_BELOW_STAFF
+      const y = hairpinY(staff, hairpin.fromNoteId, hairpin.toNoteId, staveNoteMap, defaultY)
       drawHairpinWedge(ctx2d, x1, x2, y, isCrescendo, 0, 1)
     } else {
       // Split at each stave row boundary
@@ -960,11 +999,12 @@ function drawHairpinsForStaff(
       const total = seg1 + seg2
       const splitFrac = total > 0 ? seg1 / total : 0.5
 
-      const y1 = fromStave.getYForLine(4) + HAIRPIN_BELOW_STAFF
-      const y2 = toStave.getYForLine(4)   + HAIRPIN_BELOW_STAFF
+      const defaultY1 = fromStave.getYForLine(4) + HAIRPIN_BELOW_STAFF
+      const defaultY2 = toStave.getYForLine(4)   + HAIRPIN_BELOW_STAFF
+      const y1 = hairpinY(staff, hairpin.fromNoteId, hairpin.toNoteId, staveNoteMap, defaultY1)
 
       drawHairpinWedge(ctx2d, x1, rightEdge, y1, isCrescendo, 0, splitFrac)
-      drawHairpinWedge(ctx2d, leftEdge, x2,  y2, isCrescendo, splitFrac, 1)
+      drawHairpinWedge(ctx2d, leftEdge, x2, defaultY2, isCrescendo, splitFrac, 1)
     }
 
     ctx2d.restore()
