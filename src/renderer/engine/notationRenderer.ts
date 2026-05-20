@@ -8,6 +8,7 @@
 import {
   Renderer as VexRenderer,
   Stave,
+  StaveConnector,
   StaveNote,
   StaveTie,
   Voice as VexVoice,
@@ -22,7 +23,7 @@ import {
   type RenderContext
 } from 'vexflow'
 
-import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation } from '@shared/score'
+import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol } from '@shared/score'
 import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
@@ -570,6 +571,12 @@ function renderFromLayouts(
   const staveNoteMap   = new Map<string, StaveNote>()   // eventId → StaveNote
   const eventStaveMap  = new Map<string, Stave>()        // eventId → Stave
 
+  // Maps for group connector rendering: "partId:mIdx" → top/bottom stave of that part
+  const partStaveTop    = new Map<string, Stave>()   // first (topmost) stave per part per measure
+  const partStaveBottom = new Map<string, Stave>()   // last (bottommost) stave per part per measure
+  // Track which mIdx values are line starts
+  const mIdxIsLineStart = new Map<number, boolean>()
+
   for (const layout of layouts) {
     const entry = staffMap.get(layout.staffId)
     if (!entry) continue
@@ -600,6 +607,12 @@ function renderFromLayouts(
       eventStaveMap.set(e.id, stave)
     })
 
+    // Collect stave references for group connector drawing
+    const pKey = `${layout.partId}:${mIdx}`
+    if (!partStaveTop.has(pKey)) partStaveTop.set(pKey, stave)
+    partStaveBottom.set(pKey, stave)  // last stave written wins → bottommost
+    mIdxIsLineStart.set(mIdx, layout.isLineStart)
+
     // Part labels: right-aligned against the stave's left edge at system starts
     if (layout.isLineStart && score.showPartLabels && part.labelVisible) {
       const label = layout.measureIndex === 0 ? part.name : part.shortName
@@ -619,7 +632,10 @@ function renderFromLayouts(
     drawDirectives(ctx, layout, measure, staff, score, part === score.parts[0])
   }
 
-  // ── Second pass: ties and slurs ─────────────────────────────────────────────
+  // ── Second pass: group connectors (brackets, braces, barline spans) ─────────
+  drawGroupConnectors(ctx, score, partStaveTop, partStaveBottom, mIdxIsLineStart)
+
+  // ── Third pass: ties and slurs ──────────────────────────────────────────────
   const nativeCtx: CanvasRenderingContext2D | null =
     typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
 
@@ -629,6 +645,68 @@ function renderFromLayouts(
       if (nativeCtx) {
         drawSlursForStaff(nativeCtx, staff, staveNoteMap, eventStaveMap)
         drawHairpinsForStaff(nativeCtx, staff, staveNoteMap, eventStaveMap)
+      }
+    }
+  }
+}
+
+// ── Group connectors (brackets, braces, spanning barlines) ────────────────────
+
+function drawGroupConnectors(
+  ctx: RenderContext,
+  score: Score,
+  partStaveTop:    Map<string, Stave>,
+  partStaveBottom: Map<string, Stave>,
+  mIdxIsLineStart: Map<number, boolean>,
+): void {
+  // Collect groups: groupId → { symbol, partIds in score order }
+  const groupMap = new Map<string, { symbol: GroupSymbol; partIds: string[] }>()
+  for (const part of score.parts) {
+    if (!part.groupId) continue
+    if (!groupMap.has(part.groupId)) {
+      groupMap.set(part.groupId, { symbol: part.groupSymbol ?? 'bracket', partIds: [] })
+    }
+    groupMap.get(part.groupId)!.partIds.push(part.id)
+  }
+  if (groupMap.size === 0) return
+
+  for (const [mIdx, isLineStart] of mIdxIsLineStart.entries()) {
+    for (const { symbol, partIds } of groupMap.values()) {
+      if (partIds.length < 2) continue   // nothing to connect
+
+      const topStave    = partStaveTop.get(`${partIds[0]}:${mIdx}`)
+      const bottomStave = partStaveBottom.get(`${partIds[partIds.length - 1]}:${mIdx}`)
+      if (!topStave || !bottomStave) continue
+
+      // Barline spanning right edge of every measure
+      const measure    = score.parts.find(p => p.id === partIds[0])?.staves[0]?.measures[mIdx]
+      const barlineType = measure?.barline
+      const rightType = barlineType === 'final' || barlineType === 'repeat-end'
+        ? StaveConnector.type.BOLD_DOUBLE_RIGHT
+        : barlineType === 'double'
+          ? StaveConnector.type.THIN_DOUBLE
+          : StaveConnector.type.SINGLE_RIGHT
+
+      new StaveConnector(topStave, bottomStave)
+        .setType(rightType)
+        .setContext(ctx)
+        .draw()
+
+      if (isLineStart) {
+        // Bracket or brace on the left
+        const leftSymType = symbol === 'brace'
+          ? StaveConnector.type.BRACE
+          : StaveConnector.type.BRACKET
+        new StaveConnector(topStave, bottomStave)
+          .setType(leftSymType)
+          .setContext(ctx)
+          .draw()
+
+        // Thin barline on the left connecting all staves in the group
+        new StaveConnector(topStave, bottomStave)
+          .setType(StaveConnector.type.SINGLE_LEFT)
+          .setContext(ctx)
+          .draw()
       }
     }
   }

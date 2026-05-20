@@ -131,6 +131,8 @@ export interface Staff {
   readonly hairpins?: readonly Hairpin[]
 }
 
+export type GroupSymbol = 'bracket' | 'brace'
+
 export interface Part {
   readonly id: string
   readonly name: string              // e.g. "Violin I"
@@ -142,6 +144,8 @@ export interface Part {
   readonly volume: number            // 0–1
   readonly muted: boolean
   readonly labelVisible: boolean     // show label on score
+  readonly groupId?: string          // parts sharing the same groupId are in one bracket/brace group
+  readonly groupSymbol?: GroupSymbol // visual symbol drawn for the group (bracket or brace)
 }
 
 export interface ScoreMetadata {

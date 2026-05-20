@@ -815,22 +815,50 @@ export function musicxmlToScore(xml: string): Score {
     createdAt: now, updatedAt: now,
   }
 
-  // ── Part info from <part-list> ────────────────────────────────────────────
+  // ── Part info and groupings from <part-list> ─────────────────────────────
   interface PartInfo { name: string; shortName: string; midiProgram: number; midiChannel: number; volume: number }
-  const partInfoMap = new Map<string, PartInfo>()
-  for (const sp of Array.from(doc.querySelectorAll('part-list score-part'))) {
-    const id        = sp.getAttribute('id') ?? ''
-    const name      = sp.querySelector('part-name')?.textContent?.trim() ?? 'Part'
-    const shortName = sp.querySelector('part-abbreviation')?.textContent?.trim() ?? name.slice(0, 4)
-    const rawProg   = parseInt(sp.querySelector('midi-instrument midi-program')?.textContent ?? '1')
-    const rawChan   = parseInt(sp.querySelector('midi-instrument midi-channel')?.textContent ?? '1')
-    const rawVol    = parseInt(sp.querySelector('midi-instrument volume')?.textContent ?? '80')
-    partInfoMap.set(id, {
-      name, shortName,
-      midiProgram: Math.max(0, Math.min(127, rawProg - 1)),
-      midiChannel: Math.max(1, Math.min(16, rawChan)),
-      volume: Math.max(0, Math.min(1, rawVol / 100)),
-    })
+  const partInfoMap  = new Map<string, PartInfo>()
+  // partGroupMap maps MusicXML part id → { groupId, groupSymbol }
+  const partGroupMap = new Map<string, { groupId: string; groupSymbol: 'bracket' | 'brace' }>()
+
+  const partListEl = doc.querySelector('part-list')
+  if (partListEl) {
+    // Active part-groups keyed by their number attribute
+    const activeGroups = new Map<string, { groupId: string; groupSymbol: 'bracket' | 'brace' }>()
+
+    for (const child of Array.from(partListEl.children)) {
+      const tag = child.tagName.toLowerCase()
+
+      if (tag === 'part-group') {
+        const type   = child.getAttribute('type')
+        const number = child.getAttribute('number') ?? '1'
+        if (type === 'start') {
+          const sym = child.querySelector('group-symbol')?.textContent?.trim()
+          const groupSymbol: 'bracket' | 'brace' = sym === 'brace' ? 'brace' : 'bracket'
+          activeGroups.set(number, { groupId: uuid(), groupSymbol })
+        } else if (type === 'stop') {
+          activeGroups.delete(number)
+        }
+      } else if (tag === 'score-part') {
+        const id = child.getAttribute('id') ?? ''
+        const name      = child.querySelector('part-name')?.textContent?.trim() ?? 'Part'
+        const shortName = child.querySelector('part-abbreviation')?.textContent?.trim() ?? name.slice(0, 4)
+        const rawProg   = parseInt(child.querySelector('midi-instrument midi-program')?.textContent ?? '1')
+        const rawChan   = parseInt(child.querySelector('midi-instrument midi-channel')?.textContent ?? '1')
+        const rawVol    = parseInt(child.querySelector('midi-instrument volume')?.textContent ?? '80')
+        partInfoMap.set(id, {
+          name, shortName,
+          midiProgram: Math.max(0, Math.min(127, rawProg - 1)),
+          midiChannel: Math.max(1, Math.min(16, rawChan)),
+          volume: Math.max(0, Math.min(1, rawVol / 100)),
+        })
+        // Assign the first active group to this part (most MusicXML only has one)
+        for (const group of activeGroups.values()) {
+          partGroupMap.set(id, group)
+          break
+        }
+      }
+    }
   }
 
   // ── Score-level key / time / tempo from first part's first measure ────────
@@ -883,7 +911,8 @@ export function musicxmlToScore(xml: string): Score {
     const chromatic = transposeEl ? parseInt(transposeEl.querySelector('chromatic')?.textContent ?? '0') : 0
     const transposeSemitones = transposeEl ? -chromatic : 0
 
-    const staff = parseMusicXmlPart(partEl, scoreKeyFifths, scoreKeyMode, scoreTsNum, scoreTsDen)
+    const staff    = parseMusicXmlPart(partEl, scoreKeyFifths, scoreKeyMode, scoreTsNum, scoreTsDen)
+    const groupInfo = partGroupMap.get(partId)
 
     parts.push({
       id: uuid(),
@@ -896,6 +925,7 @@ export function musicxmlToScore(xml: string): Score {
       volume: info.volume,
       muted: false,
       labelVisible: true,
+      ...(groupInfo ? { groupId: groupInfo.groupId, groupSymbol: groupInfo.groupSymbol } : {}),
     })
   }
 
