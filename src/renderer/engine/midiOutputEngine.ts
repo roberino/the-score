@@ -159,7 +159,7 @@ class MidiOutputEngine {
         output.send([0xC0 | channel, pgm], ts)
       }, 0)
 
-      const schedule       = buildFlatSchedule(staff, sequence, tempoStaff, bpm)
+      const schedule       = buildFlatSchedule(staff, sequence, tempoStaff, bpm, score.timeSignature)
       const hairpinFactors = buildHairpinFactorMap(staff.hairpins, schedule)
 
       for (const fe of schedule) {

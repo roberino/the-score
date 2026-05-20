@@ -427,30 +427,37 @@ export interface FlatScheduleEntry {
 
 // Builds a flat, time-ordered schedule of events for one staff voice,
 // honouring the playback sequence (repeats) and merging tied note durations.
+// Each measure boundary snaps time forward to the full measure duration so that
+// partially-filled measures (notes without explicit rests) still leave the
+// correct silence before the next measure begins.
 export function buildFlatSchedule(
   staff: Staff,
   sequence: number[],
   tempoStaff: Staff,
   baseBpm: number,
+  baseTimeSig: TimeSignature,
 ): FlatScheduleEntry[] {
-  // Flatten events across all measures in playback order
-  const raw: { event: NoteEvent; mIdx: number }[] = []
+  const result: FlatScheduleEntry[] = []
+  let t = 0
+
   for (const mIdx of sequence) {
     const measure = staff.measures[mIdx]
     if (!measure) continue
-    for (const event of measure.voices[0]?.events ?? []) {
-      raw.push({ event, mIdx })
-    }
-  }
 
-  // Compute absolute start times
-  const result: FlatScheduleEntry[] = []
-  let t = 0
-  for (const { event, mIdx } of raw) {
-    const bpm = resolveDirectiveTempo(tempoStaff.measures, mIdx, baseBpm)
-    const dur = eventToSeconds(event, bpm)
-    result.push({ event, mIdx, startSec: t, playDurSec: dur, skip: false })
-    t += dur
+    const bpm     = resolveDirectiveTempo(tempoStaff.measures, mIdx, baseBpm)
+    const timeSig = resolveTimeSig(staff.measures, mIdx, baseTimeSig)
+    // Measure duration in seconds: capacity is in 64th-note units; 1 quarter = 16 units
+    const measureDurSec = (measureCapacityUnits(timeSig) / 16) * (60 / bpm)
+    const measureStartT = t
+
+    for (const event of measure.voices[0]?.events ?? []) {
+      const dur = eventToSeconds(event, bpm)
+      result.push({ event, mIdx, startSec: t, playDurSec: dur, skip: false })
+      t += dur
+    }
+
+    // Snap to measure boundary so unfilled beats don't compress subsequent measures
+    t = measureStartT + measureDurSec
   }
 
   // Merge tied note chains: accumulate duration into the first note, mark successors skip
