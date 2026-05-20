@@ -303,6 +303,7 @@ export function ScoreCanvas(): JSX.Element {
     pendingResize, resizeError, resizeNote, confirmResize, cancelResize, clearResizeError,
     insertMeasure,
     deleteMeasure,
+    addHairpin,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -1517,6 +1518,24 @@ export function ScoreCanvas(): JSX.Element {
                     }}
                   >
                     {slurPendingId ? 'Slur…' : 'Slur'}
+                  </button>
+                </>
+              )}
+              {selectedNoteIds.length >= 2 && (
+                <>
+                  <button
+                    onClick={() => addHairpin('crescendo')}
+                    title="Add crescendo"
+                    style={{ padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc', background: 'none', cursor: 'pointer' }}
+                  >
+                    cresc
+                  </button>
+                  <button
+                    onClick={() => addHairpin('decrescendo')}
+                    title="Add decrescendo"
+                    style={{ padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc', background: 'none', cursor: 'pointer' }}
+                  >
+                    dim
                   </button>
                 </>
               )}
