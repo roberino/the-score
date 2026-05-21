@@ -7,6 +7,7 @@ import {
   DEFAULT_RENDER_OPTIONS,
   LABEL_MARGIN_X,
   HEADING_MARGIN_Y,
+  STAVE_HEIGHT_PX,
   headingFieldBounds,
   type MeasureLayout,
   type HeadingFieldBound,
@@ -216,6 +217,82 @@ function HeadingEditor({
   )
 }
 
+// ── Lyric editor input overlay ────────────────────────────────────────────────
+
+interface LyricEditorInputProps {
+  currentLyric: string
+  left: number
+  top: number
+  onCommit: (lyric: string | undefined) => void
+  onAdvance: () => void
+  onBack: () => void
+  onExit: () => void
+}
+
+function LyricEditorInput({
+  currentLyric, left, top, onCommit, onAdvance, onBack, onExit,
+}: LyricEditorInputProps): JSX.Element {
+  const committedRef = useRef(false)
+
+  const doCommit = (value: string) => {
+    committedRef.current = true
+    const trimmed = value.trim()
+    onCommit(trimmed || undefined)
+  }
+
+  return (
+    <input
+      autoFocus
+      defaultValue={currentLyric}
+      style={{
+        position: 'absolute',
+        left: left - 32,
+        top:  top - 14,
+        width: 64,
+        font: '12px serif',
+        textAlign: 'center',
+        background: 'rgba(255,255,255,0.95)',
+        border: '1px solid #0e639c',
+        borderRadius: 2,
+        outline: 'none',
+        padding: '1px 4px',
+        boxSizing: 'border-box' as const,
+        color: '#111',
+        zIndex: 200,
+      }}
+      onBlur={e => {
+        if (!committedRef.current) {
+          const trimmed = e.target.value.trim()
+          onCommit(trimmed || undefined)
+        }
+      }}
+      onKeyDown={e => {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault()
+          doCommit(e.currentTarget.value)
+          onAdvance()
+        } else if (e.key === '-') {
+          e.preventDefault()
+          doCommit(e.currentTarget.value + '-')
+          onAdvance()
+        } else if (e.key === 'Tab') {
+          e.preventDefault()
+          doCommit(e.currentTarget.value)
+          if (e.shiftKey) onBack(); else onAdvance()
+        } else if (e.key === 'Backspace' && e.currentTarget.value === '') {
+          e.preventDefault()
+          onCommit(undefined)
+          onBack()
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          committedRef.current = true
+          onExit()
+        }
+      }}
+    />
+  )
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface PickerState {
@@ -312,6 +389,7 @@ export function ScoreCanvas(): JSX.Element {
     setNoteDynamic,
     addVolta,
     removeVolta,
+    lyricCursorNoteId, setLyricCursor,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -376,9 +454,10 @@ export function ScoreCanvas(): JSX.Element {
       cursorMeasureId
         ? { cursorMeasureId, cursorBeatPosition, totalCapacityUnits: capacity }
         : null,
-      selectedMeasureId
+      selectedMeasureId,
+      lyricCursorNoteId
     )
-  }, [score, zoom, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId])
+  }, [score, zoom, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId])
 
   // ── Note entry helpers ──────────────────────────────────────────────────────
 
@@ -725,6 +804,79 @@ export function ScoreCanvas(): JSX.Element {
     return null
   }, [score])
 
+  // ── Lyric mode helpers ──────────────────────────────────────────────────────
+
+  const getPitchedEventIds = useCallback((): string[] => {
+    const ids: string[] = []
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        for (const measure of staff.measures) {
+          const voice = measure.voices[0]
+          if (!voice) continue
+          for (const ev of voice.events) {
+            if (ev.type !== 'rest') ids.push(ev.id)
+          }
+        }
+      }
+    }
+    return ids
+  }, [score])
+
+  const commitLyric = useCallback((noteId: string, lyric: string | undefined) => {
+    dispatch({ type: 'SET_LYRIC', noteId, lyric })
+  }, [dispatch])
+
+  const advanceLyricCursor = useCallback(() => {
+    const ids = getPitchedEventIds()
+    const idx = lyricCursorNoteId ? ids.indexOf(lyricCursorNoteId) : -1
+    if (idx !== -1 && idx + 1 < ids.length) {
+      setLyricCursor(ids[idx + 1])
+    } else {
+      setInputMode('select')
+    }
+  }, [lyricCursorNoteId, getPitchedEventIds, setLyricCursor, setInputMode])
+
+  const retreatLyricCursor = useCallback(() => {
+    const ids = getPitchedEventIds()
+    const idx = lyricCursorNoteId ? ids.indexOf(lyricCursorNoteId) : -1
+    if (idx > 0) setLyricCursor(ids[idx - 1])
+  }, [lyricCursorNoteId, getPitchedEventIds, setLyricCursor])
+
+  const getEventLyric = useCallback((noteId: string): string => {
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        for (const measure of staff.measures) {
+          for (const voice of measure.voices) {
+            const ev = voice.events.find(e => e.id === noteId)
+            if (ev && ev.type !== 'rest') return (ev as any).lyric ?? ''
+          }
+        }
+      }
+    }
+    return ''
+  }, [score])
+
+  const lyricInputPos = useMemo(() => {
+    if (!lyricCursorNoteId || inputMode !== 'lyric') return null
+    const noteX = notePositionsRef.current.get(lyricCursorNoteId)
+    if (noteX === undefined) return null
+    const options = getRenderOptions(zoom, score.showPartLabels)
+    const layouts = computeLayout(score, options)
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        for (const measure of staff.measures) {
+          for (const voice of measure.voices) {
+            if (voice.events.some(e => e.id === lyricCursorNoteId)) {
+              const layout = layouts.find(l => l.measureId === measure.id && l.staffId === staff.id)
+              if (layout) return { x: noteX, y: layout.staveTopY + STAVE_HEIGHT_PX + 20 }
+            }
+          }
+        }
+      }
+    }
+    return null
+  }, [lyricCursorNoteId, inputMode, score, zoom])
+
   useEffect(() => {
     if (!resizeError) return
     const t = setTimeout(() => clearResizeError(), 3000)
@@ -951,6 +1103,7 @@ export function ScoreCanvas(): JSX.Element {
         if (e.key === 's' || e.key === 'S') { setInputMode('select'); return }
         if (e.key === 'e' || e.key === 'E') { setInputMode('eraser'); return }
         if (e.key === 't' || e.key === 'T') { setInputMode('text');   return }
+        if (e.key === 'l' || e.key === 'L') { setInputMode('lyric');  return }
         if (e.key === 'k' || e.key === 'K') { toggleKeyboard();       return }
       }
 
@@ -1547,6 +1700,7 @@ export function ScoreCanvas(): JSX.Element {
     : inputMode === 'rest'   ? 'cell'
     : inputMode === 'eraser' ? 'pointer'
     : inputMode === 'text'   ? 'text'
+    : inputMode === 'lyric'  ? 'text'
     : 'default'
 
   return (
@@ -1565,6 +1719,18 @@ export function ScoreCanvas(): JSX.Element {
           style={{ cursor: cursorStyle, display: 'block' }}
         />
         <TextBoxLayer zoom={zoom} />
+        {inputMode === 'lyric' && lyricCursorNoteId && lyricInputPos && (
+          <LyricEditorInput
+            key={lyricCursorNoteId}
+            currentLyric={getEventLyric(lyricCursorNoteId)}
+            left={lyricInputPos.x}
+            top={lyricInputPos.y}
+            onCommit={lyric => commitLyric(lyricCursorNoteId, lyric)}
+            onAdvance={advanceLyricCursor}
+            onBack={retreatLyricCursor}
+            onExit={() => setInputMode('select')}
+          />
+        )}
         {editingHeading && (
           <HeadingEditor
             bound={editingHeading}

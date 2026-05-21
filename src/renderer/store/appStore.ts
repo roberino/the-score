@@ -13,7 +13,7 @@ let _playback: PlaybackController | null = null
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type InputMode = 'select' | 'note' | 'rest' | 'eraser' | 'text'
+export type InputMode = 'select' | 'note' | 'rest' | 'eraser' | 'text' | 'lyric'
 
 export interface AppState {
   // Score data
@@ -39,6 +39,7 @@ export interface AppState {
   isDotted: boolean
   primedAccidental: Accidental | null
   activeVoice: 0 | 1
+  lyricCursorNoteId: string | null
   cursorMeasureId: string | null
   cursorBeatPosition: number          // in 64th-note units
   lastEnteredPitch: Pitch | null
@@ -99,6 +100,7 @@ export interface AppState {
   clearResizeError: () => void
   setPrimedAccidental: (acc: Accidental | null) => void
   setActiveVoice: (voice: 0 | 1) => void
+  setLyricCursor: (noteId: string | null) => void
   setCursor: (measureId: string | null, beatPosition: number) => void
   setLastEnteredPitch: (pitch: Pitch | null) => void
   moveCursorToFirstAvailable: () => void
@@ -139,6 +141,7 @@ export const useAppStore = create<AppState>()(
     isDotted: false,
     primedAccidental: null,
     activeVoice: 0,
+    lyricCursorNoteId: null,
     cursorMeasureId: null,
     cursorBeatPosition: 0,
     lastEnteredPitch: null,
@@ -264,12 +267,50 @@ export const useAppStore = create<AppState>()(
           s.cursorMeasureId = null
           s.cursorBeatPosition = 0
         }
+        if (mode !== 'lyric') {
+          s.lyricCursorNoteId = null
+        }
       })
       if (mode === 'note' || mode === 'rest') {
         const { cursorMeasureId } = get()
         if (!cursorMeasureId) get().moveCursorToFirstAvailable()
       }
+      if (mode === 'lyric') {
+        const { score, selectedNoteId } = get()
+        // Start at the currently selected note if it's pitched
+        if (selectedNoteId) {
+          for (const part of score.parts) {
+            for (const staff of part.staves) {
+              for (const measure of staff.measures) {
+                for (const voice of measure.voices) {
+                  const ev = voice.events.find(e => e.id === selectedNoteId)
+                  if (ev && ev.type !== 'rest') {
+                    set(s => { s.lyricCursorNoteId = selectedNoteId })
+                    return
+                  }
+                }
+              }
+            }
+          }
+        }
+        // Fall back to first pitched event in voice 0 of first part
+        const firstId = (() => {
+          for (const part of score.parts) {
+            for (const staff of part.staves) {
+              for (const measure of staff.measures) {
+                const ev = measure.voices[0]?.events.find(e => e.type !== 'rest')
+                if (ev) return ev.id
+              }
+            }
+            break
+          }
+          return null
+        })()
+        if (firstId) set(s => { s.lyricCursorNoteId = firstId })
+      }
     },
+
+    setLyricCursor: (noteId) => set(s => { s.lyricCursorNoteId = noteId }),
 
     setZoom: (zoom) => set(s => { s.zoom = Math.max(0.25, Math.min(4, zoom)) }),
     setSelectedNote: (id) => set(s => {

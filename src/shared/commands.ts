@@ -65,6 +65,7 @@ export type Command =
   | { type: 'ADD_VOLTA';    volta: Volta }
   | { type: 'REMOVE_VOLTA'; voltaId: string }
   | { type: 'ADD_VOICE';    partId: string; staffId: string; measureId: string; voiceId: string }
+  | { type: 'SET_LYRIC';   noteId: string; lyric: string | undefined }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -899,6 +900,23 @@ export function applyCommand(score: Score, command: Command): Score {
         if (!measure) break
         if (measure.voices.length < 2) {
           ;(measure.voices as any[]).push({ id: command.voiceId, events: [] })
+        }
+        break
+      }
+
+      case 'SET_LYRIC': {
+        for (const part of draft.parts as any[]) {
+          for (const staff of part.staves) {
+            for (const measure of staff.measures) {
+              for (const voice of measure.voices) {
+                const event = (voice.events as any[]).find((e: any) => e.id === command.noteId)
+                if (event && event.type !== 'rest') {
+                  if (command.lyric !== undefined) event.lyric = command.lyric
+                  else delete event.lyric
+                }
+              }
+            }
+          }
         }
         break
       }

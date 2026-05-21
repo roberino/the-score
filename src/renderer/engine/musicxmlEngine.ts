@@ -284,6 +284,7 @@ function noteLines(
   slurMap?: Map<string, SlurNotation>,
   tupletCtx?: TupletCtx,
   voiceNum = 1,
+  prevLyricHyphen = false,
 ): string[] {
   const lines: string[] = []
   const tupletType: 'start' | 'stop' | undefined =
@@ -325,6 +326,12 @@ function noteLines(
     if (beamEl) lines.push(`${indent(lvl + 1)}${beamEl}`)
     if (tupletCtx) lines.push(...timeMod(tupletCtx.actual, tupletCtx.normal, n.duration, lvl + 1))
     if (notEl)  lines.push(`${indent(lvl + 1)}${notEl}`)
+    if (n.lyric) {
+      const isMidWord = n.lyric.endsWith('-')
+      const text      = isMidWord ? n.lyric.slice(0, -1) : n.lyric
+      const syllabic  = prevLyricHyphen ? (isMidWord ? 'middle' : 'end') : (isMidWord ? 'begin' : 'single')
+      lines.push(`${indent(lvl + 1)}<lyric number="1"><syllabic>${syllabic}</syllabic><text>${esc(text)}</text></lyric>`)
+    }
     lines.push(`${indent(lvl)}</note>`)
 
   } else if (event.type === 'rest') {
@@ -367,6 +374,13 @@ function noteLines(
       if (dotEls) lines.push(`${indent(lvl + 1)}${dotEls}`)
       if (accEl)  lines.push(`${indent(lvl + 1)}${accEl}`)
       if (notEl)  lines.push(`${indent(lvl + 1)}${notEl}`)
+      if (i === 0 && (c as any).lyric) {
+        const lyric     = (c as any).lyric as string
+        const isMidWord = lyric.endsWith('-')
+        const text      = isMidWord ? lyric.slice(0, -1) : lyric
+        const syllabic  = prevLyricHyphen ? (isMidWord ? 'middle' : 'end') : (isMidWord ? 'begin' : 'single')
+        lines.push(`${indent(lvl + 1)}<lyric number="1"><syllabic>${syllabic}</syllabic><text>${esc(text)}</text></lyric>`)
+      }
       lines.push(`${indent(lvl)}</note>`)
     }
   }
@@ -466,6 +480,7 @@ function partLines(score: Score, partIdx: number): string[] {
   const lines: string[] = [`  <part id="${partId}">`]
   const slurMap   = buildSlurMap(staff)
   const hairpinMaps = buildHairpinMaps(staff)
+  const prevLyricHyphenByVoice = new Map<number, boolean>()
 
   const voltas = score.voltas ?? []
 
@@ -549,7 +564,9 @@ function partLines(score: Score, partIdx: number): string[] {
             `${indent(lvl + 1)}</direction>`,
           )
         }
-        lines.push(...noteLines(event, beamState, lvl + 1, slurMap, tupletCtxMap.get(event.id), voiceNum))
+        const prevHyphen = prevLyricHyphenByVoice.get(voiceNum) ?? false
+        lines.push(...noteLines(event, beamState, lvl + 1, slurMap, tupletCtxMap.get(event.id), voiceNum, prevHyphen))
+        prevLyricHyphenByVoice.set(voiceNum, ((event as any).lyric as string | undefined)?.endsWith('-') ?? false)
         if (hairpinMaps.stops.has(event.id)) {
           lines.push(
             `      <direction placement="below">`,
@@ -811,6 +828,18 @@ function parseMusicXmlPart(
           id: chordId, type: 'chord', pitches: noteBuffer.map(xmlPitch),
           duration: xmlDuration(firstEl), dots: xmlDots(firstEl),
           articulations: xmlArticulations(firstEl),
+        }
+      }
+
+      // Parse lyric (only for pitched notes/chords, not rests)
+      if (!isRest) {
+        const lyricEl = noteBuffer[0].querySelector('lyric')
+        if (lyricEl) {
+          const syllabic = lyricEl.querySelector('syllabic')?.textContent?.trim() ?? 'single'
+          const text     = lyricEl.querySelector('text')?.textContent?.trim() ?? ''
+          if (text) {
+            ;(event as any).lyric = (syllabic === 'begin' || syllabic === 'middle') ? text + '-' : text
+          }
         }
       }
 

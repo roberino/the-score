@@ -40,6 +40,7 @@ export interface Note {
   readonly articulations: Articulation[]
   readonly tuplet?: TupletInfo
   readonly dynamic?: DynamicLevel
+  readonly lyric?: string
 }
 
 export interface Rest {
@@ -60,6 +61,7 @@ export interface Chord {
   readonly articulations: Articulation[]
   readonly tuplet?: TupletInfo
   readonly dynamic?: DynamicLevel
+  readonly lyric?: string
 }
 
 export type NoteEvent = Note | Rest | Chord

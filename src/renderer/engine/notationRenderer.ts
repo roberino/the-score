@@ -529,7 +529,8 @@ export function renderScore(
   options: RenderOptions = DEFAULT_RENDER_OPTIONS,
   selectedNoteIds: ReadonlySet<string> = new Set(),
   cursor: RenderCursorOptions | null = null,
-  selectedMeasureId: string | null = null
+  selectedMeasureId: string | null = null,
+  lyricCursorNoteId: string | null = null
 ): Map<string, number> {
   const notePositions = new Map<string, number>()
   const renderer = new VexRenderer(canvas, VexRenderer.Backends.CANVAS)
@@ -553,6 +554,9 @@ export function renderScore(
 
   renderFromLayouts(ctx, score, layouts, selectedNoteIds, notePositions)
   drawHeadings(ctx, score, options)
+
+  const nativeCtx = canvas.getContext('2d')
+  if (nativeCtx) drawAllLyrics(nativeCtx, score, notePositions, layouts, lyricCursorNoteId)
 
   if (selectedMeasureId) {
     drawMeasureHighlight(canvas, selectedMeasureId, layouts)
@@ -1332,8 +1336,82 @@ function drawHairpinsForStaff(
 
 // ── Cursor overlay ────────────────────────────────────────────────────────────
 
-const LINE_SPACING_PX  = 10
-const STAVE_HEIGHT_PX  = 4 * LINE_SPACING_PX
+const LINE_SPACING_PX       = 10
+export const STAVE_HEIGHT_PX = 4 * LINE_SPACING_PX
+const LYRIC_Y_OFFSET         = 60   // px below staveTopY (20px below bottom staff line)
+
+// ── Lyric rendering ───────────────────────────────────────────────────────────
+
+function drawAllLyrics(
+  ctx2d: CanvasRenderingContext2D,
+  score: Score,
+  notePositions: Map<string, number>,
+  layouts: MeasureLayout[],
+  lyricCursorNoteId: string | null,
+): void {
+  // Index layouts by measureId for fast staveTopY lookup
+  const measureLayoutMap = new Map<string, MeasureLayout>()
+  for (const l of layouts) {
+    if (!measureLayoutMap.has(l.measureId)) measureLayoutMap.set(l.measureId, l)
+  }
+
+  ctx2d.save()
+  ctx2d.font = '12px serif'
+  ctx2d.textBaseline = 'alphabetic'
+
+  for (const part of score.parts) {
+    for (const staff of part.staves) {
+      // Collect all voice-0 pitched events across all measures with their canvas positions
+      const entries: { id: string; lyric: string | undefined; x: number; lyricY: number }[] = []
+
+      for (const measure of staff.measures) {
+        const voice = measure.voices[0]
+        if (!voice) continue
+        const layout = measureLayoutMap.get(measure.id)
+        if (!layout) continue
+        const lyricY = layout.staveTopY + LYRIC_Y_OFFSET
+
+        for (const event of voice.events) {
+          if (event.type === 'rest') continue
+          const x = notePositions.get(event.id)
+          if (x === undefined) continue
+          entries.push({ id: event.id, lyric: (event as any).lyric, x, lyricY })
+        }
+      }
+
+      // Draw syllables, hyphens, and cursor underline
+      for (let i = 0; i < entries.length; i++) {
+        const { id, lyric, x, lyricY } = entries[i]
+        const isMidWord = lyric?.endsWith('-') ?? false
+
+        if (id === lyricCursorNoteId) {
+          ctx2d.strokeStyle = '#0e639c'
+          ctx2d.lineWidth   = 1.5
+          ctx2d.beginPath()
+          ctx2d.moveTo(x - 12, lyricY + 3)
+          ctx2d.lineTo(x + 12, lyricY + 3)
+          ctx2d.stroke()
+        } else if (lyric) {
+          ctx2d.textAlign  = 'center'
+          ctx2d.fillStyle  = '#222'
+          ctx2d.fillText(isMidWord ? lyric.slice(0, -1) : lyric, x, lyricY)
+        }
+
+        if (isMidWord && i + 1 < entries.length) {
+          const next = entries[i + 1]
+          const midX = (x + next.x) / 2
+          ctx2d.textAlign = 'center'
+          ctx2d.fillStyle = '#555'
+          ctx2d.font      = '10px serif'
+          ctx2d.fillText('-', midX, lyricY)
+          ctx2d.font      = '12px serif'
+        }
+      }
+    }
+  }
+
+  ctx2d.restore()
+}
 
 function drawMeasureHighlight(
   canvas: HTMLCanvasElement,

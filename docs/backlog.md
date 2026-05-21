@@ -10,7 +10,7 @@ Features supported by the MusicXML standard that are not yet implemented in the 
 |----------|---------|-------------|--------|
 | High | Volta brackets | First/second endings (1., 2., etc.) — import, render, playback, export | Complete |
 | High | Multiple voices | Two independent voices per staff (e.g., soprano+alto on treble) — data model, rendering, editing | Complete |
-| High | Lyrics | Syllable-by-syllable text attached to notes, including melisma slurs | Not Started |
+| High | Lyrics | Syllable-by-syllable text attached to notes, including melisma slurs | Complete |
 | High | Grand staff / multi-stave parts | Single instrument (piano) spanning multiple staves linked by brace | Not Started |
 | High | Ottava lines | 8va / 8vb / 15ma transposition lines — render and affect playback pitch | Not Started |
 | High | Chord symbols / harmony | Chord names above the staff (C, Dm7, G/B, etc.) | Not Started |
