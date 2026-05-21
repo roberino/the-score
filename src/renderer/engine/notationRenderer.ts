@@ -19,11 +19,12 @@ import {
   Accidental as VexAccidental,
   Articulation as VexArticulation,
   Ornament,
+  Tuplet as VexTuplet,
   BarlineType,
   type RenderContext
 } from 'vexflow'
 
-import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol } from '@shared/score'
+import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo } from '@shared/score'
 import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
@@ -577,6 +578,17 @@ function renderFromLayouts(
   // Track which mIdx values are line starts
   const mIdxIsLineStart = new Map<number, boolean>()
 
+  // Whether any group connector will be drawn (bracket or brace spanning 2+ parts).
+  // The bracket glyph extends ~17px left of stave.getX(), so labels need extra clearance.
+  const hasGroupConnector = (() => {
+    const counts = new Map<string, number>()
+    for (const part of score.parts) {
+      if (part.groupId) counts.set(part.groupId, (counts.get(part.groupId) ?? 0) + 1)
+    }
+    for (const n of counts.values()) if (n >= 2) return true
+    return false
+  })()
+
   for (const layout of layouts) {
     const entry = staffMap.get(layout.staffId)
     if (!entry) continue
@@ -623,7 +635,7 @@ function renderFromLayouts(
         nativeCtx.font = layout.measureIndex === 0 ? '13px sans-serif' : '11px sans-serif'
         nativeCtx.fillStyle = '#222'
         nativeCtx.textAlign = 'right'
-        nativeCtx.fillText(label, layout.x - 8, layout.staveTopY + 20)
+        nativeCtx.fillText(label, layout.x - (hasGroupConnector ? 22 : 8), layout.staveTopY + 20)
         nativeCtx.restore()
       }
     }
@@ -697,7 +709,14 @@ function drawGroupConnectors(
         const leftSymType = symbol === 'brace'
           ? StaveConnector.type.BRACE
           : StaveConnector.type.BRACKET
-        new StaveConnector(topStave, bottomStave)
+
+        // For brace: the treble clef curl extends below the stave's bottom line,
+        // so nudge the brace's bottom anchor up to avoid visual overlap.
+        const braceBottomStave = symbol === 'brace'
+          ? new Stave(bottomStave.getX(), bottomStave.getY() - 6, bottomStave.getWidth())
+          : bottomStave
+
+        new StaveConnector(topStave, braceBottomStave)
           .setType(leftSymType)
           .setContext(ctx)
           .draw()
@@ -744,7 +763,10 @@ function drawDirectives(
 
       let label: string
       if (tempoDirs.length > 0) {
-        label = tempoDirs.map(d => d.bpm ? `${d.text} ♩=${d.bpm}` : d.text).join('  ')
+        label = tempoDirs.map(d => {
+          if (d.bpm) return d.text ? `${d.text}  ♩=${d.bpm}` : `♩=${d.bpm}`
+          return d.text
+        }).join('  ')
       } else {
         const bpm = resolveDirectiveTempo(staff.measures, mIdx, score.tempo)
         label = `♩=${bpm}`
@@ -901,6 +923,19 @@ function renderMeasure(
     beatValue: effectiveSig.denominator,
   }).setStrict(false)
   vexVoice.addTickables(staveNotes)
+
+  // Build VexFlow Tuplet objects before formatting so tick values are corrected.
+  const tupletMap = new Map<string, { notes: StaveNote[]; actual: number; normal: number }>()
+  events.forEach((e, i) => {
+    const t = (e as any).tuplet as TupletInfo | undefined
+    if (!t) return
+    if (!tupletMap.has(t.id)) tupletMap.set(t.id, { notes: [], actual: t.actual, normal: t.normal })
+    tupletMap.get(t.id)!.notes.push(staveNotes[i])
+  })
+  const vexTuplets = Array.from(tupletMap.values()).map(({ notes, actual, normal }) =>
+    new VexTuplet(notes, { numNotes: actual, notesOccupied: normal, ratioed: false })
+  )
+
   const beamGroups = getBeamGroups(effectiveSig)
   const beams = beamGroups
     ? Beam.generateBeams(staveNotes, { groups: beamGroups })
@@ -912,6 +947,7 @@ function renderMeasure(
   })
   vexVoice.draw(ctx, stave)
   beams.forEach(b => b.setContext(ctx).draw())
+  vexTuplets.forEach(t => t.setContext(ctx).draw())
   return { stave, staveNotes, events: events as NoteEvent[] }
 }
 

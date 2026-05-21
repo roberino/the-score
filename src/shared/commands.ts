@@ -12,7 +12,7 @@
 import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
-import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol } from './score'
+import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol, TupletInfo } from './score'
 import { measureCapacityUnits, eventDurationUnits, dottedUnits, DURATION_UNITS, resolveClef, pitchToStep, stepToPitch, shiftPitchBySemitones } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
@@ -59,6 +59,8 @@ export type Command =
   | { type: 'DELETE_TEXT_BOX';       id: string }
   | { type: 'ADD_HAIRPIN';           partId: string; staffId: string; hairpin: Hairpin }
   | { type: 'REMOVE_HAIRPIN';        partId: string; staffId: string; hairpinId: string }
+  | { type: 'ADD_TUPLET';    partId: string; staffId: string; measureId: string; voiceId: string; actual: 3 | 5 | 6; normal: 2 | 4; duration: Duration }
+  | { type: 'APPLY_TUPLET';  targets: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[]; actual: 3 | 5 | 6; normal: 2 | 4 }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -821,6 +823,34 @@ export function applyCommand(score: Score, command: Command): Score {
             if (!s.hairpins) break
             s.hairpins = s.hairpins.filter((h: any) => h.id !== command.hairpinId)
           }
+        }
+        break
+      }
+
+      case 'ADD_TUPLET': {
+        const part  = (draft.parts as any[]).find(p => p.id === command.partId)
+        const staff = part?.staves.find((s: any) => s.id === command.staffId)
+        const meas  = staff?.measures.find((m: any) => m.id === command.measureId)
+        const voice = meas?.voices.find((v: any) => v.id === command.voiceId)
+        if (!voice) break
+        const tupletInfo: TupletInfo = { id: uuid(), actual: command.actual, normal: command.normal }
+        const rests = Array.from({ length: command.actual }, () => ({
+          id: uuid(), type: 'rest' as const, duration: command.duration, dots: 0, tuplet: tupletInfo,
+        }))
+        ;(voice.events as any[]).push(...rests)
+        spillOverFrom(staff.measures, command.measureId, draft.timeSignature as TimeSignature)
+        break
+      }
+
+      case 'APPLY_TUPLET': {
+        const tupletInfo: TupletInfo = { id: uuid(), actual: command.actual, normal: command.normal }
+        for (const target of command.targets) {
+          const part  = (draft.parts as any[]).find(p => p.id === target.partId)
+          const staff = part?.staves.find((s: any) => s.id === target.staffId)
+          const meas  = staff?.measures.find((m: any) => m.id === target.measureId)
+          const voice = meas?.voices.find((v: any) => v.id === target.voiceId)
+          const event = (voice?.events as any[])?.find((e: any) => e.id === target.noteId)
+          if (event) event.tuplet = tupletInfo
         }
         break
       }

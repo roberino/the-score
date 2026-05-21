@@ -36,6 +36,7 @@ export interface Note {
   readonly beamStart: boolean
   readonly beamEnd: boolean
   readonly articulations: Articulation[]
+  readonly tuplet?: TupletInfo
 }
 
 export interface Rest {
@@ -43,6 +44,7 @@ export interface Rest {
   readonly type: 'rest'
   readonly duration: Duration
   readonly dots: 0 | 1 | 2
+  readonly tuplet?: TupletInfo
 }
 
 export interface Chord {
@@ -52,6 +54,7 @@ export interface Chord {
   readonly duration: Duration
   readonly dots: 0 | 1 | 2
   readonly articulations: Articulation[]
+  readonly tuplet?: TupletInfo
 }
 
 export type NoteEvent = Note | Rest | Chord
@@ -110,6 +113,14 @@ export interface Measure {
   readonly tempo?: number                     // BPM — set when tempo changes
   readonly barline?: BarlineType
   readonly directives?: readonly Directive[]  // performance directives at this measure
+}
+
+// ── Tuplets ───────────────────────────────────────────────────────────────────
+
+export interface TupletInfo {
+  readonly id: string      // UUID shared by every event in the same tuplet group
+  readonly actual: number  // notes written (3, 5, or 6)
+  readonly normal: number  // notes they replace (2, 4, or 4)
 }
 
 // ── Hairpins ─────────────────────────────────────────────────────────────────

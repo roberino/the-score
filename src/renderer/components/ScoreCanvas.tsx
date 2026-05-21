@@ -305,6 +305,7 @@ export function ScoreCanvas(): JSX.Element {
     insertMeasure,
     deleteMeasure,
     addHairpin,
+    applyTuplet,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -642,6 +643,37 @@ export function ScoreCanvas(): JSX.Element {
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
       dispatch, setCursor])
 
+  const insertTuplet = useCallback((actual: 3 | 5 | 6, normal: 2 | 4) => {
+    if (!cursorMeasureId) return
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        const measureIdx = staff.measures.findIndex(m => m.id === cursorMeasureId)
+        if (measureIdx === -1) continue
+        const measure = staff.measures[measureIdx]
+        const voice   = measure.voices[0]
+        const timeSig = resolveTimeSig(staff.measures, measureIdx, score.timeSignature)
+        // Total units the tuplet group occupies = normal * base duration units
+        const totalUnits = normal * DURATION_UNITS[selectedDuration]
+        if (remainingUnits(voice.events, timeSig) < totalUnits) {
+          canvasRef.current?.classList.add('cursor-reject')
+          setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+          return
+        }
+        dispatch({ type: 'ADD_TUPLET', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id, actual, normal, duration: selectedDuration })
+        const newBeat = cursorBeatPosition + totalUnits
+        const capacity = measureCapacityUnits(timeSig)
+        if (newBeat >= capacity) {
+          const next = staff.measures[measureIdx + 1]
+          if (next) setCursor(next.id, usedUnits(next.voices[0]?.events ?? []))
+          else      setCursor(null, 0)
+        } else {
+          setCursor(cursorMeasureId, newBeat)
+        }
+        return
+      }
+    }
+  }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, dispatch, setCursor])
+
   const findFullNoteLocation = useCallback((noteId: string): {
     partId: string; staffId: string; measureId: string; voiceId: string
   } | null => {
@@ -850,6 +882,10 @@ export function ScoreCanvas(): JSX.Element {
         return
       }
 
+      // Tuplet shortcut: T in note or rest input mode → insert triplet
+      if (!mod && !e.shiftKey && e.key === 't' && (inputMode === 'note' || inputMode === 'rest')) {
+        insertTuplet(3, 2); return
+      }
       // Tie shortcut: T (no shift, no mod) in select mode with note selected
       if (!mod && !e.shiftKey && e.key === 't' && inputMode === 'select' && selectedNoteId) {
         toggleTie(); return
@@ -959,7 +995,7 @@ export function ScoreCanvas(): JSX.Element {
     moveSelectedNotes, selectAllInMeasure,
     toggleTie, handleSlurKey,
     setInputMode, setSelectedDuration, toggleDot, resizeNote, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
-    insertMeasure, deleteMeasure, selectedMeasureId,
+    insertMeasure, deleteMeasure, selectedMeasureId, insertTuplet,
   ])
 
   // Set cursor when first entering note/rest mode
@@ -1539,6 +1575,33 @@ export function ScoreCanvas(): JSX.Element {
                     dim
                   </button>
                 </>
+              )}
+              {selectedNoteIds.length === 3 && (
+                <button
+                  onClick={() => applyTuplet(3, 2)}
+                  title="Make triplet (3 notes in time of 2)"
+                  style={{ padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc', background: 'none', cursor: 'pointer' }}
+                >
+                  3
+                </button>
+              )}
+              {selectedNoteIds.length === 5 && (
+                <button
+                  onClick={() => applyTuplet(5, 4)}
+                  title="Make quintuplet (5 notes in time of 4)"
+                  style={{ padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc', background: 'none', cursor: 'pointer' }}
+                >
+                  5
+                </button>
+              )}
+              {selectedNoteIds.length === 6 && (
+                <button
+                  onClick={() => applyTuplet(6, 4)}
+                  title="Make sextuplet (6 notes in time of 4)"
+                  style={{ padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc', background: 'none', cursor: 'pointer' }}
+                >
+                  6
+                </button>
               )}
               <button
                 onClick={() => setTransposeDialogOpen(true)}

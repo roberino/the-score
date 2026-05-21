@@ -1,4 +1,4 @@
-import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, TimeSignature, KeySignature, ClefType, Measure } from './score'
+import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, TimeSignature, KeySignature, ClefType, Measure, TupletInfo } from './score'
 
 // ── Duration arithmetic (64th-note units) ─────────────────────────────────────
 
@@ -19,7 +19,9 @@ export function dottedUnits(base: number, dots: 0 | 1 | 2): number {
 }
 
 export function eventDurationUnits(event: NoteEvent): number {
-  return dottedUnits(DURATION_UNITS[event.duration], event.dots)
+  const base = dottedUnits(DURATION_UNITS[event.duration], event.dots)
+  const t = (event as any).tuplet as TupletInfo | undefined
+  return t ? base * t.normal / t.actual : base
 }
 
 export function measureCapacityUnits(timeSig: TimeSignature): number {
@@ -414,7 +416,8 @@ const DURATION_BEATS: Record<string, number> = {
 export function eventToSeconds(event: NoteEvent, bpm: number): number {
   const beats = DURATION_BEATS[event.duration] ?? 1
   const dotted = event.dots === 2 ? beats * 1.75 : event.dots === 1 ? beats * 1.5 : beats
-  return dotted * (60 / bpm)
+  const t = (event as any).tuplet as TupletInfo | undefined
+  return dotted * (t ? t.normal / t.actual : 1) * (60 / bpm)
 }
 
 export interface FlatScheduleEntry {

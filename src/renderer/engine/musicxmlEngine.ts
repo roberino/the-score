@@ -13,7 +13,7 @@ import { v4 as uuid } from 'uuid'
 import type {
   Score, Part, Staff, Measure, Voice, NoteEvent, Note, Rest, Chord,
   Pitch, NoteName, Duration, Accidental, ClefType, BarlineType, Articulation,
-  Directive, Slur, Hairpin, ScoreMetadata, TimeSignature, KeySignature,
+  Directive, Slur, Hairpin, ScoreMetadata, TimeSignature, KeySignature, TupletInfo,
 } from '@shared/score'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -222,6 +222,7 @@ function notationsElement(
   tieTypes: string[],
   articulations: readonly string[],
   slur?: SlurNotation,
+  tupletType?: 'start' | 'stop',
 ): string {
   const parts: string[] = []
 
@@ -249,6 +250,7 @@ function notationsElement(
   if (artEls.length) parts.push(`<articulations>${artEls.join('')}</articulations>`)
   if (ornEls.length) parts.push(`<ornaments>${ornEls.join('')}</ornaments>`)
   if (fermata)       parts.push('<fermata/>')
+  if (tupletType)    parts.push(`<tuplet type="${tupletType}" number="1"/>`)
 
   return parts.length ? `<notations>${parts.join('')}</notations>` : ''
 }
@@ -257,13 +259,34 @@ function isSubQuarter(duration: Duration): boolean {
   return DURATION_DIVS[duration] < DURATION_DIVS['quarter']
 }
 
+interface TupletCtx {
+  actual: number
+  normal: number
+  isFirst: boolean
+  isLast: boolean
+}
+
+function timeMod(actual: number, normal: number, duration: Duration, lvl: number): string[] {
+  const normalType = DURATION_TYPE[duration] ?? 'eighth'
+  return [
+    `${indent(lvl)}<time-modification>`,
+    `${indent(lvl + 1)}<actual-notes>${actual}</actual-notes>`,
+    `${indent(lvl + 1)}<normal-notes>${normal}</normal-notes>`,
+    `${indent(lvl + 1)}<normal-type>${normalType}</normal-type>`,
+    `${indent(lvl)}</time-modification>`,
+  ]
+}
+
 function noteLines(
   event: NoteEvent,
   beamState: BeamState,
   lvl: number,
   slurMap?: Map<string, SlurNotation>,
+  tupletCtx?: TupletCtx,
 ): string[] {
   const lines: string[] = []
+  const tupletType: 'start' | 'stop' | undefined =
+    tupletCtx?.isFirst ? 'start' : tupletCtx?.isLast ? 'stop' : undefined
 
   if (event.type === 'note') {
     const n = event as Note
@@ -286,7 +309,7 @@ function noteLines(
     }
 
     const slur  = slurMap?.get(n.id)
-    const notEl = notationsElement(tieTypes, n.articulations, slur)
+    const notEl = notationsElement(tieTypes, n.articulations, slur, tupletType)
     const alterEl  = alter !== null ? `<alter>${alter}</alter>` : ''
     const accEl    = accName ? `<accidental>${accName}</accidental>` : ''
 
@@ -298,6 +321,7 @@ function noteLines(
     if (dotEls) lines.push(`${indent(lvl + 1)}${dotEls}`)
     if (accEl)  lines.push(`${indent(lvl + 1)}${accEl}`)
     if (beamEl) lines.push(`${indent(lvl + 1)}${beamEl}`)
+    if (tupletCtx) lines.push(...timeMod(tupletCtx.actual, tupletCtx.normal, n.duration, lvl + 1))
     if (notEl)  lines.push(`${indent(lvl + 1)}${notEl}`)
     lines.push(`${indent(lvl)}</note>`)
 
@@ -306,12 +330,15 @@ function noteLines(
     const divs  = dottedDivs(r.duration, r.dots)
     const dotEls = '<dot/>'.repeat(r.dots)
     beamState.active = false
+    const notEl = notationsElement([], [], undefined, tupletType)
 
     lines.push(`${indent(lvl)}<note>`)
     lines.push(`${indent(lvl + 1)}<rest/>`)
     lines.push(`${indent(lvl + 1)}<duration>${divs}</duration>`)
     lines.push(`${indent(lvl + 1)}<type>${DURATION_TYPE[r.duration]}</type>`)
     if (dotEls) lines.push(`${indent(lvl + 1)}${dotEls}`)
+    if (tupletCtx) lines.push(...timeMod(tupletCtx.actual, tupletCtx.normal, r.duration, lvl + 1))
+    if (notEl)  lines.push(`${indent(lvl + 1)}${notEl}`)
     lines.push(`${indent(lvl)}</note>`)
 
   } else if (event.type === 'chord') {
@@ -463,6 +490,23 @@ function partLines(score: Score, partIdx: number): string[] {
     ))
 
     // Notes — voice 0 only
+    // Pre-compute tuplet context per event (first/last position in each group)
+    const tupletCtxMap = new Map<string, TupletCtx>()
+    {
+      const groups = new Map<string, string[]>()
+      const meta   = new Map<string, { actual: number; normal: number }>()
+      for (const ev of measure.voices[0]?.events ?? []) {
+        const t = (ev as any).tuplet as TupletInfo | undefined
+        if (!t) continue
+        if (!groups.has(t.id)) { groups.set(t.id, []); meta.set(t.id, { actual: t.actual, normal: t.normal }) }
+        groups.get(t.id)!.push(ev.id)
+      }
+      for (const [id, ids] of groups) {
+        const { actual, normal } = meta.get(id)!
+        ids.forEach((nid, i) => tupletCtxMap.set(nid, { actual, normal, isFirst: i === 0, isLast: i === ids.length - 1 }))
+      }
+    }
+
     const beamState: BeamState = { active: false }
     for (const event of measure.voices[0]?.events ?? []) {
       const hairpinType = hairpinMaps.starts.get(event.id)
@@ -474,7 +518,7 @@ function partLines(score: Score, partIdx: number): string[] {
           `      </direction>`,
         )
       }
-      lines.push(...noteLines(event, beamState, lvl + 1, slurMap))
+      lines.push(...noteLines(event, beamState, lvl + 1, slurMap, tupletCtxMap.get(event.id)))
       if (hairpinMaps.stops.has(event.id)) {
         lines.push(
           `      <direction placement="below">`,
@@ -659,6 +703,7 @@ function parseMusicXmlPart(
     const directives: Directive[] = []
     let noteBuffer: Element[] = []
     let lastEventId: string | null = null
+    let pendingTuplet: TupletInfo | null = null   // active tuplet group within this measure
 
     const flushNoteBuffer = (): void => {
       if (noteBuffer.length === 0) return
@@ -711,6 +756,22 @@ function parseMusicXmlPart(
         }
       }
 
+      // Attach tuplet info if this note has <time-modification>
+      const tmEl = noteBuffer[0].querySelector('time-modification')
+      if (tmEl) {
+        const actual = parseInt(tmEl.querySelector('actual-notes')?.textContent ?? '1')
+        const normal = parseInt(tmEl.querySelector('normal-notes')?.textContent ?? '1')
+        if (actual > 1 && normal > 0) {
+          const tupletEl   = noteBuffer[0].querySelector('notations tuplet')
+          const tupletType = tupletEl?.getAttribute('type')
+          if (tupletType === 'start' || !pendingTuplet) {
+            pendingTuplet = { id: uuid(), actual, normal }
+          }
+          ;(event as any).tuplet = { ...pendingTuplet }
+          if (tupletType === 'stop') pendingTuplet = null
+        }
+      }
+
       if (hp.awaiting) { hp.open = { type: hp.awaiting, fromNoteId: event.id }; hp.awaiting = null }
       events.push(event)
       lastEventId = event.id
@@ -750,7 +811,7 @@ function parseMusicXmlPart(
           const t = parseFloat(soundEl.getAttribute('tempo')!)
           if (!isNaN(t) && t > 0) {
             const bpm = Math.round(t)
-            const text = wordsEl?.textContent?.trim() || `♩=${bpm}`
+            const text = wordsEl?.textContent?.trim() ?? ''
             directives.push({ id: uuid(), category: 'tempo', text, bpm })
           }
         } else if (metEl) {
@@ -762,7 +823,7 @@ function parseMusicXmlPart(
             }
             const units = BEAT_DIVS[beatUnit] ?? 16
             const bpm   = Math.round(perMinute * 16 / units)
-            const text  = wordsEl?.textContent?.trim() || `♩=${bpm}`
+            const text  = wordsEl?.textContent?.trim() ?? ''
             directives.push({ id: uuid(), category: 'tempo', text, bpm })
           }
         } else if (dynEl && dynEl.children.length > 0) {

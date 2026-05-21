@@ -105,6 +105,7 @@ export interface AppState {
   deleteMeasure: (measureId: string) => void
   addHairpin: (hairpinType: HairpinType) => void
   removeHairpin: (partId: string, staffId: string, hairpinId: string) => void
+  applyTuplet: (actual: 3 | 5 | 6, normal: 2 | 4) => void
   toggleKeyboard: () => void
   toggleSoundOnInput: () => void
   setAudioMode: (mode: 'builtin' | 'midi-out') => void
@@ -594,6 +595,29 @@ export const useAppStore = create<AppState>()(
 
     removeHairpin: (partId, staffId, hairpinId) => {
       get().dispatch({ type: 'REMOVE_HAIRPIN', partId, staffId, hairpinId })
+    },
+
+    applyTuplet: (actual, normal) => {
+      const { score, selectedNoteIds } = get()
+      if (selectedNoteIds.length !== actual) return
+      const selectedSet = new Set(selectedNoteIds)
+      const targets: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] = []
+      for (const part of score.parts) {
+        for (const staff of part.staves) {
+          for (const measure of staff.measures) {
+            for (const voice of measure.voices) {
+              for (const event of voice.events) {
+                if (selectedSet.has(event.id)) {
+                  targets.push({ partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id, noteId: event.id })
+                }
+              }
+            }
+          }
+        }
+      }
+      if (targets.length === actual) {
+        get().dispatch({ type: 'APPLY_TUPLET', targets, actual, normal })
+      }
     },
 
     checkAndAutoAddBar: () => {
