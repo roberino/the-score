@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { useAppStore } from '../store/appStore'
+import type { Command } from '@shared/commands'
 import {
   renderScore,
   computeLayout,
@@ -291,6 +292,7 @@ export function ScoreCanvas(): JSX.Element {
   const {
     score, zoom, inputMode,
     selectedDuration, isDotted, primedAccidental,
+    activeVoice,
     cursorMeasureId, cursorBeatPosition,
     lastEnteredPitch, selectedNoteId, selectedNoteIds, selectedAnchorId,
     dispatch, dispatchBatch, setInputMode,
@@ -389,13 +391,13 @@ export function ScoreCanvas(): JSX.Element {
         const measure = staff.measures.find(m => m.id === cursorMeasureId)
         if (!measure) continue
 
-        const voice   = measure.voices[0]
+        const existingVoice = measure.voices[activeVoice]
+        const voiceEvents   = existingVoice?.events ?? []
         const timeSig = measure.timeSignature ?? score.timeSignature
         const dots    = isDotted ? 1 : 0 as 0 | 1
         const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
 
-        if (remainingUnits(voice.events, timeSig) < units) {
-          // Measure full — flash by briefly toggling a class; simplest signal
+        if (remainingUnits(voiceEvents, timeSig) < units) {
           canvasRef.current?.classList.add('cursor-reject')
           setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
           return
@@ -406,14 +408,24 @@ export function ScoreCanvas(): JSX.Element {
         const note        = createNote(noteName, octave, selectedDuration, accidental)
         const noteWithDot = { ...note, dots } as Note
 
-        dispatch({
+        const targetVoiceId = existingVoice?.id ?? uuid()
+        const addNoteCmd: Command = {
           type: 'ADD_NOTE',
           partId:    part.id,
           staffId:   staff.id,
           measureId: measure.id,
-          voiceId:   voice.id,
+          voiceId:   targetVoiceId,
           event:     noteWithDot,
-        })
+        }
+
+        if (!existingVoice) {
+          dispatchBatch([
+            { type: 'ADD_VOICE', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: targetVoiceId },
+            addNoteCmd,
+          ])
+        } else {
+          dispatch(addNoteCmd)
+        }
 
         if (soundOnInput) {
           const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
@@ -431,14 +443,11 @@ export function ScoreCanvas(): JSX.Element {
         const newBeat = cursorBeatPosition + units
         const capacity = measureCapacityUnits(timeSig)
         if (newBeat >= capacity) {
-          // Advance to next measure
-          const measureIdx = staff.measures.findIndex(m => m.id === cursorMeasureId)
+          const measureIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const nextMeasure = staff.measures[measureIdx + 1]
           if (nextMeasure) {
-            const nextVoice   = nextMeasure.voices[0]
-            const nextTimeSig = nextMeasure.timeSignature ?? score.timeSignature
+            const nextVoice = nextMeasure.voices[activeVoice]
             setCursor(nextMeasure.id, usedUnits(nextVoice?.events ?? []))
-            void nextTimeSig
           } else {
             setCursor(null, 0)
           }
@@ -449,13 +458,13 @@ export function ScoreCanvas(): JSX.Element {
       }
     }
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
-      primedAccidental, lastEnteredPitch, dispatch, setPrimedAccidental,
-      setLastEnteredPitch, setCursor, setSelectedMeasure, soundOnInput, audioMode])
+      primedAccidental, lastEnteredPitch, activeVoice, dispatch, dispatchBatch,
+      setPrimedAccidental, setLastEnteredPitch, setCursor, setSelectedMeasure,
+      soundOnInput, audioMode])
 
   // Explicit-octave variant used by virtual keyboard and MIDI input
   const enterNoteAtPitch = useCallback((noteName: NoteName, octave: number, accidental?: Accidental, skipPreview = false) => {
     if (!cursorMeasureId) {
-      // Keyboard/MIDI note pressed without cursor — auto-place cursor and switch to note mode
       setInputMode('note')
       return
     }
@@ -463,25 +472,35 @@ export function ScoreCanvas(): JSX.Element {
       for (const staff of part.staves) {
         const measure = staff.measures.find(m => m.id === cursorMeasureId)
         if (!measure) continue
-        const voice   = measure.voices[0]
+        const existingVoice = measure.voices[activeVoice]
+        const voiceEvents   = existingVoice?.events ?? []
         const timeSig = measure.timeSignature ?? score.timeSignature
         const dots    = isDotted ? 1 : 0 as 0 | 1
         const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
-        if (remainingUnits(voice.events, timeSig) < units) {
+        if (remainingUnits(voiceEvents, timeSig) < units) {
           canvasRef.current?.classList.add('cursor-reject')
           setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
           return
         }
         const note        = createNote(noteName, octave, selectedDuration, accidental ?? null)
         const noteWithDot = { ...note, dots } as Note
-        dispatch({
+        const targetVoiceId = existingVoice?.id ?? uuid()
+        const addNoteCmd: Command = {
           type: 'ADD_NOTE',
           partId:    part.id,
           staffId:   staff.id,
           measureId: measure.id,
-          voiceId:   voice.id,
+          voiceId:   targetVoiceId,
           event:     noteWithDot,
-        })
+        }
+        if (!existingVoice) {
+          dispatchBatch([
+            { type: 'ADD_VOICE', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: targetVoiceId },
+            addNoteCmd,
+          ])
+        } else {
+          dispatch(addNoteCmd)
+        }
         if (soundOnInput && !skipPreview) {
           const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
@@ -494,9 +513,9 @@ export function ScoreCanvas(): JSX.Element {
         const newBeat  = cursorBeatPosition + units
         const capacity = measureCapacityUnits(timeSig)
         if (newBeat >= capacity) {
-          const mIdx       = staff.measures.findIndex(m => m.id === cursorMeasureId)
+          const mIdx        = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const nextMeasure = staff.measures[mIdx + 1]
-          if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[0]?.events ?? []))
+          if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
           else             setCursor(null, 0)
         } else {
           setCursor(cursorMeasureId, newBeat)
@@ -504,8 +523,9 @@ export function ScoreCanvas(): JSX.Element {
         return
       }
     }
-  }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
-      dispatch, setLastEnteredPitch, setCursor, setInputMode, setSelectedMeasure, soundOnInput, audioMode])
+  }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted, activeVoice,
+      dispatch, dispatchBatch, setLastEnteredPitch, setCursor, setInputMode, setSelectedMeasure,
+      soundOnInput, audioMode])
 
   // Multi-pitch variant for chord entry from MIDI
   const enterChordAtPitch = useCallback((inputs: import('../services/midiService').NoteInput[]) => {
@@ -606,12 +626,13 @@ export function ScoreCanvas(): JSX.Element {
         if (measureIdx === -1) continue
         const measure = staff.measures[measureIdx]
 
-        const voice   = measure.voices[0]
+        const existingVoice = measure.voices[activeVoice]
+        const voiceEvents   = existingVoice?.events ?? []
         const timeSig = resolveTimeSig(staff.measures, measureIdx, score.timeSignature)
         const dots    = isDotted ? 1 : 0 as 0 | 1
         const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
 
-        if (remainingUnits(voice.events, timeSig) < units) {
+        if (remainingUnits(voiceEvents, timeSig) < units) {
           canvasRef.current?.classList.add('cursor-reject')
           setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
           return
@@ -619,22 +640,31 @@ export function ScoreCanvas(): JSX.Element {
 
         const rest        = createRest(selectedDuration)
         const restWithDot = { ...rest, dots } as typeof rest
-
-        dispatch({
+        const targetVoiceId = existingVoice?.id ?? uuid()
+        const addNoteCmd: Command = {
           type: 'ADD_NOTE',
           partId:    part.id,
           staffId:   staff.id,
           measureId: measure.id,
-          voiceId:   voice.id,
+          voiceId:   targetVoiceId,
           event:     restWithDot,
-        })
+        }
+
+        if (!existingVoice) {
+          dispatchBatch([
+            { type: 'ADD_VOICE', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: targetVoiceId },
+            addNoteCmd,
+          ])
+        } else {
+          dispatch(addNoteCmd)
+        }
 
         const newBeat  = cursorBeatPosition + units
         const capacity = measureCapacityUnits(timeSig)
         if (newBeat >= capacity) {
           const nextMeasure = staff.measures[measureIdx + 1]
           if (nextMeasure) {
-            setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[0]?.events ?? []))
+            setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
           } else {
             setCursor(null, 0)
           }
@@ -644,8 +674,8 @@ export function ScoreCanvas(): JSX.Element {
         return
       }
     }
-  }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
-      dispatch, setCursor])
+  }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted, activeVoice,
+      dispatch, dispatchBatch, setCursor])
 
   const insertTuplet = useCallback((actual: 3 | 5 | 6, normal: 2 | 4) => {
     if (!cursorMeasureId) return
@@ -1063,14 +1093,15 @@ export function ScoreCanvas(): JSX.Element {
     }
 
     if (inputMode === 'note') {
-      // Set cursor to end of existing events in the clicked measure
+      // Set cursor to end of existing events in the clicked measure (active voice)
       const part    = score.parts.find(p => p.id === layout.partId)
       const staff   = part?.staves.find(s => s.id === layout.staffId)
       const measure = staff?.measures.find(m => m.id === layout.measureId)
       if (!measure) return
-      const voice   = measure.voices[0]
+      const existingVoice = measure.voices[activeVoice]
+      const voiceEvents   = existingVoice?.events ?? []
       const timeSig = measure.timeSignature ?? score.timeSignature
-      const used    = usedUnits(voice?.events ?? [])
+      const used    = usedUnits(voiceEvents)
       const capacity = measureCapacityUnits(timeSig)
       if (used >= capacity) return
       setCursor(layout.measureId, used)
@@ -1080,20 +1111,29 @@ export function ScoreCanvas(): JSX.Element {
       const pitchInfo = stepToPitch(step, layout.clef)
       const dots      = isDotted ? 1 : 0 as 0 | 1
       const units     = dottedUnits(DURATION_UNITS[selectedDuration], dots)
-      if (remainingUnits(voice.events, timeSig) < units) return
+      if (remainingUnits(voiceEvents, timeSig) < units) return
 
-      const accidental = primedAccidental as Accidental
-      const note       = createNote(pitchInfo.noteName, pitchInfo.octave, selectedDuration, accidental)
+      const accidental  = primedAccidental as Accidental
+      const note        = createNote(pitchInfo.noteName, pitchInfo.octave, selectedDuration, accidental)
       const noteWithDot = { ...note, dots } as Note
-
-      dispatch({
+      const targetVoiceId = existingVoice?.id ?? uuid()
+      const addNoteCmd: Command = {
         type: 'ADD_NOTE',
         partId:    layout.partId,
         staffId:   layout.staffId,
         measureId: layout.measureId,
-        voiceId:   layout.voiceId,
+        voiceId:   targetVoiceId,
         event:     noteWithDot,
-      })
+      }
+
+      if (!existingVoice) {
+        dispatchBatch([
+          { type: 'ADD_VOICE', partId: layout.partId, staffId: layout.staffId, measureId: layout.measureId, voiceId: targetVoiceId },
+          addNoteCmd,
+        ])
+      } else {
+        dispatch(addNoteCmd)
+      }
 
       if (soundOnInput) {
         const clickPart  = score.parts.find(p => p.id === layout.partId)
@@ -1112,10 +1152,10 @@ export function ScoreCanvas(): JSX.Element {
 
       const newBeat = used + units
       if (newBeat >= capacity) {
-        const measureIdx = staff!.measures.findIndex(m => m.id === layout.measureId)
+        const measureIdx  = staff!.measures.findIndex(m => m.id === layout.measureId)
         const nextMeasure = staff!.measures[measureIdx + 1]
         if (nextMeasure) {
-          setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[0]?.events ?? []))
+          setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
         } else {
           setCursor(null, 0)
         }

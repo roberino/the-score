@@ -64,6 +64,7 @@ export type Command =
   | { type: 'SET_NOTE_DYNAMIC'; noteId: string; dynamic: DynamicLevel | undefined }
   | { type: 'ADD_VOLTA';    volta: Volta }
   | { type: 'REMOVE_VOLTA'; voltaId: string }
+  | { type: 'ADD_VOICE';    partId: string; staffId: string; measureId: string; voiceId: string }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -887,6 +888,17 @@ export function applyCommand(score: Score, command: Command): Score {
       case 'REMOVE_VOLTA': {
         if (draft.voltas) {
           (draft as any).voltas = (draft.voltas as any[]).filter((v: any) => v.id !== command.voltaId)
+        }
+        break
+      }
+
+      case 'ADD_VOICE': {
+        const part    = draft.parts.find(p => p.id === command.partId)
+        const staff   = part?.staves.find(s => s.id === command.staffId)
+        const measure = staff?.measures.find(m => m.id === command.measureId)
+        if (!measure) break
+        if (measure.voices.length < 2) {
+          ;(measure.voices as any[]).push({ id: command.voiceId, events: [] })
         }
         break
       }

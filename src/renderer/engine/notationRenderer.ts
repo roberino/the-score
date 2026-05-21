@@ -99,14 +99,26 @@ function attachArticulations(staveNote: StaveNote, articulations: readonly Artic
   }
 }
 
-function noteEventToStaveNote(event: NoteEvent, selected: boolean, clef: string): StaveNote {
+function noteEventToStaveNote(
+  event: NoteEvent,
+  selected: boolean,
+  clef: string,
+  stemDirection?: number,
+  noteColor?: string,
+): StaveNote {
+  const stemOpts = stemDirection !== undefined ? { stem_direction: stemDirection } : {}
+  const applyColor = (sn: StaveNote) => {
+    if (selected)        sn.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
+    else if (noteColor)  sn.setStyle({ fillStyle: noteColor, strokeStyle: noteColor })
+  }
   switch (event.type) {
     case 'note': {
       const n = event as Note
       const staveNote = new StaveNote({
         clef,
         keys: [pitchToVexKey(n.pitch)],
-        duration: DURATION_MAP[n.duration] + (n.dots > 0 ? 'd'.repeat(n.dots) : '')
+        duration: DURATION_MAP[n.duration] + (n.dots > 0 ? 'd'.repeat(n.dots) : ''),
+        ...stemOpts,
       })
       if (n.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
       if (n.pitch.accidental) {
@@ -118,7 +130,7 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean, clef: string)
         staveNote.addModifier(new VexAccidental(acc), 0)
       }
       if (n.articulations.length > 0) attachArticulations(staveNote, n.articulations)
-      if (selected) staveNote.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
+      applyColor(staveNote)
       return staveNote
     }
     case 'rest': {
@@ -126,10 +138,11 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean, clef: string)
       const staveNote = new StaveNote({
         clef,
         keys: [CLEF_REST_KEY[clef] ?? 'b/4'],
-        duration: DURATION_MAP[r.duration] + (r.dots > 0 ? 'd'.repeat(r.dots) : '') + 'r'
+        duration: DURATION_MAP[r.duration] + (r.dots > 0 ? 'd'.repeat(r.dots) : '') + 'r',
+        ...stemOpts,
       })
       if (r.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
-      if (selected) staveNote.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
+      applyColor(staveNote)
       return staveNote
     }
     case 'chord': {
@@ -137,11 +150,12 @@ function noteEventToStaveNote(event: NoteEvent, selected: boolean, clef: string)
       const staveNote = new StaveNote({
         clef,
         keys: c.pitches.map(pitchToVexKey),
-        duration: DURATION_MAP[c.duration] + (c.dots > 0 ? 'd'.repeat(c.dots) : '')
+        duration: DURATION_MAP[c.duration] + (c.dots > 0 ? 'd'.repeat(c.dots) : ''),
+        ...stemOpts,
       })
       if (c.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
       if (c.articulations.length > 0) attachArticulations(staveNote, c.articulations)
-      if (selected) staveNote.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
+      applyColor(staveNote)
       return staveNote
     }
   }
@@ -994,44 +1008,81 @@ function renderMeasure(
     }
   }
 
-  const voice0 = measure.voices[0]
-  const events = voice0?.events ?? []
+  const events0 = measure.voices[0]?.events ?? []
+  const events1 = measure.voices[1]?.events ?? []
 
-  if (events.length === 0) {
+  const vexVoiceCfg = { numBeats: effectiveSig.numerator, beatValue: effectiveSig.denominator }
+  const beamGroups  = getBeamGroups(effectiveSig)
+
+  const buildTuplets = (evts: readonly NoteEvent[], sns: StaveNote[]) => {
+    const tm = new Map<string, { notes: StaveNote[]; actual: number; normal: number }>()
+    evts.forEach((e, i) => {
+      const t = (e as any).tuplet as TupletInfo | undefined
+      if (!t) return
+      if (!tm.has(t.id)) tm.set(t.id, { notes: [], actual: t.actual, normal: t.normal })
+      tm.get(t.id)!.notes.push(sns[i])
+    })
+    return Array.from(tm.values()).map(({ notes, actual, normal }) =>
+      new VexTuplet(notes, { numNotes: actual, notesOccupied: normal, ratioed: false })
+    )
+  }
+
+  const buildBeams = (sns: StaveNote[]) =>
+    beamGroups ? Beam.generateBeams(sns, { groups: beamGroups }) : Beam.generateBeams(sns)
+
+  // Whole-rest placeholder when both voices are empty
+  if (events0.length === 0 && events1.length === 0) {
     const wholeRest = new StaveNote({ clef: clefType, keys: [CLEF_REST_KEY[clefType] ?? 'b/4'], duration: 'wr' })
-    const vexVoice  = new VexVoice({
-      numBeats: effectiveSig.numerator,
-      beatValue: effectiveSig.denominator,
-    }).setStrict(false)
+    const vexVoice  = new VexVoice(vexVoiceCfg).setStrict(false)
     vexVoice.addTickables([wholeRest])
     new Formatter().joinVoices([vexVoice]).format([vexVoice], noteAreaWidth)
     vexVoice.draw(ctx, stave)
     return { stave, staveNotes: [], events: [] as NoteEvent[] }
   }
 
-  const staveNotes = events.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType))
-  const vexVoice   = new VexVoice({
-    numBeats: effectiveSig.numerator,
-    beatValue: effectiveSig.denominator,
-  }).setStrict(false)
+  // Two-voice rendering
+  if (events0.length > 0 && events1.length > 0) {
+    const sns0 = events0.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, 1))
+    const sns1 = events1.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, -1, '#2d8f4e'))
+
+    const vv0 = new VexVoice(vexVoiceCfg).setStrict(false)
+    const vv1 = new VexVoice(vexVoiceCfg).setStrict(false)
+    vv0.addTickables(sns0)
+    vv1.addTickables(sns1)
+
+    const tuplets0 = buildTuplets(events0, sns0)
+    const tuplets1 = buildTuplets(events1, sns1)
+    const beams0   = buildBeams(sns0)
+    const beams1   = buildBeams(sns1)
+
+    new Formatter().joinVoices([vv0, vv1]).format([vv0, vv1], noteAreaWidth)
+
+    sns0.forEach((sn, i) => { sn.setStave(stave); notePositions.set(events0[i].id, sn.getAbsoluteX()) })
+    sns1.forEach((sn, i) => { sn.setStave(stave); notePositions.set(events1[i].id, sn.getAbsoluteX()) })
+
+    vv0.draw(ctx, stave)
+    vv1.draw(ctx, stave)
+    beams0.forEach(b => b.setContext(ctx).draw())
+    beams1.forEach(b => b.setContext(ctx).draw())
+    tuplets0.forEach(t => t.setContext(ctx).draw())
+    tuplets1.forEach(t => t.setContext(ctx).draw())
+
+    return { stave, staveNotes: [...sns0, ...sns1], events: [...events0, ...events1] as NoteEvent[] }
+  }
+
+  // Single-voice rendering (voice 0 or voice 1 alone)
+  const isVoice1Only = events0.length === 0
+  const events     = isVoice1Only ? events1 : events0
+  const stemDir    = isVoice1Only ? -1 : undefined
+  const noteColor  = isVoice1Only ? '#2d8f4e' : undefined
+
+  const staveNotes = events.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, stemDir, noteColor))
+  const vexVoice   = new VexVoice(vexVoiceCfg).setStrict(false)
   vexVoice.addTickables(staveNotes)
 
-  // Build VexFlow Tuplet objects before formatting so tick values are corrected.
-  const tupletMap = new Map<string, { notes: StaveNote[]; actual: number; normal: number }>()
-  events.forEach((e, i) => {
-    const t = (e as any).tuplet as TupletInfo | undefined
-    if (!t) return
-    if (!tupletMap.has(t.id)) tupletMap.set(t.id, { notes: [], actual: t.actual, normal: t.normal })
-    tupletMap.get(t.id)!.notes.push(staveNotes[i])
-  })
-  const vexTuplets = Array.from(tupletMap.values()).map(({ notes, actual, normal }) =>
-    new VexTuplet(notes, { numNotes: actual, notesOccupied: normal, ratioed: false })
-  )
+  const vexTuplets = buildTuplets(events, staveNotes)
+  const beams      = buildBeams(staveNotes)
 
-  const beamGroups = getBeamGroups(effectiveSig)
-  const beams = beamGroups
-    ? Beam.generateBeams(staveNotes, { groups: beamGroups })
-    : Beam.generateBeams(staveNotes)
   new Formatter().joinVoices([vexVoice]).format([vexVoice], noteAreaWidth)
   staveNotes.forEach((sn, i) => {
     sn.setStave(stave)
@@ -1054,44 +1105,46 @@ function drawTiesForStaff(
 ): void {
   for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
     const measure = staff.measures[mIdx]
-    const events  = measure.voices[0]?.events ?? []
 
-    for (let eIdx = 0; eIdx < events.length; eIdx++) {
-      const event = events[eIdx]
-      if (event.type !== 'note') continue
-      const note = event as Note
-      if (!note.tieStart) continue
+    for (let vIdx = 0; vIdx < measure.voices.length; vIdx++) {
+      const events = measure.voices[vIdx]?.events ?? []
 
-      const srcSN = staveNoteMap.get(note.id)
-      if (!srcSN) continue
+      for (let eIdx = 0; eIdx < events.length; eIdx++) {
+        const event = events[eIdx]
+        if (event.type !== 'note') continue
+        const note = event as Note
+        if (!note.tieStart) continue
 
-      // Find the next note: rest of this measure first, then first of next measure
-      let destNote: Note | null = null
-      let inSameMeasure = false
-      for (let j = eIdx + 1; j < events.length; j++) {
-        if (events[j].type === 'note') {
-          destNote = events[j] as Note
-          inSameMeasure = true
-          break
+        const srcSN = staveNoteMap.get(note.id)
+        if (!srcSN) continue
+
+        // Find the next note in the same voice: rest of this measure, then next measure
+        let destNote: Note | null = null
+        let inSameMeasure = false
+        for (let j = eIdx + 1; j < events.length; j++) {
+          if (events[j].type === 'note') {
+            destNote = events[j] as Note
+            inSameMeasure = true
+            break
+          }
         }
-      }
-      if (!destNote && mIdx + 1 < staff.measures.length) {
-        for (const e of staff.measures[mIdx + 1].voices[0]?.events ?? []) {
-          if (e.type === 'note') { destNote = e as Note; break }
+        if (!destNote && mIdx + 1 < staff.measures.length) {
+          for (const e of staff.measures[mIdx + 1].voices[vIdx]?.events ?? []) {
+            if (e.type === 'note') { destNote = e as Note; break }
+          }
         }
-      }
 
-      const dstSN = destNote ? staveNoteMap.get(destNote.id) ?? null : null
+        const dstSN = destNote ? staveNoteMap.get(destNote.id) ?? null : null
 
-      if (inSameMeasure && dstSN) {
-        new StaveTie({ firstNote: srcSN, lastNote: dstSN, firstIndexes: [0], lastIndexes: [0] })
-          .setContext(ctx).draw()
-      } else if (dstSN) {
-        // Cross-measure: arc to right edge of source stave, then from left edge of dest stave
-        new StaveTie({ firstNote: srcSN, lastNote: null, firstIndexes: [0], lastIndexes: [0] })
-          .setContext(ctx).draw()
-        new StaveTie({ firstNote: null, lastNote: dstSN, firstIndexes: [0], lastIndexes: [0] })
-          .setContext(ctx).draw()
+        if (inSameMeasure && dstSN) {
+          new StaveTie({ firstNote: srcSN, lastNote: dstSN, firstIndexes: [0], lastIndexes: [0] })
+            .setContext(ctx).draw()
+        } else if (dstSN) {
+          new StaveTie({ firstNote: srcSN, lastNote: null, firstIndexes: [0], lastIndexes: [0] })
+            .setContext(ctx).draw()
+          new StaveTie({ firstNote: null, lastNote: dstSN, firstIndexes: [0], lastIndexes: [0] })
+            .setContext(ctx).draw()
+        }
       }
     }
   }

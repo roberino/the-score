@@ -283,6 +283,7 @@ function noteLines(
   lvl: number,
   slurMap?: Map<string, SlurNotation>,
   tupletCtx?: TupletCtx,
+  voiceNum = 1,
 ): string[] {
   const lines: string[] = []
   const tupletType: 'start' | 'stop' | undefined =
@@ -317,6 +318,7 @@ function noteLines(
     lines.push(`${indent(lvl + 1)}<pitch><step>${n.pitch.noteName}</step>${alterEl}<octave>${n.pitch.octave}</octave></pitch>`)
     lines.push(`${indent(lvl + 1)}<duration>${divs}</duration>`)
     if (tieEls.length) lines.push(`${indent(lvl + 1)}${tieEls.join('')}`)
+    lines.push(`${indent(lvl + 1)}<voice>${voiceNum}</voice>`)
     lines.push(`${indent(lvl + 1)}<type>${DURATION_TYPE[n.duration]}</type>`)
     if (dotEls) lines.push(`${indent(lvl + 1)}${dotEls}`)
     if (accEl)  lines.push(`${indent(lvl + 1)}${accEl}`)
@@ -335,6 +337,7 @@ function noteLines(
     lines.push(`${indent(lvl)}<note>`)
     lines.push(`${indent(lvl + 1)}<rest/>`)
     lines.push(`${indent(lvl + 1)}<duration>${divs}</duration>`)
+    lines.push(`${indent(lvl + 1)}<voice>${voiceNum}</voice>`)
     lines.push(`${indent(lvl + 1)}<type>${DURATION_TYPE[r.duration]}</type>`)
     if (dotEls) lines.push(`${indent(lvl + 1)}${dotEls}`)
     if (tupletCtx) lines.push(...timeMod(tupletCtx.actual, tupletCtx.normal, r.duration, lvl + 1))
@@ -359,6 +362,7 @@ function noteLines(
       if (i > 0) lines.push(`${indent(lvl + 1)}<chord/>`)
       lines.push(`${indent(lvl + 1)}<pitch><step>${p.noteName}</step>${alterEl}<octave>${p.octave}</octave></pitch>`)
       lines.push(`${indent(lvl + 1)}<duration>${divs}</duration>`)
+      lines.push(`${indent(lvl + 1)}<voice>${voiceNum}</voice>`)
       lines.push(`${indent(lvl + 1)}<type>${DURATION_TYPE[c.duration]}</type>`)
       if (dotEls) lines.push(`${indent(lvl + 1)}${dotEls}`)
       if (accEl)  lines.push(`${indent(lvl + 1)}${accEl}`)
@@ -503,52 +507,56 @@ function partLines(score: Score, partIdx: number): string[] {
       lvl + 1,
     ))
 
-    // Notes — voice 0 only
-    // Pre-compute tuplet context per event (first/last position in each group)
-    const tupletCtxMap = new Map<string, TupletCtx>()
-    {
-      const groups = new Map<string, string[]>()
-      const meta   = new Map<string, { actual: number; normal: number }>()
-      for (const ev of measure.voices[0]?.events ?? []) {
-        const t = (ev as any).tuplet as TupletInfo | undefined
-        if (!t) continue
-        if (!groups.has(t.id)) { groups.set(t.id, []); meta.set(t.id, { actual: t.actual, normal: t.normal }) }
-        groups.get(t.id)!.push(ev.id)
-      }
-      for (const [id, ids] of groups) {
-        const { actual, normal } = meta.get(id)!
-        ids.forEach((nid, i) => tupletCtxMap.set(nid, { actual, normal, isFirst: i === 0, isLast: i === ids.length - 1 }))
-      }
-    }
+    // Notes — all voices (voice index 0 = MusicXML voice 1, index 1 = voice 2)
+    for (let vIdx = 0; vIdx < measure.voices.length; vIdx++) {
+      const voiceNum = vIdx + 1
 
-    const beamState: BeamState = { active: false }
-    for (const event of measure.voices[0]?.events ?? []) {
-      const hairpinType = hairpinMaps.starts.get(event.id)
-      if (hairpinType) {
-        const wedgeType = hairpinType === 'crescendo' ? 'crescendo' : 'diminuendo'
-        lines.push(
-          `      <direction placement="below">`,
-          `        <direction-type><wedge type="${wedgeType}" spread="0"/></direction-type>`,
-          `      </direction>`,
-        )
+      // Pre-compute tuplet context per event (first/last position in each group)
+      const tupletCtxMap = new Map<string, TupletCtx>()
+      {
+        const groups = new Map<string, string[]>()
+        const meta   = new Map<string, { actual: number; normal: number }>()
+        for (const ev of measure.voices[vIdx]?.events ?? []) {
+          const t = (ev as any).tuplet as TupletInfo | undefined
+          if (!t) continue
+          if (!groups.has(t.id)) { groups.set(t.id, []); meta.set(t.id, { actual: t.actual, normal: t.normal }) }
+          groups.get(t.id)!.push(ev.id)
+        }
+        for (const [id, ids] of groups) {
+          const { actual, normal } = meta.get(id)!
+          ids.forEach((nid, i) => tupletCtxMap.set(nid, { actual, normal, isFirst: i === 0, isLast: i === ids.length - 1 }))
+        }
       }
-      const noteDynamic = (event as any).dynamic as DynamicLevel | undefined
-      if (noteDynamic) {
-        const soundVal = DYNAMIC_SOUND[noteDynamic] ?? 64
-        lines.push(
-          `${indent(lvl + 1)}<direction placement="below">`,
-          `${indent(lvl + 2)}<direction-type><dynamics><${esc(noteDynamic)}/></dynamics></direction-type>`,
-          `${indent(lvl + 2)}<sound dynamics="${soundVal}"/>`,
-          `${indent(lvl + 1)}</direction>`,
-        )
-      }
-      lines.push(...noteLines(event, beamState, lvl + 1, slurMap, tupletCtxMap.get(event.id)))
-      if (hairpinMaps.stops.has(event.id)) {
-        lines.push(
-          `      <direction placement="below">`,
-          `        <direction-type><wedge type="stop"/></direction-type>`,
-          `      </direction>`,
-        )
+
+      const beamState: BeamState = { active: false }
+      for (const event of measure.voices[vIdx]?.events ?? []) {
+        const hairpinType = hairpinMaps.starts.get(event.id)
+        if (hairpinType) {
+          const wedgeType = hairpinType === 'crescendo' ? 'crescendo' : 'diminuendo'
+          lines.push(
+            `      <direction placement="below">`,
+            `        <direction-type><wedge type="${wedgeType}" spread="0"/></direction-type>`,
+            `      </direction>`,
+          )
+        }
+        const noteDynamic = (event as any).dynamic as DynamicLevel | undefined
+        if (noteDynamic) {
+          const soundVal = DYNAMIC_SOUND[noteDynamic] ?? 64
+          lines.push(
+            `${indent(lvl + 1)}<direction placement="below">`,
+            `${indent(lvl + 2)}<direction-type><dynamics><${esc(noteDynamic)}/></dynamics></direction-type>`,
+            `${indent(lvl + 2)}<sound dynamics="${soundVal}"/>`,
+            `${indent(lvl + 1)}</direction>`,
+          )
+        }
+        lines.push(...noteLines(event, beamState, lvl + 1, slurMap, tupletCtxMap.get(event.id), voiceNum))
+        if (hairpinMaps.stops.has(event.id)) {
+          lines.push(
+            `      <direction placement="below">`,
+            `        <direction-type><wedge type="stop"/></direction-type>`,
+            `      </direction>`,
+          )
+        }
       }
     }
 
@@ -742,11 +750,17 @@ function parseMusicXmlPart(
     }
 
     // ── Notes and directions ──────────────────────────────────────────────────
-    const events: NoteEvent[] = []
+    // voiceEventsMap: MusicXML voice number → NoteEvent array
+    const voiceEventsMap = new Map<number, NoteEvent[]>()
+    const getVoiceEvents = (vn: number): NoteEvent[] => {
+      if (!voiceEventsMap.has(vn)) voiceEventsMap.set(vn, [])
+      return voiceEventsMap.get(vn)!
+    }
     const directives: Directive[] = []
     let noteBuffer: Element[] = []
+    let currentVoiceNum = 1
     let lastEventId: string | null = null
-    let pendingTuplet: TupletInfo | null = null   // active tuplet group within this measure
+    const pendingTupletByVoice = new Map<number, TupletInfo | null>()
     let pendingDynamic: DynamicLevel | null = null // dynamic direction preceding the next note
 
     const flushNoteBuffer = (): void => {
@@ -808,17 +822,18 @@ function parseMusicXmlPart(
         if (actual > 1 && normal > 0) {
           const tupletEl   = noteBuffer[0].querySelector('notations tuplet')
           const tupletType = tupletEl?.getAttribute('type')
+          const pendingTuplet = pendingTupletByVoice.get(currentVoiceNum) ?? null
           if (tupletType === 'start' || !pendingTuplet) {
-            pendingTuplet = { id: uuid(), actual, normal }
+            pendingTupletByVoice.set(currentVoiceNum, { id: uuid(), actual, normal })
           }
-          ;(event as any).tuplet = { ...pendingTuplet }
-          if (tupletType === 'stop') pendingTuplet = null
+          ;(event as any).tuplet = { ...pendingTupletByVoice.get(currentVoiceNum) }
+          if (tupletType === 'stop') pendingTupletByVoice.set(currentVoiceNum, null)
         }
       }
 
       if (pendingDynamic) { (event as any).dynamic = pendingDynamic; pendingDynamic = null }
       if (hp.awaiting) { hp.open = { type: hp.awaiting, fromNoteId: event.id }; hp.awaiting = null }
-      events.push(event)
+      getVoiceEvents(currentVoiceNum).push(event)
       lastEventId = event.id
       noteBuffer = []
     }
@@ -827,7 +842,10 @@ function parseMusicXmlPart(
       const tag = child.tagName.toLowerCase()
 
       if (tag === 'note') {
-        if (!hasDirectChild(child, 'chord')) flushNoteBuffer()
+        if (!hasDirectChild(child, 'chord')) {
+          flushNoteBuffer()
+          currentVoiceNum = parseInt(child.querySelector('voice')?.textContent ?? '1') || 1
+        }
         noteBuffer.push(child)
       } else if (tag === 'direction') {
         const wedge = child.querySelector('direction-type wedge')
@@ -882,9 +900,13 @@ function parseMusicXmlPart(
     }
     flushNoteBuffer()
 
+    const voiceObjects: Voice[] = Array.from(voiceEventsMap.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([, evts]) => ({ id: uuid(), events: evts } as Voice))
+
     measures.push({
       id: uuid(), number: mIdx + 1,
-      voices: [{ id: uuid(), events } as Voice],
+      voices: voiceObjects.length > 0 ? voiceObjects : [{ id: uuid(), events: [] } as Voice],
       barline,
       ...(measureKey   ? { keySignature: measureKey }   : {}),
       ...(measureTs    ? { timeSignature: measureTs }    : {}),

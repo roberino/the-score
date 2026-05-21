@@ -38,6 +38,7 @@ export interface AppState {
   selectedDuration: Duration
   isDotted: boolean
   primedAccidental: Accidental | null
+  activeVoice: 0 | 1
   cursorMeasureId: string | null
   cursorBeatPosition: number          // in 64th-note units
   lastEnteredPitch: Pitch | null
@@ -97,6 +98,7 @@ export interface AppState {
   cancelResize: () => void
   clearResizeError: () => void
   setPrimedAccidental: (acc: Accidental | null) => void
+  setActiveVoice: (voice: 0 | 1) => void
   setCursor: (measureId: string | null, beatPosition: number) => void
   setLastEnteredPitch: (pitch: Pitch | null) => void
   moveCursorToFirstAvailable: () => void
@@ -136,6 +138,7 @@ export const useAppStore = create<AppState>()(
     selectedDuration: 'quarter',
     isDotted: false,
     primedAccidental: null,
+    activeVoice: 0,
     cursorMeasureId: null,
     cursorBeatPosition: 0,
     lastEnteredPitch: null,
@@ -316,6 +319,9 @@ export const useAppStore = create<AppState>()(
         state.score = s as any
         state.isDirty = true
       })
+      if (commands.some(c => c.type === 'ADD_NOTE')) {
+        get().checkAndAutoAddBar()
+      }
     },
     setSelectedMeasure: (id) => set(s => { s.selectedMeasureId = id }),
     setSelectedBarline: (id) => set(s => { s.selectedBarlineId = id }),
@@ -468,6 +474,11 @@ export const useAppStore = create<AppState>()(
 
     clearResizeError: () => set(s => { s.resizeError = null }),
     setPrimedAccidental: (acc) => set(s => { s.primedAccidental = acc }),
+    setActiveVoice: (voice) => {
+      set(s => { s.activeVoice = voice })
+      const { inputMode } = get()
+      if (inputMode === 'note' || inputMode === 'rest') get().moveCursorToFirstAvailable()
+    },
     setCursor: (measureId, beatPosition) => set(s => {
       s.cursorMeasureId = measureId
       s.cursorBeatPosition = beatPosition
@@ -477,11 +488,12 @@ export const useAppStore = create<AppState>()(
     moveCursorToFirstAvailable: () => {
       set(state => {
         const score = state.score
+        const av = state.activeVoice
         for (const part of score.parts) {
           for (const staff of part.staves) {
             for (let i = 0; i < staff.measures.length; i++) {
               const measure = staff.measures[i]
-              const voice = measure.voices[0]
+              const voice = measure.voices[av] ?? measure.voices[0]
               const timeSig = resolveTimeSig(staff.measures, i, score.timeSignature)
               const capacity = measureCapacityUnits(timeSig)
               const used = usedUnits(voice?.events ?? [])

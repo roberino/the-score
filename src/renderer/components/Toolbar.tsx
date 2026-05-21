@@ -31,6 +31,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     undoStack, redoStack,
     selectedDuration,
     isDotted, toggleDot, resizeNote,
+    activeVoice, setActiveVoice,
     score, cursorMeasureId, dispatch,
     keyboardVisible, toggleKeyboard,
     soundOnInput, toggleSoundOnInput,
@@ -360,6 +361,31 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           gap: 4,
           borderTop: '1px solid #3e3e3e',
         }}>
+          {/* Voice selector */}
+          <div style={{ display: 'flex', gap: 2, background: '#1e1e1e', borderRadius: 4, padding: 2, marginRight: 4 }}>
+            {([0, 1] as const).map(v => (
+              <button
+                key={v}
+                onClick={() => setActiveVoice(v)}
+                title={`Voice ${v + 1}`}
+                style={{
+                  padding: '2px 8px',
+                  fontSize: 11,
+                  borderRadius: 3,
+                  border: 'none',
+                  cursor: 'pointer',
+                  background: activeVoice === v ? '#0e639c' : 'transparent',
+                  color: activeVoice === v ? '#fff' : '#9d9d9d',
+                  transition: 'background 0.1s',
+                }}
+              >
+                V{v + 1}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ width: 1, height: 20, background: '#3e3e3e', marginRight: 4 }} />
+
           <span style={{ fontSize: 11, color: '#777', marginRight: 4 }}>Duration:</span>
           {DURATION_BUTTONS.map(({ duration, key }) => (
             <button

@@ -492,10 +492,14 @@ export function buildFlatSchedule(
     const measureDurSec = (measureCapacityUnits(timeSig) / 16) * (60 / bpm)
     const measureStartT = t
 
-    for (const event of measure.voices[0]?.events ?? []) {
-      const dur = eventToSeconds(event, bpm)
-      result.push({ event, mIdx, startSec: t, playDurSec: dur, skip: false })
-      t += dur
+    // Schedule events from every voice, each starting at measureStartT (voices play in parallel)
+    for (const voice of measure.voices) {
+      let voiceT = measureStartT
+      for (const event of voice.events) {
+        const dur = eventToSeconds(event, bpm)
+        result.push({ event, mIdx, startSec: voiceT, playDurSec: dur, skip: false })
+        voiceT += dur
+      }
     }
 
     // Snap to measure boundary so unfilled beats don't compress subsequent measures
