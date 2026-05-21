@@ -16,7 +16,6 @@ const EXPRESSION_PRESETS: { text: string; midiProgram?: number }[] = [
   { text: 'più mosso'                     },
 ]
 
-const DYNAMICS = ['ppp', 'pp', 'p', 'mp', 'mf', 'f', 'ff', 'fff'] as const
 
 // ── Shared micro-styles ───────────────────────────────────────────────────────
 
@@ -55,7 +54,7 @@ export interface DirectivePickerProps {
 export function DirectivePicker({
   existing, showTempo, screenX, screenY, onAdd, onRemove, onClose,
 }: DirectivePickerProps): JSX.Element {
-  const [tab, setTab] = useState<DirectiveCategory>(showTempo ? 'tempo' : 'dynamic')
+  const [tab, setTab] = useState<DirectiveCategory>(showTempo ? 'tempo' : 'expression')
 
   // Tempo state
   const [tempoText, setTempoText] = useState('')
@@ -93,7 +92,6 @@ export function DirectivePicker({
 
   const tabs: { id: DirectiveCategory; label: string }[] = [
     ...(showTempo ? [{ id: 'tempo' as DirectiveCategory, label: 'Tempo' }] : []),
-    { id: 'dynamic',    label: 'Dynamics'   },
     { id: 'expression', label: 'Expression' },
   ]
 
@@ -201,24 +199,6 @@ export function DirectivePicker({
             >
               Add tempo
             </button>
-          </div>
-        )}
-
-        {/* Dynamics */}
-        {tab === 'dynamic' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={sectionLabel}>Click to add</div>
-            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-              {DYNAMICS.map(d => (
-                <button
-                  key={d}
-                  style={{ ...chip(), fontWeight: 'bold', fontSize: 13, minWidth: 30 }}
-                  onClick={() => addDirective({ category: 'dynamic', text: d })}
-                >
-                  {d}
-                </button>
-              ))}
-            </div>
           </div>
         )}
 

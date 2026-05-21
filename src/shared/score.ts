@@ -15,6 +15,8 @@ export type BarlineType = 'single' | 'double' | 'final' | 'repeat-start' | 'repe
 
 export type ClefType = 'treble' | 'bass' | 'alto' | 'tenor' | 'percussion'
 
+export type DynamicLevel = 'pppp' | 'ppp' | 'pp' | 'p' | 'mp' | 'mf' | 'f' | 'ff' | 'fff' | 'ffff' | 'sfz' | 'fp'
+
 // ── Pitch ─────────────────────────────────────────────────────────────────────
 
 export interface Pitch {
@@ -37,6 +39,7 @@ export interface Note {
   readonly beamEnd: boolean
   readonly articulations: Articulation[]
   readonly tuplet?: TupletInfo
+  readonly dynamic?: DynamicLevel
 }
 
 export interface Rest {
@@ -45,6 +48,7 @@ export interface Rest {
   readonly duration: Duration
   readonly dots: 0 | 1 | 2
   readonly tuplet?: TupletInfo
+  readonly dynamic?: DynamicLevel
 }
 
 export interface Chord {
@@ -55,6 +59,7 @@ export interface Chord {
   readonly dots: 0 | 1 | 2
   readonly articulations: Articulation[]
   readonly tuplet?: TupletInfo
+  readonly dynamic?: DynamicLevel
 }
 
 export type NoteEvent = Note | Rest | Chord
@@ -178,6 +183,13 @@ export interface TextBox {
   readonly html: string    // sanitised HTML
 }
 
+export interface Volta {
+  readonly id: string
+  readonly number: 1 | 2 | 3
+  readonly startMeasureIndex: number  // 0-based, inclusive
+  readonly endMeasureIndex: number    // 0-based, inclusive
+}
+
 export interface Score {
   readonly id: string
   readonly metadata: ScoreMetadata
@@ -187,6 +199,7 @@ export interface Score {
   readonly tempo: number             // BPM
   readonly showPartLabels: boolean   // master label visibility
   readonly textBoxes?: readonly TextBox[]
+  readonly voltas?: readonly Volta[]
   readonly version: number           // file format version
 }
 

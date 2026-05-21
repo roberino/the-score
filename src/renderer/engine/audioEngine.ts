@@ -55,7 +55,7 @@ export async function playScore(
   let totalDuration = 0
 
   const tempoStaff = score.parts[0]?.staves[0]
-  const sequence   = buildPlaybackSequence(tempoStaff?.measures ?? [])
+  const sequence   = buildPlaybackSequence(tempoStaff?.measures ?? [], score.voltas ?? [])
 
   function buildHairpinDbMap(
     hairpins: readonly Hairpin[] | undefined,

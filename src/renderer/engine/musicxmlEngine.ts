@@ -13,7 +13,7 @@ import { v4 as uuid } from 'uuid'
 import type {
   Score, Part, Staff, Measure, Voice, NoteEvent, Note, Rest, Chord,
   Pitch, NoteName, Duration, Accidental, ClefType, BarlineType, Articulation,
-  Directive, Slur, Hairpin, ScoreMetadata, TimeSignature, KeySignature, TupletInfo,
+  Directive, Slur, Hairpin, ScoreMetadata, TimeSignature, KeySignature, TupletInfo, DynamicLevel, Volta,
 } from '@shared/score'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -372,11 +372,17 @@ function noteLines(
 
 // ── Barline element ───────────────────────────────────────────────────────────
 
-function barlineLines(style: string, direction: string | undefined, location: 'left' | 'right', lvl: number): string[] {
-  const repeatEl = direction ? `${indent(lvl + 1)}<repeat direction="${direction}"/>` : ''
+function barlineLines(
+  style: string | null, direction: string | undefined,
+  location: 'left' | 'right', lvl: number,
+  ending?: { number: number; type: string }
+): string[] {
+  const repeatEl  = direction ? `${indent(lvl + 1)}<repeat direction="${direction}"/>` : ''
+  const endingEl  = ending ? `${indent(lvl + 1)}<ending number="${ending.number}" type="${ending.type}"/>` : ''
   return [
     `${indent(lvl)}<barline location="${location}">`,
-    `${indent(lvl + 1)}<bar-style>${style}</bar-style>`,
+    ...(style ? [`${indent(lvl + 1)}<bar-style>${style}</bar-style>`] : []),
+    ...(endingEl ? [endingEl] : []),
     ...(repeatEl ? [repeatEl] : []),
     `${indent(lvl)}</barline>`,
   ]
@@ -457,17 +463,25 @@ function partLines(score: Score, partIdx: number): string[] {
   const slurMap   = buildSlurMap(staff)
   const hairpinMaps = buildHairpinMaps(staff)
 
+  const voltas = score.voltas ?? []
+
   for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
     const measure     = staff.measures[mIdx]
     const prevMeasure = mIdx > 0 ? staff.measures[mIdx - 1] : undefined
     const isFirst     = mIdx === 0
     const lvl         = 2
 
+    // Volta lookup for this measure
+    const voltaHere  = voltas.find(v => mIdx >= v.startMeasureIndex && mIdx <= v.endMeasureIndex)
+    const voltaStart = voltaHere && mIdx === voltaHere.startMeasureIndex ? voltaHere : undefined
+    const voltaEnd   = voltaHere && mIdx === voltaHere.endMeasureIndex   ? voltaHere : undefined
+
     lines.push(`    <measure number="${mIdx + 1}">`)
 
-    // Left barline: begin-repeat when previous measure carried repeat-start
-    if (prevMeasure?.barline === 'repeat-start') {
-      lines.push(...barlineLines('heavy-light', 'forward', 'left', lvl + 1))
+    // Left barline: begin-repeat and/or volta start
+    if (prevMeasure?.barline === 'repeat-start' || voltaStart) {
+      const ending = voltaStart ? { number: voltaStart.number, type: 'start' } : undefined
+      lines.push(...barlineLines('heavy-light', prevMeasure?.barline === 'repeat-start' ? 'forward' : undefined, 'left', lvl + 1, ending))
     }
 
     // Attributes (divisions, key, time, clef, transpose)
@@ -518,6 +532,16 @@ function partLines(score: Score, partIdx: number): string[] {
           `      </direction>`,
         )
       }
+      const noteDynamic = (event as any).dynamic as DynamicLevel | undefined
+      if (noteDynamic) {
+        const soundVal = DYNAMIC_SOUND[noteDynamic] ?? 64
+        lines.push(
+          `${indent(lvl + 1)}<direction placement="below">`,
+          `${indent(lvl + 2)}<direction-type><dynamics><${esc(noteDynamic)}/></dynamics></direction-type>`,
+          `${indent(lvl + 2)}<sound dynamics="${soundVal}"/>`,
+          `${indent(lvl + 1)}</direction>`,
+        )
+      }
       lines.push(...noteLines(event, beamState, lvl + 1, slurMap, tupletCtxMap.get(event.id)))
       if (hairpinMaps.stops.has(event.id)) {
         lines.push(
@@ -536,7 +560,12 @@ function partLines(score: Score, partIdx: number): string[] {
         'repeat-end': ['light-heavy', 'backward'],
       }
       const [style, dir] = bl[measure.barline] ?? []
-      if (style) lines.push(...barlineLines(style, dir, 'right', lvl + 1))
+      if (style) {
+        const ending = voltaEnd ? { number: voltaEnd.number, type: 'stop' } : undefined
+        lines.push(...barlineLines(style, dir, 'right', lvl + 1, ending))
+      }
+    } else if (voltaEnd) {
+      lines.push(...barlineLines(null, undefined, 'right', lvl + 1, { number: voltaEnd.number, type: 'stop' }))
     }
 
     lines.push('    </measure>')
@@ -633,11 +662,13 @@ function parseMusicXmlPart(
   scoreKeyMode: 'major' | 'minor',
   scoreTsNum: number,
   scoreTsDen: number,
-): Staff {
+): { staff: Staff; voltas: Volta[] } {
   const measureEls = Array.from(partEl.querySelectorAll('measure'))
   const measures: Measure[] = []
   const slurs: Slur[] = []
   const hairpins: Hairpin[] = []
+  const voltas: Volta[] = []
+  let pendingVoltaStart: { number: 1 | 2 | 3; startMIdx: number } | null = null
 
   let staffClef: ClefType = 'treble'
   let prevKeyFifths = scoreKeyFifths
@@ -686,15 +717,27 @@ function parseMusicXmlPart(
     // ── Barline ───────────────────────────────────────────────────────────────
     let barline: BarlineType = mIdx === measureEls.length - 1 ? 'final' : 'single'
     for (const blEl of Array.from(measureEl.querySelectorAll('barline'))) {
-      const location  = blEl.getAttribute('location') ?? 'right'
-      const style     = blEl.querySelector('bar-style')?.textContent?.trim()
-      const repeatDir = blEl.querySelector('repeat')?.getAttribute('direction')
+      const location   = blEl.getAttribute('location') ?? 'right'
+      const style      = blEl.querySelector('bar-style')?.textContent?.trim()
+      const repeatDir  = blEl.querySelector('repeat')?.getAttribute('direction')
+      const endingEl   = blEl.querySelector('ending')
+      const endingNum  = endingEl ? parseInt(endingEl.getAttribute('number') ?? '1') : 0
+      const endingType = endingEl?.getAttribute('type')
       if (location === 'right') {
         if (style === 'light-light')                                  barline = 'double'
         else if (style === 'light-heavy' && repeatDir === 'backward') barline = 'repeat-end'
         else if (style === 'light-heavy')                             barline = 'final'
-      } else if (location === 'left' && style === 'heavy-light' && repeatDir === 'forward') {
-        if (mIdx > 0) measures[mIdx - 1] = { ...measures[mIdx - 1], barline: 'repeat-start' }
+        if ((endingType === 'stop' || endingType === 'discontinue') && pendingVoltaStart) {
+          voltas.push({ id: uuid(), number: pendingVoltaStart.number, startMeasureIndex: pendingVoltaStart.startMIdx, endMeasureIndex: mIdx })
+          pendingVoltaStart = null
+        }
+      } else if (location === 'left') {
+        if (style === 'heavy-light' && repeatDir === 'forward') {
+          if (mIdx > 0) measures[mIdx - 1] = { ...measures[mIdx - 1], barline: 'repeat-start' }
+        }
+        if (endingType === 'start' && (endingNum === 1 || endingNum === 2 || endingNum === 3)) {
+          pendingVoltaStart = { number: endingNum as 1 | 2 | 3, startMIdx: mIdx }
+        }
       }
     }
 
@@ -704,6 +747,7 @@ function parseMusicXmlPart(
     let noteBuffer: Element[] = []
     let lastEventId: string | null = null
     let pendingTuplet: TupletInfo | null = null   // active tuplet group within this measure
+    let pendingDynamic: DynamicLevel | null = null // dynamic direction preceding the next note
 
     const flushNoteBuffer = (): void => {
       if (noteBuffer.length === 0) return
@@ -772,6 +816,7 @@ function parseMusicXmlPart(
         }
       }
 
+      if (pendingDynamic) { (event as any).dynamic = pendingDynamic; pendingDynamic = null }
       if (hp.awaiting) { hp.open = { type: hp.awaiting, fromNoteId: event.id }; hp.awaiting = null }
       events.push(event)
       lastEventId = event.id
@@ -827,8 +872,8 @@ function parseMusicXmlPart(
             directives.push({ id: uuid(), category: 'tempo', text, bpm })
           }
         } else if (dynEl && dynEl.children.length > 0) {
-          const dynTag = dynEl.children[0].tagName
-          directives.push({ id: uuid(), category: 'dynamic', text: dynTag })
+          const dynTag = dynEl.children[0].tagName as DynamicLevel
+          pendingDynamic = dynTag
         } else if (wordsEl) {
           const text = wordsEl.textContent?.trim() ?? ''
           if (text) directives.push({ id: uuid(), category: 'expression', text })
@@ -849,9 +894,12 @@ function parseMusicXmlPart(
   }
 
   return {
-    id: uuid(), clef: staffClef, measures,
-    ...(slurs.length    > 0 ? { slurs }    : {}),
-    ...(hairpins.length > 0 ? { hairpins } : {}),
+    staff: {
+      id: uuid(), clef: staffClef, measures,
+      ...(slurs.length    > 0 ? { slurs }    : {}),
+      ...(hairpins.length > 0 ? { hairpins } : {}),
+    },
+    voltas,
   }
 }
 
@@ -963,6 +1011,8 @@ export function musicxmlToScore(xml: string): Score {
 
   // ── Build parts ───────────────────────────────────────────────────────────
   const parts: Part[] = []
+  let scoreVoltas: Volta[] = []
+
   for (const partEl of Array.from(doc.querySelectorAll('score-partwise > part'))) {
     const partId = partEl.getAttribute('id') ?? ''
     const info = partInfoMap.get(partId) ?? { name: 'Part', shortName: 'Pt.', midiProgram: 0, midiChannel: 1, volume: 0.8 }
@@ -972,7 +1022,8 @@ export function musicxmlToScore(xml: string): Score {
     const chromatic = transposeEl ? parseInt(transposeEl.querySelector('chromatic')?.textContent ?? '0') : 0
     const transposeSemitones = transposeEl ? -chromatic : 0
 
-    const staff    = parseMusicXmlPart(partEl, scoreKeyFifths, scoreKeyMode, scoreTsNum, scoreTsDen)
+    const { staff, voltas } = parseMusicXmlPart(partEl, scoreKeyFifths, scoreKeyMode, scoreTsNum, scoreTsDen)
+    if (parts.length === 0) scoreVoltas = voltas  // voltas are score-level; collect from first part only
     const groupInfo = partGroupMap.get(partId)
 
     parts.push({
@@ -998,6 +1049,7 @@ export function musicxmlToScore(xml: string): Score {
     showPartLabels: true,
     textBoxes: [],
     version: 1,
+    ...(scoreVoltas.length > 0 ? { voltas: scoreVoltas } : {}),
   }
 }
 

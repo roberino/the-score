@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import { createScore, type Score, type Pitch, type Duration, type Accidental, type HairpinType, type Hairpin } from '@shared/score'
+import { createScore, type Score, type Pitch, type Duration, type Accidental, type HairpinType, type Hairpin, type DynamicLevel, type Volta } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import { applyCommand, type Command } from '@shared/commands'
 import { measureCapacityUnits, usedUnits, resolveTimeSig, dottedUnits, DURATION_UNITS } from '@shared/musicUtils'
@@ -106,6 +106,9 @@ export interface AppState {
   addHairpin: (hairpinType: HairpinType) => void
   removeHairpin: (partId: string, staffId: string, hairpinId: string) => void
   applyTuplet: (actual: 3 | 5 | 6, normal: 2 | 4) => void
+  setNoteDynamic: (noteId: string, dynamic: DynamicLevel | undefined) => void
+  addVolta: (volta: Omit<Volta, 'id'>) => void
+  removeVolta: (voltaId: string) => void
   toggleKeyboard: () => void
   toggleSoundOnInput: () => void
   setAudioMode: (mode: 'builtin' | 'midi-out') => void
@@ -618,6 +621,18 @@ export const useAppStore = create<AppState>()(
       if (targets.length === actual) {
         get().dispatch({ type: 'APPLY_TUPLET', targets, actual, normal })
       }
+    },
+
+    setNoteDynamic: (noteId, dynamic) => {
+      get().dispatch({ type: 'SET_NOTE_DYNAMIC', noteId, dynamic })
+    },
+
+    addVolta: (volta) => {
+      get().dispatch({ type: 'ADD_VOLTA', volta: { id: uuid(), ...volta } })
+    },
+
+    removeVolta: (voltaId) => {
+      get().dispatch({ type: 'REMOVE_VOLTA', voltaId })
     },
 
     checkAndAutoAddBar: () => {

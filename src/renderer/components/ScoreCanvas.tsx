@@ -10,7 +10,7 @@ import {
   type MeasureLayout,
   type HeadingFieldBound,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import {
   DURATION_UNITS,
@@ -278,6 +278,7 @@ const ARTICULATION_BUTTONS: { art: Articulation; label: string; title: string }[
 export function ScoreCanvas(): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const notePositionsRef = useRef(new Map<string, number>())
+  const [selectionMenuPos, setSelectionMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [pickerState, setPickerState] = useState<PickerState | null>(null)
   const [timeSigPickerState, setTimeSigPickerState] = useState<TimeSigPickerState | null>(null)
   const [keySigPickerState, setKeySigPickerState] = useState<KeySigPickerState | null>(null)
@@ -306,6 +307,9 @@ export function ScoreCanvas(): JSX.Element {
     deleteMeasure,
     addHairpin,
     applyTuplet,
+    setNoteDynamic,
+    addVolta,
+    removeVolta,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -1320,14 +1324,17 @@ export function ScoreCanvas(): JSX.Element {
         if (selMIdx !== -1) {
           const selVoice = selStaff.measures[selMIdx].voices[0]
           if (selVoice && selVoice.events.length > 0) {
-            let closest: { id: string; dist: number } | null = null
+            let closest: { id: string; dist: number; noteX: number } | null = null
             for (const ev of selVoice.events) {
               const noteX = notePositionsRef.current.get(ev.id)
               if (noteX === undefined) continue
               const dist = Math.abs(canvasX - noteX)
-              if (!closest || dist < closest.dist) closest = { id: ev.id, dist }
+              if (!closest || dist < closest.dist) closest = { id: ev.id, dist, noteX }
             }
             if (closest && closest.dist <= 20) {
+              const rect = canvas.getBoundingClientRect()
+              const menuX = rect.left + closest.noteX
+              const menuY = rect.top + layout.staveTopY + 4 * LINE_SPACING_PX + 12
               if (event.shiftKey) {
                 // Shift+click: range select from anchor to clicked, or toggle
                 const anchorLoc = selectedAnchorId ? findNoteLocation(selectedAnchorId) : null
@@ -1374,6 +1381,7 @@ export function ScoreCanvas(): JSX.Element {
                   }
                 }
               }
+              setSelectionMenuPos({ x: menuX, y: menuY })
               return
             }
           }
@@ -1488,6 +1496,10 @@ export function ScoreCanvas(): JSX.Element {
     }
   }, [inputMode])
 
+  useEffect(() => {
+    if (selectedNoteIds.length === 0) setSelectionMenuPos(null)
+  }, [selectedNoteIds.length])
+
   // ── Cursor style per mode ───────────────────────────────────────────────────
 
   const cursorStyle =
@@ -1506,136 +1518,6 @@ export function ScoreCanvas(): JSX.Element {
         minWidth: '100%',
         position: 'relative',
       }}>
-        {selectedNoteIds.length > 0 && inputMode === 'select' && (
-          <div style={{
-            position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)',
-            background: '#fff', border: '1px solid #d0d0d0', borderRadius: 4,
-            padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 4, zIndex: 100,
-            boxShadow: '0 1px 4px rgba(0,0,0,0.12)', fontSize: 12,
-          }}>
-            {/* Row 1: note operations */}
-            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-              {selectedNoteIds.length > 1 && (
-                <span style={{ color: '#666', fontSize: 11, marginRight: 2 }}>
-                  {selectedNoteIds.length} selected
-                </span>
-              )}
-              {selectedNoteId && (
-                <>
-                  <button
-                    onClick={toggleTie}
-                    title="Toggle tie (T)"
-                    style={{
-                      padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc',
-                      background: (() => {
-                        for (const part of score.parts) {
-                          for (const staff of part.staves) {
-                            for (const measure of staff.measures) {
-                              for (const voice of measure.voices) {
-                                const ev = voice.events.find(e => e.id === selectedNoteId)
-                                if (ev?.type === 'note' && (ev as Note).tieStart) return '#d0e8ff'
-                              }
-                            }
-                          }
-                        }
-                        return 'none'
-                      })(),
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Tie
-                  </button>
-                  <button
-                    onClick={handleSlurKey}
-                    title={slurPendingId ? 'Click destination note then press L, or click here to cancel' : 'Start slur (L)'}
-                    style={{
-                      padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc',
-                      background: slurPendingId ? '#ffe0b0' : 'none',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {slurPendingId ? 'Slur…' : 'Slur'}
-                  </button>
-                </>
-              )}
-              {selectedNoteIds.length >= 2 && (
-                <>
-                  <button
-                    onClick={() => addHairpin('crescendo')}
-                    title="Add crescendo"
-                    style={{ padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc', background: 'none', cursor: 'pointer' }}
-                  >
-                    cresc
-                  </button>
-                  <button
-                    onClick={() => addHairpin('decrescendo')}
-                    title="Add decrescendo"
-                    style={{ padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc', background: 'none', cursor: 'pointer' }}
-                  >
-                    dim
-                  </button>
-                </>
-              )}
-              {selectedNoteIds.length === 3 && (
-                <button
-                  onClick={() => applyTuplet(3, 2)}
-                  title="Make triplet (3 notes in time of 2)"
-                  style={{ padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc', background: 'none', cursor: 'pointer' }}
-                >
-                  3
-                </button>
-              )}
-              {selectedNoteIds.length === 5 && (
-                <button
-                  onClick={() => applyTuplet(5, 4)}
-                  title="Make quintuplet (5 notes in time of 4)"
-                  style={{ padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc', background: 'none', cursor: 'pointer' }}
-                >
-                  5
-                </button>
-              )}
-              {selectedNoteIds.length === 6 && (
-                <button
-                  onClick={() => applyTuplet(6, 4)}
-                  title="Make sextuplet (6 notes in time of 4)"
-                  style={{ padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc', background: 'none', cursor: 'pointer' }}
-                >
-                  6
-                </button>
-              )}
-              <button
-                onClick={() => setTransposeDialogOpen(true)}
-                title="Transpose selected notes (Shift+T)"
-                style={{
-                  padding: '2px 8px', borderRadius: 3, border: '1px solid #ccc',
-                  background: 'none', cursor: 'pointer',
-                }}
-              >
-                Transpose…
-              </button>
-            </div>
-            {/* Row 2: articulations (hidden when only rests selected) */}
-            {nonRestLocations.length > 0 && (
-              <div style={{ display: 'flex', gap: 3, borderTop: '1px solid #eee', paddingTop: 3 }}>
-                {ARTICULATION_BUTTONS.map(({ art, label, title }) => (
-                  <button
-                    key={art}
-                    onClick={() => handleArticulationClick(art)}
-                    title={title}
-                    style={{
-                      padding: '2px 7px', borderRadius: 3, border: '1px solid #ccc',
-                      background: artActive[art] ? '#3b9ddd' : 'none',
-                      color: artActive[art] ? '#fff' : '#333',
-                      cursor: 'pointer', fontFamily: 'serif', fontSize: 13,
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
         <canvas
           ref={canvasRef}
           onClick={handleCanvasClick}
@@ -1717,6 +1599,159 @@ export function ScoreCanvas(): JSX.Element {
           onClose={() => setTransposeDialogOpen(false)}
         />
       )}
+
+      {selectedNoteIds.length > 0 && inputMode === 'select' && selectionMenuPos && (() => {
+        // Resolve current dynamic for single-note selection
+        let currentDynamic: DynamicLevel | undefined
+        if (selectedNoteId) {
+          for (const part of score.parts) {
+            for (const staff of part.staves) {
+              for (const measure of staff.measures) {
+                for (const voice of measure.voices) {
+                  const ev = voice.events.find(e => e.id === selectedNoteId)
+                  if (ev) { currentDynamic = (ev as any).dynamic; break }
+                }
+              }
+            }
+          }
+        }
+        // Find active tie state
+        let hasTie = false
+        if (selectedNoteId) {
+          for (const part of score.parts) {
+            for (const staff of part.staves) {
+              for (const measure of staff.measures) {
+                for (const voice of measure.voices) {
+                  const ev = voice.events.find(e => e.id === selectedNoteId)
+                  if (ev?.type === 'note' && (ev as Note).tieStart) hasTie = true
+                }
+              }
+            }
+          }
+        }
+        // Compute the measure index range covered by the current selection
+        const selIdSet = new Set(selectedNoteIds)
+        let selMinMeasure = Infinity, selMaxMeasure = -Infinity
+        const firstStaff = score.parts[0]?.staves[0]
+        if (firstStaff) {
+          firstStaff.measures.forEach((m, idx) => {
+            for (const voice of m.voices) {
+              if (voice.events.some(e => selIdSet.has(e.id))) {
+                selMinMeasure = Math.min(selMinMeasure, idx)
+                selMaxMeasure = Math.max(selMaxMeasure, idx)
+              }
+            }
+          })
+        }
+        const selHasMeasure = selMaxMeasure >= selMinMeasure && selMinMeasure !== Infinity
+        // Existing volta that exactly covers the selected range (for toggle)
+        const existingVolta: Volta | undefined = selHasMeasure
+          ? (score.voltas ?? []).find(v =>
+              v.startMeasureIndex === selMinMeasure && v.endMeasureIndex === selMaxMeasure
+            )
+          : undefined
+
+        const menuW = 360
+        const left = Math.min(selectionMenuPos.x - menuW / 2, window.innerWidth - menuW - 8)
+        const top  = Math.min(selectionMenuPos.y, window.innerHeight - 180)
+        const btnBase: React.CSSProperties = {
+          padding: '3px 8px', borderRadius: 3, border: '1px solid #555',
+          background: '#2d2d2d', color: '#ccc', cursor: 'pointer', fontSize: 11,
+        }
+        const btnActive: React.CSSProperties = { ...btnBase, background: '#0e639c', color: '#fff', borderColor: '#0e639c' }
+        const divider: React.CSSProperties = { borderTop: '1px solid #333', paddingTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap' as const, alignItems: 'center' }
+        const DYNAMICS: DynamicLevel[] = ['pp', 'p', 'mp', 'mf', 'f', 'ff']
+        return (
+          <div style={{
+            position: 'fixed', left, top,
+            background: '#1e1e1e', border: '1px solid #444', borderRadius: 6,
+            padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6,
+            zIndex: 1000, boxShadow: '0 4px 16px rgba(0,0,0,0.5)', fontSize: 12, color: '#d4d4d4',
+            minWidth: menuW,
+          }}>
+            {/* Row 1: note / multi-select operations */}
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+              {selectedNoteIds.length > 1 && (
+                <span style={{ color: '#888', fontSize: 11, marginRight: 4 }}>
+                  {selectedNoteIds.length} selected
+                </span>
+              )}
+              {selectedNoteId && (
+                <>
+                  <button onClick={toggleTie} title="Toggle tie (T)" style={hasTie ? btnActive : btnBase}>Tie</button>
+                  <button
+                    onClick={handleSlurKey}
+                    title={slurPendingId ? 'Cancel slur' : 'Start slur (L)'}
+                    style={slurPendingId ? { ...btnBase, background: '#6d3a00', borderColor: '#a0550a', color: '#ffc080' } : btnBase}
+                  >
+                    {slurPendingId ? 'Slur…' : 'Slur'}
+                  </button>
+                </>
+              )}
+              {selectedNoteIds.length >= 2 && (
+                <>
+                  <button onClick={() => addHairpin('crescendo')}   title="Add crescendo"   style={btnBase}>cresc</button>
+                  <button onClick={() => addHairpin('decrescendo')} title="Add decrescendo" style={btnBase}>dim</button>
+                </>
+              )}
+              {selectedNoteIds.length === 3 && <button onClick={() => applyTuplet(3, 2)} title="Make triplet"     style={btnBase}>3</button>}
+              {selectedNoteIds.length === 5 && <button onClick={() => applyTuplet(5, 4)} title="Make quintuplet"  style={btnBase}>5</button>}
+              {selectedNoteIds.length === 6 && <button onClick={() => applyTuplet(6, 4)} title="Make sextuplet"   style={btnBase}>6</button>}
+              <button onClick={() => setTransposeDialogOpen(true)} title="Transpose (Shift+T)" style={btnBase}>Transpose…</button>
+            </div>
+            {/* Row 2: articulations */}
+            {nonRestLocations.length > 0 && (
+              <div style={divider}>
+                {ARTICULATION_BUTTONS.map(({ art, label, title }) => (
+                  <button key={art} onClick={() => handleArticulationClick(art)} title={title}
+                    style={{ ...( artActive[art] ? btnActive : btnBase ), fontFamily: 'serif', fontSize: 13 }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {/* Row 3: dynamics (single note only) */}
+            {selectedNoteId && (
+              <div style={divider}>
+                {DYNAMICS.map(d => (
+                  <button key={d}
+                    onClick={() => setNoteDynamic(selectedNoteId, currentDynamic === d ? undefined : d)}
+                    title={currentDynamic === d ? `Remove ${d}` : `Set dynamic: ${d}`}
+                    style={{ ...(currentDynamic === d ? btnActive : btnBase), fontFamily: 'Edwin, serif', fontStyle: 'italic', fontWeight: 'bold', fontSize: 13 }}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            )}
+            {/* Row 4: volta brackets */}
+            {selHasMeasure && (
+              <div style={{ ...divider, alignItems: 'center' }}>
+                <span style={{ color: '#888', fontSize: 10, marginRight: 2 }}>Volta</span>
+                {([1, 2, 3] as const).map(n => {
+                  const isActive = existingVolta?.number === n
+                  return (
+                    <button key={n}
+                      onClick={() => {
+                        if (isActive && existingVolta) {
+                          removeVolta(existingVolta.id)
+                        } else {
+                          if (existingVolta) removeVolta(existingVolta.id)
+                          addVolta({ number: n, startMeasureIndex: selMinMeasure, endMeasureIndex: selMaxMeasure })
+                        }
+                      }}
+                      title={isActive ? `Remove ending ${n}` : `Add ending ${n} (measures ${selMinMeasure + 1}–${selMaxMeasure + 1})`}
+                      style={isActive ? btnActive : btnBase}
+                    >
+                      {n}.
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {pendingResize && (
         <div style={{

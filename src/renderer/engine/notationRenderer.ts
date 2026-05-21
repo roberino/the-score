@@ -20,11 +20,12 @@ import {
   Articulation as VexArticulation,
   Ornament,
   Tuplet as VexTuplet,
+  VoltaType,
   BarlineType,
   type RenderContext
 } from 'vexflow'
 
-import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo } from '@shared/score'
+import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta } from '@shared/score'
 import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
@@ -604,6 +605,11 @@ function renderFromLayouts(
     const effectiveSig = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
     const prevSig      = mIdx > 0 ? resolveTimeSig(staff.measures, mIdx - 1, score.timeSignature) : null
 
+    // Volta bracket for this measure (first part only — one bracket per system)
+    const voltaOpts = (part === score.parts[0])
+      ? resolveVoltaOpts(layout.measureIndex, score.voltas ?? [])
+      : undefined
+
     const { stave, staveNotes, events } = renderMeasure(
       ctx, measure, prevMeasure,
       effectiveKey, prevKey,
@@ -611,7 +617,8 @@ function renderFromLayouts(
       layout.clef, layout.transposeSemitones,
       layout.x, layout.staveY, layout.width,
       layout.measureIndex, layout.isLineStart, layout.showClef,
-      selectedNoteIds, notePositions
+      selectedNoteIds, notePositions,
+      voltaOpts
     )
 
     events.forEach((e, i) => {
@@ -641,7 +648,11 @@ function renderFromLayouts(
     }
 
     // Directives: drawn in the VexFlow headroom zone above the top staff line
-    drawDirectives(ctx, layout, measure, staff, score, part === score.parts[0])
+    drawDirectives(ctx, layout, measure, staff, score, part === score.parts[0], stave.getNoteStartX())
+    // Note-attached dynamics below the stave
+    if (staveNotes.length > 0) {
+      drawNoteDynamics(ctx, layout, measure, staff, staveNotes, events)
+    }
   }
 
   // ── Second pass: group connectors (brackets, braces, barline spans) ─────────
@@ -731,6 +742,37 @@ function drawGroupConnectors(
   }
 }
 
+// ── Staff-position helpers for directive placement ────────────────────────────
+
+const NOTE_STEPS: Record<string, number> = { C: 0, D: 1, E: 2, F: 3, G: 4, A: 5, B: 6 }
+
+// Diatonic position (octave * 7 + step) of the bottom staff line per clef
+const CLEF_BOTTOM_DIATONIC: Record<ClefType, number> = {
+  treble:     4 * 7 + 2,  // E4
+  bass:       2 * 7 + 4,  // G2
+  alto:       3 * 7 + 3,  // F3
+  tenor:      3 * 7 + 1,  // D3
+  percussion: 4 * 7 + 2,
+}
+
+// Returns how far (px) the lowest pitched note in the measure extends below the bottom staff line.
+function lowestNoteOverhangPx(measure: Measure, clef: ClefType): number {
+  const bottomDiatonic = CLEF_BOTTOM_DIATONIC[clef]
+  let maxStepsBelow = 0
+  for (const voice of measure.voices) {
+    for (const event of voice.events) {
+      const pitches = event.type === 'note'  ? [event.pitch]
+                    : event.type === 'chord' ? event.pitches
+                    : []
+      for (const p of pitches) {
+        const stepsBelow = bottomDiatonic - (p.octave * 7 + NOTE_STEPS[p.noteName])
+        if (stepsBelow > maxStepsBelow) maxStepsBelow = stepsBelow
+      }
+    }
+  }
+  return maxStepsBelow * 5  // 5px per diatonic step (LINE_SPACING_PX / 2)
+}
+
 // ── Draw performance directives for one measure ───────────────────────────────
 
 function drawDirectives(
@@ -739,7 +781,8 @@ function drawDirectives(
   measure: Measure,
   staff: Staff,
   score: Score,
-  isFirstPart: boolean
+  isFirstPart: boolean,
+  noteStartX: number
 ): void {
   const nativeCtx: CanvasRenderingContext2D | null =
     typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
@@ -757,7 +800,7 @@ function drawDirectives(
     const showScoreTempo = mIdx === 0 && tempoDirs.length === 0
 
     if (tempoDirs.length > 0 || showScoreTempo) {
-      nativeCtx.font      = 'bold italic 12px sans-serif'
+      nativeCtx.font      = 'bold italic 13px Edwin, serif'
       nativeCtx.fillStyle = '#111'
       nativeCtx.textAlign = 'left'
 
@@ -771,28 +814,55 @@ function drawDirectives(
         const bpm = resolveDirectiveTempo(staff.measures, mIdx, score.tempo)
         label = `♩=${bpm}`
       }
-      nativeCtx.fillText(label, layout.x + 4, layout.staveY + 14)
+      nativeCtx.fillText(label, noteStartX + 2, layout.staveY + 14)
     }
   }
 
-  // ── Dynamics ───────────────────────────────────────────────────────────────
-  const dynamicDirs = directives.filter(d => d.category === 'dynamic')
-  if (dynamicDirs.length > 0) {
-    nativeCtx.font      = 'bold 13px serif'
-    nativeCtx.fillStyle = '#111'
-    nativeCtx.textAlign = 'left'
-    nativeCtx.fillText(dynamicDirs.map(d => d.text).join(' '), layout.x + 4, layout.staveY + 28)
-  }
-
-  // ── Expression ─────────────────────────────────────────────────────────────
+  // ── Expression (above stave) ───────────────────────────────────────────────
   const exprDirs = directives.filter(d => d.category === 'expression')
   if (exprDirs.length > 0) {
-    nativeCtx.font      = 'italic 11px serif'
+    nativeCtx.font      = 'italic 12px Edwin, serif'
     nativeCtx.fillStyle = '#444'
     nativeCtx.textAlign = 'left'
-    const exprY = dynamicDirs.length > 0 ? layout.staveY + 40 : layout.staveY + 28
-    nativeCtx.fillText(exprDirs.map(d => d.text).join(' '), layout.x + 4, exprY)
+    nativeCtx.fillText(exprDirs.map(d => d.text).join(' '), noteStartX + 2, layout.staveTopY - 6)
   }
+
+  nativeCtx.restore()
+}
+
+// ── Note-attached dynamics (below stave, per-note x position) ─────────────────
+
+function drawNoteDynamics(
+  ctx: RenderContext,
+  layout: MeasureLayout,
+  measure: Measure,
+  staff: Staff,
+  staveNotes: StaveNote[],
+  events: NoteEvent[],
+): void {
+  const nativeCtx: CanvasRenderingContext2D | null =
+    typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
+  if (!nativeCtx) return
+
+  const mIdx = staff.measures.findIndex(m => m.id === measure.id)
+  const clef = resolveClef(staff.measures, mIdx, staff.clef)
+  const staveBottom = layout.staveTopY + STAVE_HEIGHT_PX
+
+  nativeCtx.save()
+  nativeCtx.font      = 'bold italic 13px Edwin, serif'
+  nativeCtx.fillStyle = '#111'
+  nativeCtx.textAlign = 'left'
+  nativeCtx.textBaseline = 'alphabetic'
+
+  events.forEach((event, i) => {
+    const dynamic = (event as any).dynamic as DynamicLevel | undefined
+    if (!dynamic) return
+    // Clear past any low notes in this measure so the label never overlaps noteheads.
+    const overhang = lowestNoteOverhangPx(measure, clef)
+    const y = staveBottom + Math.max(14, overhang + 10)
+    const x = staveNotes[i].getAbsoluteX()
+    nativeCtx.fillText(dynamic, x, y)
+  })
 
   nativeCtx.restore()
 }
@@ -812,6 +882,23 @@ function getBeamGroups(timeSig: TimeSignature): Fraction[] | null {
     if (numerator === 7) return [new Fraction(2, 8), new Fraction(2, 8), new Fraction(3, 8)]
   }
   return null
+}
+
+// ── Volta helpers ────────────────────────────────────────────────────────────
+
+interface VoltaOpts { vexType: VoltaType; label: string }
+
+function resolveVoltaOpts(measureIndex: number, voltas: readonly Volta[]): VoltaOpts | undefined {
+  const volta = voltas.find(v => measureIndex >= v.startMeasureIndex && measureIndex <= v.endMeasureIndex)
+  if (!volta) return undefined
+  const isFirst = measureIndex === volta.startMeasureIndex
+  const isLast  = measureIndex === volta.endMeasureIndex
+  const label   = isFirst ? `${volta.number}.` : ''
+  const vexType = isFirst && isLast ? VoltaType.BEGIN_END
+                : isFirst           ? VoltaType.BEGIN
+                : isLast            ? VoltaType.END
+                :                     VoltaType.MID
+  return { vexType, label }
 }
 
 // ── Render a single measure ───────────────────────────────────────────────────
@@ -840,7 +927,8 @@ function renderMeasure(
   isLineStart: boolean,
   showClef: boolean,
   selectedNoteIds: ReadonlySet<string>,
-  notePositions: Map<string, number>
+  notePositions: Map<string, number>,
+  voltaOpts?: VoltaOpts
 ): MeasureRenderResult {
   const stave = new Stave(x, y, width)
 
@@ -877,6 +965,10 @@ function renderMeasure(
   // Repeat-begin on left edge when previous bar has repeat-start
   if (prevMeasure?.barline === 'repeat-start') {
     stave.setBegBarType(BarlineType.REPEAT_BEGIN)
+  }
+
+  if (voltaOpts) {
+    stave.setVoltaType(voltaOpts.vexType, voltaOpts.label, 0)
   }
 
   stave.setContext(ctx).draw()

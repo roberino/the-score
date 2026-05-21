@@ -12,7 +12,7 @@
 import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
-import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol, TupletInfo } from './score'
+import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol, TupletInfo, DynamicLevel, Volta } from './score'
 import { measureCapacityUnits, eventDurationUnits, dottedUnits, DURATION_UNITS, resolveClef, pitchToStep, stepToPitch, shiftPitchBySemitones } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
@@ -61,6 +61,9 @@ export type Command =
   | { type: 'REMOVE_HAIRPIN';        partId: string; staffId: string; hairpinId: string }
   | { type: 'ADD_TUPLET';    partId: string; staffId: string; measureId: string; voiceId: string; actual: 3 | 5 | 6; normal: 2 | 4; duration: Duration }
   | { type: 'APPLY_TUPLET';  targets: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[]; actual: 3 | 5 | 6; normal: 2 | 4 }
+  | { type: 'SET_NOTE_DYNAMIC'; noteId: string; dynamic: DynamicLevel | undefined }
+  | { type: 'ADD_VOLTA';    volta: Volta }
+  | { type: 'REMOVE_VOLTA'; voltaId: string }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -851,6 +854,39 @@ export function applyCommand(score: Score, command: Command): Score {
           const voice = meas?.voices.find((v: any) => v.id === target.voiceId)
           const event = (voice?.events as any[])?.find((e: any) => e.id === target.noteId)
           if (event) event.tuplet = tupletInfo
+        }
+        break
+      }
+
+      case 'SET_NOTE_DYNAMIC': {
+        for (const part of draft.parts as any[]) {
+          for (const staff of part.staves) {
+            for (const measure of staff.measures) {
+              for (const voice of measure.voices) {
+                const event = (voice.events as any[]).find((e: any) => e.id === command.noteId)
+                if (event) {
+                  if (command.dynamic !== undefined) {
+                    event.dynamic = command.dynamic
+                  } else {
+                    delete event.dynamic
+                  }
+                }
+              }
+            }
+          }
+        }
+        break
+      }
+
+      case 'ADD_VOLTA': {
+        if (!draft.voltas) (draft as any).voltas = []
+        ;(draft as any).voltas.push(command.volta)
+        break
+      }
+
+      case 'REMOVE_VOLTA': {
+        if (draft.voltas) {
+          (draft as any).voltas = (draft.voltas as any[]).filter((v: any) => v.id !== command.voltaId)
         }
         break
       }

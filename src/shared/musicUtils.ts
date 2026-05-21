@@ -1,4 +1,4 @@
-import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, TimeSignature, KeySignature, ClefType, Measure, TupletInfo } from './score'
+import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, TimeSignature, KeySignature, ClefType, Measure, TupletInfo, Volta } from './score'
 
 // ── Duration arithmetic (64th-note units) ─────────────────────────────────────
 
@@ -379,25 +379,71 @@ export function expandOrnamentNotes(
   ]
 }
 
-export function buildPlaybackSequence(measures: readonly Measure[]): number[] {
+export function buildPlaybackSequence(measures: readonly Measure[], voltas: readonly Volta[] = []): number[] {
   const order: number[] = []
-  const seen = new Set<number>()
+  // Track how many times each repeat-end has been taken (keyed by measure index)
+  const repeatPassCount = new Map<number, number>()
+
+  // For a measure index, return which volta number it belongs to (or 0 if none)
+  const voltaNumberAt = (mIdx: number): number => {
+    const v = voltas.find(v => mIdx >= v.startMeasureIndex && mIdx <= v.endMeasureIndex)
+    return v ? v.number : 0
+  }
 
   let i = 0
   while (i < measures.length) {
+    // Determine which volta this measure belongs to and how many passes we've done
+    const voltaNum = voltaNumberAt(i)
+    if (voltaNum > 0) {
+      // Find the nearest preceding repeat-end-target to know what pass we're on
+      // passCount here means: how many times have we entered this repeat section
+      // We derive it from the repeat-end pass count below the nearest repeat-start
+      const repeatEndIdx = (() => {
+        for (let j = i + 1; j < measures.length; j++) {
+          if (measures[j].barline === 'repeat-end') return j
+          const v2 = voltaNumberAt(j)
+          if (v2 !== voltaNum && v2 > 0) { /* hit next volta */ }
+        }
+        return -1
+      })()
+      const passCount = repeatEndIdx >= 0 ? (repeatPassCount.get(repeatEndIdx) ?? 0) + 1 : 1
+      // passCount 1 = first time through, play volta 1; passCount 2 = repeat, play volta 2; etc.
+      if (voltaNum !== passCount) {
+        // Skip this measure — advance to end of this volta bracket
+        const voltaDef = voltas.find(v => i >= v.startMeasureIndex && i <= v.endMeasureIndex)!
+        i = voltaDef.endMeasureIndex + 1
+        continue
+      }
+    }
+
     order.push(i)
 
-    if (measures[i].barline === 'repeat-end' && !seen.has(i)) {
-      seen.add(i)
-      let jumpTo = 0
-      for (let j = i - 1; j >= 0; j--) {
-        if (measures[j].barline === 'repeat-start') {
-          jumpTo = j + 1
-          break
+    if (measures[i].barline === 'repeat-end') {
+      const passCount = repeatPassCount.get(i) ?? 0
+      // Determine how many endings exist anchored to this repeat
+      const endingNumbers = voltas
+        .filter(v => {
+          // This volta ends at or before this repeat-end, and its repeat-end is this one
+          for (let j = v.endMeasureIndex + 1; j <= i; j++) {
+            if (measures[j]?.barline === 'repeat-end') return false // different repeat block
+          }
+          return v.endMeasureIndex < i || v.endMeasureIndex === i
+        })
+        .map(v => v.number)
+      const maxEnding = endingNumbers.length > 0 ? Math.max(...endingNumbers) : 1
+
+      if (passCount < maxEnding - 1) {
+        // More passes to go — jump back
+        repeatPassCount.set(i, passCount + 1)
+        let jumpTo = 0
+        for (let j = i - 1; j >= 0; j--) {
+          if (measures[j].barline === 'repeat-start') { jumpTo = j + 1; break }
         }
+        i = jumpTo
+        continue
       }
-      i = jumpTo
-      continue
+      // Done all passes — clear pass count and continue
+      repeatPassCount.delete(i)
     }
 
     i++

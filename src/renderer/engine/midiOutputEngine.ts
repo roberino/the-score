@@ -143,7 +143,7 @@ class MidiOutputEngine {
 
     let totalDuration = 0
     const tempoStaff = score.parts[0]?.staves[0]
-    const sequence   = buildPlaybackSequence(tempoStaff?.measures ?? [])
+    const sequence   = buildPlaybackSequence(tempoStaff?.measures ?? [], score.voltas ?? [])
 
     score.parts.forEach((part, partIdx) => {
       if (part.muted) return
