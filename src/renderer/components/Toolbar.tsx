@@ -20,6 +20,44 @@ const DURATION_BUTTONS: { duration: Duration; key: string }[] = Object.entries(K
   .map(([key, duration]) => ({ key, duration }))
   .sort((a, b) => Number(a.key) - Number(b.key))
 
+const FLAG_COUNTS: Partial<Record<Duration, number>> = {
+  eighth: 1, '16th': 2, '32nd': 3, '64th': 4,
+}
+
+function DurationIcon({ duration }: { duration: Duration }): JSX.Element {
+  const isWhole = duration === 'whole'
+  const isHalf  = duration === 'half'
+  const filled  = !isWhole && !isHalf
+  const flags   = FLAG_COUNTS[duration] ?? 0
+
+  const cx  = isWhole ? 8 : 6
+  const rx  = isWhole ? 6 : 4.5
+  const ry  = isWhole ? 3.2 : 3
+  const cy  = 14
+  const sx  = cx + rx - 0.5   // stem at right edge of notehead
+
+  return (
+    <svg width="16" height="20" viewBox="0 0 16 20" style={{ display: 'block', overflow: 'visible' }}>
+      <ellipse
+        cx={cx} cy={cy} rx={rx} ry={ry}
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth={isWhole ? 1.7 : 1.4}
+      />
+      {!isWhole && (
+        <line x1={sx} y1={cy} x2={sx} y2="2" stroke="currentColor" strokeWidth="1.2" />
+      )}
+      {Array.from({ length: flags }, (_, i) => (
+        <path
+          key={i}
+          d={`M ${sx},${2 + i * 4} C ${sx + 6},${3 + i * 4} ${sx + 5},${6 + i * 4} ${sx},${8 + i * 4}`}
+          fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"
+        />
+      ))}
+    </svg>
+  )
+}
+
 interface ToolbarProps {
   onTogglePartsPanel: () => void
   partsPanelOpen: boolean
@@ -394,17 +432,18 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
               onClick={() => resizeNote(duration, 0)}
               title={`${DURATION_LABELS[duration]} (${key})`}
               style={{
-                padding: '3px 8px',
-                fontSize: 11,
+                padding: '3px 6px',
                 borderRadius: 3,
                 border: 'none',
                 cursor: 'pointer',
                 background: selectedDuration === duration ? '#0e639c' : '#1e1e1e',
                 color: selectedDuration === duration ? '#fff' : '#9d9d9d',
                 transition: 'background 0.1s',
+                display: 'flex',
+                alignItems: 'center',
               }}
             >
-              {DURATION_LABELS[duration]}
+              <DurationIcon duration={duration} />
             </button>
           ))}
 
