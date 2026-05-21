@@ -1238,6 +1238,34 @@ export function ScoreCanvas(): JSX.Element {
       }
     }
 
+    // ── Lyric text click: select or lyric mode → enter lyric edit for that note ──
+    if (inputMode === 'select' || inputMode === 'lyric') {
+      const LYRIC_Y_OFF = 60   // must match notationRenderer LYRIC_Y_OFFSET
+      for (const l of layouts) {
+        const lyricY = l.staveTopY + LYRIC_Y_OFF
+        if (Math.abs(canvasY - lyricY) > 14) continue
+        const lPart   = score.parts.find(p => p.id === l.partId)
+        const lStaff  = lPart?.staves.find(s => s.id === l.staffId)
+        const lMeasure = lStaff?.measures.find(m => m.id === l.measureId)
+        if (!lMeasure) continue
+        const lVoice = lMeasure.voices[0]
+        if (!lVoice) continue
+        let closest: { id: string; dist: number } | null = null
+        for (const ev of lVoice.events) {
+          if (ev.type === 'rest') continue
+          const nx = notePositionsRef.current.get(ev.id)
+          if (nx === undefined) continue
+          const dist = Math.abs(canvasX - nx)
+          if (dist <= 28 && (!closest || dist < closest.dist)) closest = { id: ev.id, dist }
+        }
+        if (closest) {
+          if (inputMode !== 'lyric') setInputMode('lyric')
+          setLyricCursor(closest.id)
+          return
+        }
+      }
+    }
+
     const layout  = findClickedLayout(canvasX, canvasY, layouts)
     if (!layout) {
       // Clicked outside all measures — clear measure selection
