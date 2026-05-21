@@ -12,7 +12,7 @@ const MODES: { mode: InputMode; label: string; key: string }[] = [
   { mode: 'note',   label: 'Note',   key: 'N' },
   { mode: 'rest',   label: 'Rest',   key: 'R' },
   { mode: 'eraser', label: 'Eraser', key: 'E' },
-  { mode: 'text',   label: 'Text',   key: 'T' },
+  { mode: 'text',   label: 'Marks',  key: 'T' },
   { mode: 'lyric',  label: 'Lyric',  key: 'L' },
 ]
 
