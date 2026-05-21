@@ -12,7 +12,7 @@
 import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
-import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin } from './score'
+import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol } from './score'
 import { measureCapacityUnits, eventDurationUnits, dottedUnits, DURATION_UNITS, resolveClef, pitchToStep, stepToPitch, shiftPitchBySemitones } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
@@ -42,6 +42,7 @@ export type Command =
   | { type: 'DELETE_PART';          partId: string }
   | { type: 'MOVE_PART';            partId: string; direction: 'up' | 'down' }
   | { type: 'SET_PART_METADATA';    partId: string; name?: string; shortName?: string; midiProgram?: number; midiChannel?: number | null; transposeSemitones?: number; labelVisible?: boolean }
+  | { type: 'SET_PART_GROUP';       partId: string; groupId: string | null; groupSymbol?: GroupSymbol }
   | { type: 'SET_SCORE_SHOW_LABELS'; visible: boolean }
   | { type: 'ADD_DIRECTIVE';         partId: string; staffId: string; measureId: string; directive: Directive }
   | { type: 'REMOVE_DIRECTIVE';      partId: string; staffId: string; measureId: string; directiveId: string }
@@ -492,7 +493,18 @@ export function applyCommand(score: Score, command: Command): Score {
         const measureCount = (draft.parts[0]?.staves[0]?.measures as any[])?.length ?? 8
         const staff = createStaff(command.clef, measureCount)
         const defaultChannel = Math.min(draft.parts.length + 1, 16)
-        const newPart = {
+
+        // Auto-group: if no part has a groupId yet and this will make 2+ parts, group all
+        const ungrouped = (draft.parts as any[]).every((p: any) => !p.groupId)
+        const autoGroupId = ungrouped && draft.parts.length >= 1 ? uuid() : undefined
+        if (autoGroupId) {
+          for (const p of draft.parts as any[]) {
+            p.groupId = autoGroupId
+            p.groupSymbol = 'bracket'
+          }
+        }
+
+        const newPart: any = {
           id: uuid(),
           name:               command.name,
           shortName:          command.shortName,
@@ -503,6 +515,10 @@ export function applyCommand(score: Score, command: Command): Score {
           volume:             0.8,
           muted:              false,
           labelVisible:       true,
+        }
+        if (autoGroupId) {
+          newPart.groupId     = autoGroupId
+          newPart.groupSymbol = 'bracket'
         }
         ;(draft.parts as any[]).push(newPart)
         break
@@ -537,6 +553,19 @@ export function applyCommand(score: Score, command: Command): Score {
         }
         if (command.transposeSemitones !== undefined) part.transposeSemitones = command.transposeSemitones
         if (command.labelVisible       !== undefined) part.labelVisible       = command.labelVisible
+        break
+      }
+
+      case 'SET_PART_GROUP': {
+        const part = (draft.parts as any[]).find((p: any) => p.id === command.partId)
+        if (!part) break
+        if (command.groupId === null) {
+          delete part.groupId
+          delete part.groupSymbol
+        } else {
+          part.groupId = command.groupId
+          if (command.groupSymbol !== undefined) part.groupSymbol = command.groupSymbol
+        }
         break
       }
 

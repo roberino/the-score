@@ -65,10 +65,23 @@ At every **measure column**:
 
 ---
 
-## Known limitations & future work
+## Group assignment UI
 
-- **Manually created scores**: no UI yet to assign parts to groups. Planned as part of the
-  Parts panel / Part settings feature.
+In the Parts panel, each part's expanded settings section contains:
+
+- **Group** dropdown — "None", existing groups (labelled "Group 1", "Group 2", …), and "+ New group".
+  Selecting "+ New group" creates a fresh bracket group for that part alone; the user can then
+  join other parts to it from their own dropdowns.
+- **Symbol** selector — "Bracket [" or "Brace {". Appears only when the part is in a group.
+  Changing the symbol updates all parts in the group simultaneously.
+
+**Auto-group on first Add Part**: when the score has all-ungrouped parts and a second part is
+added, every part (including the new one) is automatically placed in a shared bracket group.
+This ensures newly built scores get grouping by default without extra steps.
+
+---
+
+## Known limitations & future work
 - **Nested groups**: MusicXML allows nested `<part-group>` elements (e.g., a bracket spanning
   all strings with sub-brackets for violin desks). Currently only the outermost group is
   applied per part.

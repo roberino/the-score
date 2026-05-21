@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { INSTRUMENTS, INSTRUMENT_FAMILIES, FAMILY_LABELS, type InstrumentDef } from '@shared/instruments'
-import type { ClefType } from '@shared/score'
+import type { ClefType, GroupSymbol } from '@shared/score'
+import { v4 as uuid } from 'uuid'
 
 // ── Instrument picker flyout ──────────────────────────────────────────────────
 
@@ -90,18 +91,27 @@ function InstrumentRow({ inst, onSelect }: { inst: InstrumentDef; onSelect: (i: 
 
 const MIDI_CHANNELS = Array.from({ length: 16 }, (_, i) => i + 1)
 
+interface GroupDef {
+  groupId: string
+  groupSymbol: GroupSymbol
+  label: string  // e.g. "Group 1"
+}
+
 interface PartRowProps {
   partId: string
   name: string
   shortName: string
   labelVisible: boolean
   midiChannel: number
+  groupId?: string
+  groupSymbol?: GroupSymbol
+  availableGroups: GroupDef[]
   isFirst: boolean
   isLast: boolean
   canDelete: boolean
 }
 
-function PartRow({ partId, name, shortName, labelVisible, midiChannel, isFirst, isLast, canDelete }: PartRowProps): JSX.Element {
+function PartRow({ partId, name, shortName, labelVisible, midiChannel, groupId, groupSymbol, availableGroups, isFirst, isLast, canDelete }: PartRowProps): JSX.Element {
   const { dispatch } = useAppStore()
   const [expanded, setExpanded]           = useState(false)
   const [editName, setEditName]           = useState(name)
@@ -247,6 +257,57 @@ function PartRow({ partId, name, shortName, labelVisible, midiChannel, isFirst, 
               ))}
             </select>
           </div>
+
+          {/* Group */}
+          <div>
+            <label style={labelStyle}>Group</label>
+            <select
+              value={groupId ?? ''}
+              onChange={e => {
+                const val = e.target.value
+                if (val === '') {
+                  dispatch({ type: 'SET_PART_GROUP', partId, groupId: null })
+                } else if (val === '__new__') {
+                  const newId = uuid()
+                  dispatch({ type: 'SET_PART_GROUP', partId, groupId: newId, groupSymbol: 'bracket' })
+                } else {
+                  const g = availableGroups.find(g => g.groupId === val)
+                  dispatch({ type: 'SET_PART_GROUP', partId, groupId: val, ...(g ? { groupSymbol: g.groupSymbol } : {}) })
+                }
+              }}
+              style={{ ...inputStyle, cursor: 'pointer' }}
+            >
+              <option value="">None</option>
+              {availableGroups.map(g => (
+                <option key={g.groupId} value={g.groupId}>{g.label}</option>
+              ))}
+              <option value="__new__">+ New group</option>
+            </select>
+          </div>
+
+          {/* Symbol — only shown when part is in a group */}
+          {groupId && (
+            <div>
+              <label style={labelStyle}>Symbol</label>
+              <select
+                value={groupSymbol ?? 'bracket'}
+                onChange={e => {
+                  const sym = e.target.value as GroupSymbol
+                  // Apply the new symbol to all parts in this group
+                  const { score } = useAppStore.getState()
+                  for (const p of score.parts) {
+                    if (p.groupId === groupId) {
+                      dispatch({ type: 'SET_PART_GROUP', partId: p.id, groupId, groupSymbol: sym })
+                    }
+                  }
+                }}
+                style={{ ...inputStyle, cursor: 'pointer' }}
+              >
+                <option value="bracket">Bracket [</option>
+                <option value="brace">Brace {'{'}</option>
+              </select>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -262,6 +323,21 @@ interface PartsPanelProps {
 export function PartsPanel({ onClose }: PartsPanelProps): JSX.Element {
   const { score, dispatch } = useAppStore()
   const [showInstPicker, setShowInstPicker] = useState(false)
+
+  // Derive the list of distinct groups from the current parts
+  const availableGroups: GroupDef[] = []
+  const seen = new Set<string>()
+  let groupCounter = 1
+  for (const part of score.parts) {
+    if (part.groupId && !seen.has(part.groupId)) {
+      seen.add(part.groupId)
+      availableGroups.push({
+        groupId: part.groupId,
+        groupSymbol: part.groupSymbol ?? 'bracket',
+        label: `Group ${groupCounter++}`,
+      })
+    }
+  }
 
   const handleAddInstrument = (inst: InstrumentDef) => {
     setShowInstPicker(false)
@@ -311,6 +387,8 @@ export function PartsPanel({ onClose }: PartsPanelProps): JSX.Element {
             shortName={part.shortName}
             labelVisible={part.labelVisible}
             midiChannel={part.midiChannel ?? Math.min(idx + 1, 16)}
+            {...(part.groupId ? { groupId: part.groupId, groupSymbol: part.groupSymbol } : {})}
+            availableGroups={availableGroups}
             isFirst={idx === 0}
             isLast={idx === score.parts.length - 1}
             canDelete={score.parts.length > 1}
