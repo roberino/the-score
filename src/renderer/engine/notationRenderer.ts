@@ -1173,7 +1173,9 @@ function drawSlursForStaff(
     const toStave   = eventStaveMap.get(slur.toNoteId)
     if (!fromSN || !toSN || !fromStave || !toStave) continue
 
-    const above   = (slur.placement ?? 'above') === 'above'
+    // Auto-detect from start note's stem direction: stem-up → slur below, stem-down → slur above
+    const stemUp  = fromSN.getStemDirection() === 1
+    const above   = slur.placement != null ? slur.placement === 'above' : !stemUp
     const sign    = above ? -1 : 1
 
     const x1 = fromSN.getAbsoluteX() + 4

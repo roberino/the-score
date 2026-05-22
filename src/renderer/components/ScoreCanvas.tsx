@@ -928,15 +928,27 @@ export function ScoreCanvas(): JSX.Element {
 
   const handleSlurKey = useCallback(() => {
     if (!selectedNoteId) return
-    if (!slurPendingId) {
-      setSlurPendingId(selectedNoteId)
+    if (slurPendingId) {
+      setSlurPendingId(null)  // cancel pending
       return
     }
-    if (slurPendingId === selectedNoteId) {
-      setSlurPendingId(null)
-      return
+    // If note already has an outgoing slur, remove it
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        const existing = staff.slurs?.find(s => s.fromNoteId === selectedNoteId)
+        if (existing) {
+          dispatch({ type: 'REMOVE_SLUR', partId: part.id, staffId: staff.id, slurId: existing.id })
+          return
+        }
+      }
     }
-    // Commit slur — both notes must be in the same staff
+    // Start pending — slur commits when a different note is next selected
+    setSlurPendingId(selectedNoteId)
+  }, [selectedNoteId, slurPendingId, score, dispatch])
+
+  // Auto-commit slur when user selects a different note while slurPendingId is active
+  useEffect(() => {
+    if (!slurPendingId || !selectedNoteId || slurPendingId === selectedNoteId) return
     const fromLoc = findNoteLocation(slurPendingId)
     const toLoc   = findNoteLocation(selectedNoteId)
     if (fromLoc && toLoc && fromLoc.staffId === toLoc.staffId) {
@@ -1910,18 +1922,27 @@ export function ScoreCanvas(): JSX.Element {
                   {selectedNoteIds.length} selected
                 </span>
               )}
-              {selectedNoteId && (
-                <>
-                  <button onClick={toggleTie} title="Toggle tie (T)" style={hasTie ? btnActive : btnBase}>Tie</button>
-                  <button
-                    onClick={handleSlurKey}
-                    title={slurPendingId ? 'Cancel slur' : 'Start slur (L)'}
-                    style={slurPendingId ? { ...btnBase, background: '#6d3a00', borderColor: '#a0550a', color: '#ffc080' } : btnBase}
-                  >
-                    {slurPendingId ? 'Slur…' : 'Slur'}
-                  </button>
-                </>
-              )}
+              {selectedNoteId && (() => {
+                const hasOutgoingSlur = !slurPendingId && score.parts.some(p =>
+                  p.staves.some(s => s.slurs?.some(sl => sl.fromNoteId === selectedNoteId))
+                )
+                return (
+                  <>
+                    <button onClick={toggleTie} title="Toggle tie (T)" style={hasTie ? btnActive : btnBase}>Tie</button>
+                    <button
+                      onClick={handleSlurKey}
+                      title={slurPendingId ? 'Cancel slur (Esc)' : hasOutgoingSlur ? 'Remove slur (L)' : 'Start slur (L)'}
+                      style={
+                        slurPendingId    ? { ...btnBase, background: '#6d3a00', borderColor: '#a0550a', color: '#ffc080' } :
+                        hasOutgoingSlur  ? { ...btnBase, background: '#3a1a3a', borderColor: '#7a3a7a', color: '#e0a0e0' } :
+                        btnBase
+                      }
+                    >
+                      {slurPendingId ? 'Slur…' : hasOutgoingSlur ? 'Slur ✕' : 'Slur'}
+                    </button>
+                  </>
+                )
+              })()}
               {selectedNoteIds.length >= 2 && (
                 <>
                   <button onClick={() => addHairpin('crescendo')}   title="Add crescendo"   style={btnBase}>cresc</button>
