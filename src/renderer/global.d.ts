@@ -1,6 +1,11 @@
 // Extends the Window interface so TypeScript knows about the API
 // exposed by the preload script via contextBridge.exposeInMainWorld.
 
+declare module '*.svg?raw' {
+  const content: string
+  export default content
+}
+
 type MenuEvent =
   | 'menu:new' | 'menu:open' | 'menu:save' | 'menu:saveAs'
   | 'menu:exportPdf' | 'menu:exportMusicXml' | 'menu:importMusicXml' | 'menu:undo' | 'menu:redo'

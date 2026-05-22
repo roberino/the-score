@@ -7,6 +7,52 @@ import { CircleOfFifths } from './CircleOfFifths'
 import { AudioSettingsPanel } from './AudioSettingsPanel'
 import { MidiInputPanel } from './MidiInputPanel'
 
+import wholeNoteSvg    from '../assets/icons/notes/whole.svg?raw'
+import halfNoteSvg     from '../assets/icons/notes/half.svg?raw'
+import quarterNoteSvg  from '../assets/icons/notes/quarter.svg?raw'
+import eighthNoteSvg   from '../assets/icons/notes/eighth.svg?raw'
+import note16thSvg     from '../assets/icons/notes/16th.svg?raw'
+import note32ndSvg     from '../assets/icons/notes/32nd.svg?raw'
+import note64thSvg     from '../assets/icons/notes/64th.svg?raw'
+
+import wholeRestSvg    from '../assets/icons/rests/whole.svg?raw'
+import halfRestSvg     from '../assets/icons/rests/half.svg?raw'
+import quarterRestSvg  from '../assets/icons/rests/quarter.svg?raw'
+import eighthRestSvg   from '../assets/icons/rests/eighth.svg?raw'
+import rest16thSvg     from '../assets/icons/rests/16th.svg?raw'
+import rest32ndSvg     from '../assets/icons/rests/32nd.svg?raw'
+import rest64thSvg     from '../assets/icons/rests/64th.svg?raw'
+
+const NOTE_ICONS: Record<Duration, string> = {
+  whole: wholeNoteSvg,
+  half: halfNoteSvg,
+  quarter: quarterNoteSvg,
+  eighth: eighthNoteSvg,
+  '16th': note16thSvg,
+  '32nd': note32ndSvg,
+  '64th': note64thSvg,
+}
+
+const REST_ICONS: Record<Duration, string> = {
+  whole: wholeRestSvg,
+  half: halfRestSvg,
+  quarter: quarterRestSvg,
+  eighth: eighthRestSvg,
+  '16th': rest16thSvg,
+  '32nd': rest32ndSvg,
+  '64th': rest64thSvg,
+}
+
+function DurationIcon({ duration, isRest }: { duration: Duration; isRest: boolean }): JSX.Element {
+  const svg = isRest ? REST_ICONS[duration] : NOTE_ICONS[duration]
+  return (
+    <span
+      dangerouslySetInnerHTML={{ __html: svg }}
+      style={{ display: 'flex', alignItems: 'center', lineHeight: 0, color: 'inherit' }}
+    />
+  )
+}
+
 const MODES: { mode: InputMode; label: string; key: string }[] = [
   { mode: 'select', label: 'Select', key: 'S' },
   { mode: 'note',   label: 'Note',   key: 'N' },
@@ -20,107 +66,6 @@ const DURATION_BUTTONS: { duration: Duration; key: string }[] = Object.entries(K
   .map(([key, duration]) => ({ key, duration }))
   .sort((a, b) => Number(a.key) - Number(b.key))
 
-const FLAG_COUNTS: Partial<Record<Duration, number>> = {
-  eighth: 1, '16th': 2, '32nd': 3, '64th': 4,
-}
-
-function DurationIcon({ duration }: { duration: Duration }): JSX.Element {
-  if (duration === 'whole') {
-    return (
-      <svg width="14" height="10" viewBox="0 0 14 10" style={{ display: 'block' }}>
-        <ellipse cx="7" cy="5" rx="5.5" ry="3.5"
-          fill="none" stroke="currentColor" strokeWidth="1.7" />
-      </svg>
-    )
-  }
-
-  const isHalf = duration === 'half'
-  const filled = !isHalf
-  const nFlags = FLAG_COUNTS[duration] ?? 0
-
-  // Stem-up: notehead near bottom, stem rises to top
-  const cx = 4.5, cy = 22
-  const sx = 8.5
-  const stemTop = 3
-
-  return (
-    <svg width="14" height="26" viewBox="0 0 14 26" style={{ display: 'block', overflow: 'visible' }}>
-      <ellipse
-        cx={cx} cy={cy} rx={4.5} ry={3}
-        transform={`rotate(-20 ${cx} ${cy})`}
-        fill={filled ? 'currentColor' : 'none'}
-        stroke={isHalf ? 'currentColor' : 'none'}
-        strokeWidth="1.5"
-      />
-      <line x1={sx} y1={cy - 1} x2={sx} y2={stemTop}
-        stroke="currentColor" strokeWidth="1.2" />
-      {Array.from({ length: nFlags }, (_, i) => {
-        const fy = stemTop + i * 5
-        return (
-          <path
-            key={i}
-            d={`M ${sx},${fy} C ${sx + 7},${fy + 2} ${sx + 5.5},${fy + 8} ${sx},${fy + 10}`}
-            fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"
-          />
-        )
-      })}
-    </svg>
-  )
-}
-
-function RestIcon({ duration }: { duration: Duration }): JSX.Element {
-  if (duration === 'whole') {
-    // Filled rectangle hanging from the top — whole rest
-    return (
-      <svg width="14" height="9" viewBox="0 0 14 9" style={{ display: 'block' }}>
-        <rect x="2" y="1" width="10" height="4" fill="currentColor" />
-      </svg>
-    )
-  }
-  if (duration === 'half') {
-    // Filled rectangle sitting on the bottom — half rest
-    return (
-      <svg width="14" height="9" viewBox="0 0 14 9" style={{ display: 'block' }}>
-        <rect x="2" y="4" width="10" height="4" fill="currentColor" />
-      </svg>
-    )
-  }
-  if (duration === 'quarter') {
-    // Stylised squiggle — quarter rest
-    return (
-      <svg width="12" height="22" viewBox="0 0 12 22" style={{ display: 'block' }}>
-        <path
-          d="M 8,2 C 10,3 9,7 5,8 C 8,9 8,13 4,14 C 6,15 5,20 3,22"
-          stroke="currentColor" fill="none" strokeWidth="1.8" strokeLinecap="round"
-        />
-      </svg>
-    )
-  }
-
-  // Eighth – 64th: diagonal stem + stacked filled-dot flags
-  const nFlags = FLAG_COUNTS[duration] ?? 1
-  const stemTops: Record<number, number> = { 1: 10, 2: 5, 3: 3, 4: 2 }
-  const stemTop = stemTops[nFlags]
-
-  return (
-    <svg width="14" height="26" viewBox="0 0 14 26" style={{ display: 'block' }}>
-      <line x1="3" y1="25" x2="9" y2={stemTop}
-        stroke="currentColor" strokeWidth="1.3" />
-      {Array.from({ length: nFlags }, (_, i) => {
-        const fy = stemTop + i * 5
-        return (
-          <g key={i}>
-            <circle cx="9" cy={fy} r="2" fill="currentColor" />
-            <path
-              d={`M 9,${fy + 2} C 13,${fy + 3} 12,${fy + 6} 8,${fy + 7}`}
-              stroke="currentColor" fill="none" strokeWidth="1.2" strokeLinecap="round"
-            />
-          </g>
-        )
-      })}
-    </svg>
-  )
-}
 
 interface ToolbarProps {
   onTogglePartsPanel: () => void
@@ -507,10 +452,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
                 alignItems: 'center',
               }}
             >
-              {inputMode === 'rest'
-                ? <RestIcon duration={duration} />
-                : <DurationIcon duration={duration} />
-              }
+              <DurationIcon duration={duration} isRest={inputMode === 'rest'} />
             </button>
           ))}
 
