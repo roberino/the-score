@@ -68,6 +68,60 @@ function DurationIcon({ duration }: { duration: Duration }): JSX.Element {
   )
 }
 
+function RestIcon({ duration }: { duration: Duration }): JSX.Element {
+  if (duration === 'whole') {
+    // Filled rectangle hanging from the top — whole rest
+    return (
+      <svg width="14" height="9" viewBox="0 0 14 9" style={{ display: 'block' }}>
+        <rect x="2" y="1" width="10" height="4" fill="currentColor" />
+      </svg>
+    )
+  }
+  if (duration === 'half') {
+    // Filled rectangle sitting on the bottom — half rest
+    return (
+      <svg width="14" height="9" viewBox="0 0 14 9" style={{ display: 'block' }}>
+        <rect x="2" y="4" width="10" height="4" fill="currentColor" />
+      </svg>
+    )
+  }
+  if (duration === 'quarter') {
+    // Stylised squiggle — quarter rest
+    return (
+      <svg width="12" height="22" viewBox="0 0 12 22" style={{ display: 'block' }}>
+        <path
+          d="M 8,2 C 10,3 9,7 5,8 C 8,9 8,13 4,14 C 6,15 5,20 3,22"
+          stroke="currentColor" fill="none" strokeWidth="1.8" strokeLinecap="round"
+        />
+      </svg>
+    )
+  }
+
+  // Eighth – 64th: diagonal stem + stacked filled-dot flags
+  const nFlags = FLAG_COUNTS[duration] ?? 1
+  const stemTops: Record<number, number> = { 1: 10, 2: 5, 3: 3, 4: 2 }
+  const stemTop = stemTops[nFlags]
+
+  return (
+    <svg width="14" height="26" viewBox="0 0 14 26" style={{ display: 'block' }}>
+      <line x1="3" y1="25" x2="9" y2={stemTop}
+        stroke="currentColor" strokeWidth="1.3" />
+      {Array.from({ length: nFlags }, (_, i) => {
+        const fy = stemTop + i * 5
+        return (
+          <g key={i}>
+            <circle cx="9" cy={fy} r="2" fill="currentColor" />
+            <path
+              d={`M 9,${fy + 2} C 13,${fy + 3} 12,${fy + 6} 8,${fy + 7}`}
+              stroke="currentColor" fill="none" strokeWidth="1.2" strokeLinecap="round"
+            />
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
 interface ToolbarProps {
   onTogglePartsPanel: () => void
   partsPanelOpen: boolean
@@ -453,7 +507,10 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
                 alignItems: 'center',
               }}
             >
-              <DurationIcon duration={duration} />
+              {inputMode === 'rest'
+                ? <RestIcon duration={duration} />
+                : <DurationIcon duration={duration} />
+              }
             </button>
           ))}
 
