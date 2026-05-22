@@ -25,35 +25,45 @@ const FLAG_COUNTS: Partial<Record<Duration, number>> = {
 }
 
 function DurationIcon({ duration }: { duration: Duration }): JSX.Element {
-  const isWhole = duration === 'whole'
-  const isHalf  = duration === 'half'
-  const filled  = !isWhole && !isHalf
-  const flags   = FLAG_COUNTS[duration] ?? 0
+  if (duration === 'whole') {
+    return (
+      <svg width="14" height="10" viewBox="0 0 14 10" style={{ display: 'block' }}>
+        <ellipse cx="7" cy="5" rx="5.5" ry="3.5"
+          fill="none" stroke="currentColor" strokeWidth="1.7" />
+      </svg>
+    )
+  }
 
-  const cx  = isWhole ? 8 : 6
-  const rx  = isWhole ? 6 : 4.5
-  const ry  = isWhole ? 3.2 : 3
-  const cy  = 14
-  const sx  = cx + rx - 0.5   // stem at right edge of notehead
+  const isHalf = duration === 'half'
+  const filled = !isHalf
+  const nFlags = FLAG_COUNTS[duration] ?? 0
+
+  // Stem-up: notehead near bottom, stem rises to top
+  const cx = 4.5, cy = 22
+  const sx = 8.5
+  const stemTop = 3
 
   return (
-    <svg width="16" height="20" viewBox="0 0 16 20" style={{ display: 'block', overflow: 'visible' }}>
+    <svg width="14" height="26" viewBox="0 0 14 26" style={{ display: 'block', overflow: 'visible' }}>
       <ellipse
-        cx={cx} cy={cy} rx={rx} ry={ry}
+        cx={cx} cy={cy} rx={4.5} ry={3}
+        transform={`rotate(-20 ${cx} ${cy})`}
         fill={filled ? 'currentColor' : 'none'}
-        stroke="currentColor"
-        strokeWidth={isWhole ? 1.7 : 1.4}
+        stroke={isHalf ? 'currentColor' : 'none'}
+        strokeWidth="1.5"
       />
-      {!isWhole && (
-        <line x1={sx} y1={cy} x2={sx} y2="2" stroke="currentColor" strokeWidth="1.2" />
-      )}
-      {Array.from({ length: flags }, (_, i) => (
-        <path
-          key={i}
-          d={`M ${sx},${2 + i * 4} C ${sx + 6},${3 + i * 4} ${sx + 5},${6 + i * 4} ${sx},${8 + i * 4}`}
-          fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"
-        />
-      ))}
+      <line x1={sx} y1={cy - 1} x2={sx} y2={stemTop}
+        stroke="currentColor" strokeWidth="1.2" />
+      {Array.from({ length: nFlags }, (_, i) => {
+        const fy = stemTop + i * 5
+        return (
+          <path
+            key={i}
+            d={`M ${sx},${fy} C ${sx + 7},${fy + 2} ${sx + 5.5},${fy + 8} ${sx},${fy + 10}`}
+            fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"
+          />
+        )
+      })}
     </svg>
   )
 }
