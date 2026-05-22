@@ -946,7 +946,11 @@ export function ScoreCanvas(): JSX.Element {
     setSlurPendingId(selectedNoteId)
   }, [selectedNoteId, slurPendingId, score, dispatch])
 
-  // Auto-commit slur when user selects a different note while slurPendingId is active
+  // Auto-commit slur when user selects a different note while slurPendingId is active.
+  // findNoteLocation/dispatch intentionally omitted from deps: including findNoteLocation
+  // (which changes when score changes) would re-fire the effect after the ADD_SLUR dispatch,
+  // creating an infinite update loop. The closures captured at selection-change time are correct.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!slurPendingId || !selectedNoteId || slurPendingId === selectedNoteId) return
     const fromLoc = findNoteLocation(slurPendingId)
@@ -956,7 +960,7 @@ export function ScoreCanvas(): JSX.Element {
       dispatch({ type: 'ADD_SLUR', partId: fromLoc.partId, staffId: fromLoc.staffId, slur })
     }
     setSlurPendingId(null)
-  }, [selectedNoteId, slurPendingId, findNoteLocation, dispatch])
+  }, [selectedNoteId, slurPendingId])
 
   const nudgeOctave = useCallback((direction: 1 | -1) => {
     if (!selectedNoteId) return
