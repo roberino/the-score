@@ -1908,7 +1908,7 @@ export function ScoreCanvas(): JSX.Element {
           padding: '3px 8px', borderRadius: 3, border: '1px solid #555',
           background: '#2d2d2d', color: '#ccc', cursor: 'pointer', fontSize: 11,
         }
-        const btnActive: React.CSSProperties = { ...btnBase, background: '#0e639c', color: '#fff', borderColor: '#0e639c' }
+        const btnActive: React.CSSProperties = { ...btnBase, background: '#0e639c', color: '#fff', border: '1px solid #0e639c' }
         const divider: React.CSSProperties = { borderTop: '1px solid #333', paddingTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap' as const, alignItems: 'center' }
         const DYNAMICS: DynamicLevel[] = ['pp', 'p', 'mp', 'mf', 'f', 'ff']
         return (
@@ -1937,8 +1937,8 @@ export function ScoreCanvas(): JSX.Element {
                       onClick={handleSlurKey}
                       title={slurPendingId ? 'Cancel slur (Esc)' : hasOutgoingSlur ? 'Remove slur (L)' : 'Start slur (L)'}
                       style={
-                        slurPendingId    ? { ...btnBase, background: '#6d3a00', borderColor: '#a0550a', color: '#ffc080' } :
-                        hasOutgoingSlur  ? { ...btnBase, background: '#3a1a3a', borderColor: '#7a3a7a', color: '#e0a0e0' } :
+                        slurPendingId    ? { ...btnBase, background: '#6d3a00', border: '1px solid #a0550a', color: '#ffc080' } :
+                        hasOutgoingSlur  ? { ...btnBase, background: '#3a1a3a', border: '1px solid #7a3a7a', color: '#e0a0e0' } :
                         btnBase
                       }
                     >
