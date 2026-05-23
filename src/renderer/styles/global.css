@@ -1,3 +1,10 @@
+@font-face {
+  font-family: 'NotoMusic';
+  src: url('../assets/fonts/NotoMusic-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;

@@ -7,49 +7,32 @@ import { CircleOfFifths } from './CircleOfFifths'
 import { AudioSettingsPanel } from './AudioSettingsPanel'
 import { MidiInputPanel } from './MidiInputPanel'
 
-import wholeNoteSvg    from '../assets/icons/notes/whole.svg?raw'
-import halfNoteSvg     from '../assets/icons/notes/half.svg?raw'
-import quarterNoteSvg  from '../assets/icons/notes/quarter.svg?raw'
-import eighthNoteSvg   from '../assets/icons/notes/eighth.svg?raw'
-import note16thSvg     from '../assets/icons/notes/16th.svg?raw'
-import note32ndSvg     from '../assets/icons/notes/32nd.svg?raw'
-import note64thSvg     from '../assets/icons/notes/64th.svg?raw'
-
-import wholeRestSvg    from '../assets/icons/rests/whole.svg?raw'
-import halfRestSvg     from '../assets/icons/rests/half.svg?raw'
-import quarterRestSvg  from '../assets/icons/rests/quarter.svg?raw'
-import eighthRestSvg   from '../assets/icons/rests/eighth.svg?raw'
-import rest16thSvg     from '../assets/icons/rests/16th.svg?raw'
-import rest32ndSvg     from '../assets/icons/rests/32nd.svg?raw'
-import rest64thSvg     from '../assets/icons/rests/64th.svg?raw'
-
-const NOTE_ICONS: Record<Duration, string> = {
-  whole: wholeNoteSvg,
-  half: halfNoteSvg,
-  quarter: quarterNoteSvg,
-  eighth: eighthNoteSvg,
-  '16th': note16thSvg,
-  '32nd': note32ndSvg,
-  '64th': note64thSvg,
+const NOTE_CHARS: Record<Duration, string> = {
+  whole:   '\u{1D15D}',           // 𝅝
+  half:    '\u{1D157}\u{1D165}',  // 𝅗𝅥
+  quarter: '♩',              // ♩
+  eighth:  '♪',              // ♪
+  '16th':  '\u{1D158}\u{1D165}\u{1D16F}', // 𝅘𝅥𝅯
+  '32nd':  '\u{1D158}\u{1D165}\u{1D170}', // 𝅘𝅥𝅰
+  '64th':  '\u{1D158}\u{1D165}\u{1D171}', // 𝅘𝅥𝅱
 }
 
-const REST_ICONS: Record<Duration, string> = {
-  whole: wholeRestSvg,
-  half: halfRestSvg,
-  quarter: quarterRestSvg,
-  eighth: eighthRestSvg,
-  '16th': rest16thSvg,
-  '32nd': rest32ndSvg,
-  '64th': rest64thSvg,
+const REST_CHARS: Record<Duration, string> = {
+  whole:   '\u{1D13B}', // 𝄻
+  half:    '\u{1D13C}', // 𝄼
+  quarter: '\u{1D13D}', // 𝄽
+  eighth:  '\u{1D13E}', // 𝄾
+  '16th':  '\u{1D13F}', // 𝄿
+  '32nd':  '\u{1D140}', // 𝅀
+  '64th':  '\u{1D141}', // 𝅁
 }
 
 function DurationIcon({ duration, isRest }: { duration: Duration; isRest: boolean }): JSX.Element {
-  const svg = isRest ? REST_ICONS[duration] : NOTE_ICONS[duration]
+  const char = isRest ? REST_CHARS[duration] : NOTE_CHARS[duration]
   return (
-    <span
-      dangerouslySetInnerHTML={{ __html: svg }}
-      style={{ display: 'flex', alignItems: 'center', lineHeight: 0, color: 'inherit' }}
-    />
+    <span style={{ fontSize: 18, lineHeight: 1, fontFamily: "'NotoMusic', serif" }}>
+      {char}
+    </span>
   )
 }
 
