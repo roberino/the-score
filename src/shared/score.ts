@@ -89,6 +89,20 @@ export interface Directive {
   readonly midiProgram?: number   // expression only — -1 = restore original, ≥0 = override
 }
 
+// ── MIDI score events ─────────────────────────────────────────────────────────
+
+export type MidiScoreEventType = 'cc' | 'pc' | 'pb' | 'sysex'
+
+export interface MidiScoreEvent {
+  readonly id: string
+  readonly type: MidiScoreEventType
+  readonly beatPosition: number                               // 64th-note units from measure start
+  readonly cc?:    { readonly controller: number; readonly value: number }
+  readonly pc?:    { readonly program: number }
+  readonly pb?:    { readonly value: number }                 // −8192 to +8191
+  readonly sysex?: { readonly hex: string }                   // space-separated hex bytes
+}
+
 // ── Structure ─────────────────────────────────────────────────────────────────
 
 export interface TimeSignature {
@@ -120,6 +134,7 @@ export interface Measure {
   readonly tempo?: number                     // BPM — set when tempo changes
   readonly barline?: BarlineType
   readonly directives?: readonly Directive[]  // performance directives at this measure
+  readonly midiEvents?: readonly MidiScoreEvent[]
 }
 
 // ── Tuplets ───────────────────────────────────────────────────────────────────

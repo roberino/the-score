@@ -1,6 +1,6 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord, Hairpin } from '@shared/score'
-import { resolveDirectiveDynamic, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, articulationPlaybackMods, expandOrnamentNotes, type FlatScheduleEntry } from '@shared/musicUtils'
+import { resolveDirectiveDynamic, resolveDirectiveTempo, resolveKeySig, resolveTimeSig, measureCapacityUnits, buildPlaybackSequence, buildFlatSchedule, articulationPlaybackMods, expandOrnamentNotes, type FlatScheduleEntry } from '@shared/musicUtils'
 import { type PlaybackController } from './audioEngine'
 import { midiService } from '../services/midiService'
 
@@ -50,6 +50,12 @@ function buildHairpinFactorMap(
   return map
 }
 
+function parseSysexHex(hex: string): Uint8Array | null {
+  const bytes = hex.trim().split(/\s+/).map(b => parseInt(b, 16))
+  if (bytes.some(n => isNaN(n) || n < 0 || n > 255)) return null
+  return new Uint8Array(bytes)
+}
+
 // ── MIDI Output Engine ────────────────────────────────────────────────────────
 
 export interface MidiOutputInfo {
@@ -76,7 +82,7 @@ class MidiOutputEngine {
     if (this.access) return true
     if (!navigator.requestMIDIAccess) return false
     try {
-      this.access = await navigator.requestMIDIAccess()
+      this.access = await navigator.requestMIDIAccess({ sysex: true })
       this.access.onstatechange = () => {
         if (this._output && !this.access!.outputs.has(this._output.id)) {
           this._output    = null
@@ -217,6 +223,44 @@ class MidiOutputEngine {
       if (schedule.length > 0) {
         const last = schedule[schedule.length - 1]
         totalDuration = Math.max(totalDuration, last.startSec + last.playDurSec)
+      }
+
+      // Schedule MIDI score events at their beat-precise positions
+      let midiT = 0
+      for (const mIdx of sequence) {
+        const measure     = staff.measures[mIdx]
+        if (!measure) continue
+        const localBpm    = resolveDirectiveTempo(tempoStaff.measures, mIdx, bpm)
+        const timeSig     = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
+        const measDurSec  = (measureCapacityUnits(timeSig) / 16) * (60 / localBpm)
+        const measStartT  = midiT
+
+        for (const me of measure.midiEvents ?? []) {
+          const eventT = measStartT + (me.beatPosition / 16) * (60 / localBpm)
+          Tone.Transport.schedule((time) => {
+            const ts = perfAudioOffset + time * 1000
+            switch (me.type) {
+              case 'cc':
+                output.send([0xB0 | channel, me.cc!.controller, me.cc!.value], ts)
+                break
+              case 'pc':
+                output.send([0xC0 | channel, me.pc!.program], ts)
+                break
+              case 'pb': {
+                const v = me.pb!.value + 8192
+                output.send([0xE0 | channel, v & 0x7F, (v >> 7) & 0x7F], ts)
+                break
+              }
+              case 'sysex': {
+                const bytes = parseSysexHex(me.sysex!.hex)
+                if (bytes) output.send(bytes, ts)
+                break
+              }
+            }
+          }, eventT)
+        }
+
+        midiT = measStartT + measDurSec
       }
     })
 

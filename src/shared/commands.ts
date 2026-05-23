@@ -12,7 +12,7 @@
 import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
-import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol, TupletInfo, DynamicLevel, Volta } from './score'
+import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent } from './score'
 import { measureCapacityUnits, eventDurationUnits, dottedUnits, DURATION_UNITS, resolveClef, pitchToStep, stepToPitch, shiftPitchBySemitones } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
@@ -64,8 +64,10 @@ export type Command =
   | { type: 'SET_NOTE_DYNAMIC'; noteId: string; dynamic: DynamicLevel | undefined }
   | { type: 'ADD_VOLTA';    volta: Volta }
   | { type: 'REMOVE_VOLTA'; voltaId: string }
-  | { type: 'ADD_VOICE';    partId: string; staffId: string; measureId: string; voiceId: string }
-  | { type: 'SET_LYRIC';   noteId: string; lyric: string | undefined }
+  | { type: 'ADD_VOICE';        partId: string; staffId: string; measureId: string; voiceId: string }
+  | { type: 'SET_LYRIC';       noteId: string; lyric: string | undefined }
+  | { type: 'ADD_MIDI_EVENT';  partId: string; staffId: string; measureId: string; event: MidiScoreEvent }
+  | { type: 'REMOVE_MIDI_EVENT'; partId: string; staffId: string; measureId: string; eventId: string }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -925,6 +927,26 @@ export function applyCommand(score: Score, command: Command): Score {
             }
           }
         }
+        break
+      }
+
+      case 'ADD_MIDI_EVENT': {
+        const part    = draft.parts.find(p => p.id === command.partId)
+        const staff   = part?.staves.find(s => s.id === command.staffId)
+        const measure = staff?.measures.find(m => m.id === command.measureId) as any
+        if (!measure) break
+        if (!measure.midiEvents) measure.midiEvents = []
+        measure.midiEvents.push(command.event)
+        break
+      }
+
+      case 'REMOVE_MIDI_EVENT': {
+        const part    = draft.parts.find(p => p.id === command.partId)
+        const staff   = part?.staves.find(s => s.id === command.staffId)
+        const measure = staff?.measures.find(m => m.id === command.measureId) as any
+        if (!measure?.midiEvents) break
+        const idx = measure.midiEvents.findIndex((e: any) => e.id === command.eventId)
+        if (idx !== -1) measure.midiEvents.splice(idx, 1)
         break
       }
     }

@@ -25,7 +25,7 @@ import {
   type RenderContext
 } from 'vexflow'
 
-import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta } from '@shared/score'
+import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent } from '@shared/score'
 import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
@@ -667,6 +667,10 @@ function renderFromLayouts(
 
     // Directives: drawn in the VexFlow headroom zone above the top staff line
     drawDirectives(ctx, layout, measure, staff, score, part === score.parts[0], stave.getNoteStartX())
+    // MIDI score events below the stave
+    if (measure.midiEvents?.length) {
+      drawMidiEvents(ctx, layout, measure, staff, score, stave.getNoteStartX())
+    }
     // Note-attached dynamics below the stave
     if (staveNotes.length > 0) {
       drawNoteDynamics(ctx, layout, measure, staff, staveNotes, events)
@@ -881,6 +885,58 @@ function drawNoteDynamics(
     const x = staveNotes[i].getAbsoluteX()
     nativeCtx.fillText(dynamic, x, y)
   })
+
+  nativeCtx.restore()
+}
+
+// ── Draw MIDI score events for one measure ────────────────────────────────────
+
+function midiEventLabel(e: MidiScoreEvent): string {
+  switch (e.type) {
+    case 'cc':    return `CC${e.cc!.controller}:${e.cc!.value}`
+    case 'pc':    return `PC${e.pc!.program}`
+    case 'pb':    return `PB${e.pb!.value >= 0 ? '+' : ''}${e.pb!.value}`
+    case 'sysex': return 'SysEx'
+  }
+}
+
+function drawMidiEvents(
+  ctx: RenderContext,
+  layout: MeasureLayout,
+  measure: Measure,
+  staff: Staff,
+  score: Score,
+  noteStartX: number
+): void {
+  const nativeCtx: CanvasRenderingContext2D | null =
+    typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
+  if (!nativeCtx) return
+
+  const events = measure.midiEvents ?? []
+  if (events.length === 0) return
+
+  const mIdx    = staff.measures.findIndex(m => m.id === measure.id)
+  const timeSig = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
+  const capacity = measureCapacityUnits(timeSig)
+  const noteAreaWidth = layout.x + layout.width - noteStartX
+  const y = layout.staveTopY + STAVE_HEIGHT_PX + 28
+
+  nativeCtx.save()
+  nativeCtx.font          = '9px monospace'
+  nativeCtx.textBaseline  = 'middle'
+  nativeCtx.textAlign     = 'left'
+
+  for (const e of events) {
+    const x = noteStartX + (e.beatPosition / capacity) * noteAreaWidth
+    const label = midiEventLabel(e)
+    const textW = nativeCtx.measureText(label).width
+
+    nativeCtx.fillStyle = 'rgba(0,0,0,0.55)'
+    nativeCtx.fillRect(x - 1, y - 7, textW + 4, 14)
+
+    nativeCtx.fillStyle = '#4EC9B0'
+    nativeCtx.fillText(label, x + 1, y)
+  }
 
   nativeCtx.restore()
 }

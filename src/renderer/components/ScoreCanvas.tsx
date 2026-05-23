@@ -12,7 +12,7 @@ import {
   type MeasureLayout,
   type HeadingFieldBound,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta, type Duration } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta, type Duration, type MidiScoreEvent } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import {
   DURATION_UNITS,
@@ -38,6 +38,7 @@ import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
 import { ClefPicker } from './ClefPicker'
 import { DirectivePicker } from './DirectivePicker'
+import { MidiEventPicker } from './MidiEventPicker'
 import { VirtualKeyboard } from './VirtualKeyboard'
 import { TransposeDialog } from './TransposeDialog'
 import { useMidiInput } from '../hooks/useMidiInput'
@@ -382,6 +383,17 @@ interface DirectivePickerState {
   screenY: number
 }
 
+interface MidiEventPickerState {
+  measureId: string
+  partId: string
+  staffId: string
+  existing: readonly MidiScoreEvent[]
+  beatPosition: number
+  capacity: number
+  screenX: number
+  screenY: number
+}
+
 const ARTICULATION_BUTTONS: { art: Articulation; label: string; title: string }[] = [
   { art: 'staccato', label: '·',  title: 'Staccato' },
   { art: 'accent',   label: '>',  title: 'Accent' },
@@ -403,6 +415,7 @@ export function ScoreCanvas(): JSX.Element {
   const [keySigPickerState, setKeySigPickerState] = useState<KeySigPickerState | null>(null)
   const [clefPickerState, setClefPickerState] = useState<ClefPickerState | null>(null)
   const [directivePickerState, setDirectivePickerState] = useState<DirectivePickerState | null>(null)
+  const [midiEventPickerState, setMidiEventPickerState] = useState<MidiEventPickerState | null>(null)
   const [editingHeading, setEditingHeading] = useState<HeadingFieldBound | null>(null)
   const [slurPendingId, setSlurPendingId] = useState<string | null>(null)
   const [transposeDialogOpen, setTransposeDialogOpen] = useState(false)
@@ -1352,6 +1365,7 @@ export function ScoreCanvas(): JSX.Element {
         if (e.key === 's' || e.key === 'S') { setInputMode('select'); return }
         if (e.key === 't' || e.key === 'T') { setInputMode('text');   return }
         if (e.key === 'l' || e.key === 'L') { setInputMode('lyric');  return }
+        if (e.key === 'm' || e.key === 'M') { setInputMode('midi');   return }
         if (e.key === 'k' || e.key === 'K') { toggleKeyboard();       return }
       }
 
@@ -1481,6 +1495,42 @@ export function ScoreCanvas(): JSX.Element {
           isFirstPart: part === score.parts[0],
           screenX:    rect.left + canvasX,
           screenY:    rect.top  + l.staveTopY,
+        })
+        return
+      }
+    }
+
+    // ── MIDI event zone: below each stave (MIDI mode only) ───────────────────
+    if (inputMode === 'midi') for (const l of layouts) {
+      const staveBottom = l.staveTopY + STAVE_HEIGHT_PX
+      if (
+        canvasX >= l.x && canvasX <= l.x + l.width &&
+        canvasY >= staveBottom - 4 && canvasY <= staveBottom + 36
+      ) {
+        const part  = score.parts.find(p => p.id === l.partId)
+        const staff = part?.staves.find(s => s.id === l.staffId)
+        const measure = staff?.measures.find(m => m.id === l.measureId)
+        if (!measure || !staff) break
+        const mIdx = staff.measures.findIndex(m => m.id === l.measureId)
+        const timeSig  = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
+        const capacity = measureCapacityUnits(timeSig)
+        // Approximate beat position from X: offset ~70px on line starts for clef/key/time
+        const noteAreaOffset = l.isLineStart ? 70 : 20
+        const noteAreaStart  = l.x + noteAreaOffset
+        const noteAreaWidth  = l.width - noteAreaOffset
+        const beatPos = Math.max(0, Math.min(capacity, Math.round(
+          (canvasX - noteAreaStart) / noteAreaWidth * capacity
+        )))
+        const rect = canvas.getBoundingClientRect()
+        setMidiEventPickerState({
+          measureId:   l.measureId,
+          partId:      l.partId,
+          staffId:     l.staffId,
+          existing:    measure.midiEvents ?? [],
+          beatPosition: beatPos,
+          capacity,
+          screenX:     rect.left + canvasX,
+          screenY:     rect.top  + staveBottom + 4,
         })
         return
       }
@@ -1948,6 +1998,22 @@ export function ScoreCanvas(): JSX.Element {
     setDirectivePickerState(prev => prev ? { ...prev, existing: prev.existing.filter(d => d.id !== directiveId) } : null)
   }, [directivePickerState, dispatch])
 
+  // ── MIDI event picker handlers ──────────────────────────────────────────────
+
+  const handleMidiEventAdd = useCallback((event: MidiScoreEvent) => {
+    const s = midiEventPickerState
+    if (!s) return
+    dispatch({ type: 'ADD_MIDI_EVENT', partId: s.partId, staffId: s.staffId, measureId: s.measureId, event })
+    setMidiEventPickerState(prev => prev ? { ...prev, existing: [...prev.existing, event] } : null)
+  }, [midiEventPickerState, dispatch])
+
+  const handleMidiEventRemove = useCallback((eventId: string) => {
+    const s = midiEventPickerState
+    if (!s) return
+    dispatch({ type: 'REMOVE_MIDI_EVENT', partId: s.partId, staffId: s.staffId, measureId: s.measureId, eventId })
+    setMidiEventPickerState(prev => prev ? { ...prev, existing: prev.existing.filter(e => e.id !== eventId) } : null)
+  }, [midiEventPickerState, dispatch])
+
   // ── Clef picker handlers ────────────────────────────────────────────────────
 
   const closeClefPicker = useCallback(() => setClefPickerState(null), [])
@@ -1985,6 +2051,9 @@ export function ScoreCanvas(): JSX.Element {
     if (inputMode !== 'text') {
       setDirectivePickerState(null)
     }
+    if (inputMode !== 'midi') {
+      setMidiEventPickerState(null)
+    }
   }, [inputMode])
 
   useEffect(() => {
@@ -1998,6 +2067,7 @@ export function ScoreCanvas(): JSX.Element {
     : inputMode === 'rest'  ? 'cell'
     : inputMode === 'text'  ? 'text'
     : inputMode === 'lyric' ? 'text'
+    : inputMode === 'midi'  ? 'crosshair'
     : 'default'
 
   return (
@@ -2094,6 +2164,18 @@ export function ScoreCanvas(): JSX.Element {
           onAdd={handleDirectiveAdd}
           onRemove={handleDirectiveRemove}
           onClose={() => setDirectivePickerState(null)}
+        />
+      )}
+      {midiEventPickerState && (
+        <MidiEventPicker
+          existing={midiEventPickerState.existing}
+          capacity={midiEventPickerState.capacity}
+          initialBeat={midiEventPickerState.beatPosition}
+          screenX={midiEventPickerState.screenX}
+          screenY={midiEventPickerState.screenY}
+          onAdd={handleMidiEventAdd}
+          onRemove={handleMidiEventRemove}
+          onClose={() => setMidiEventPickerState(null)}
         />
       )}
       {transposeDialogOpen && (
