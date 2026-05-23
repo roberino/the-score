@@ -1925,6 +1925,7 @@ export function ScoreCanvas(): JSX.Element {
           canvasY >= l.staveTopY - 20 && canvasY <= l.staveTopY + STAVE_HEIGHT + 20
         ) {
           const rect = canvas.getBoundingClientRect()
+          setSelectionMenuPos(null)
           setClefPickerState({
             measureId: l.measureId,
             partId:    l.partId,
