@@ -118,6 +118,7 @@ class MidiOutputEngine {
     for (let ch = 0; ch < 16; ch++) {
       this._output.send([0xB0 | ch, 123, 0])  // All Notes Off
       this._output.send([0xB0 | ch, 120, 0])  // All Sound Off
+      this._output.send([0xB0 | ch, 64, 0])   // Sustain pedal off
     }
   }
 
@@ -261,6 +262,14 @@ class MidiOutputEngine {
           }, eventT)
         }
 
+        for (const mark of measure.pedalMarks ?? []) {
+          const eventT = measStartT + (mark.beatPosition / 16) * (60 / localBpm)
+          Tone.Transport.schedule((time) => {
+            const ts = perfAudioOffset + time * 1000
+            output.send([0xB0 | channel, 64, mark.type === 'down' ? 127 : 0], ts)
+          }, eventT)
+        }
+
         midiT = measStartT + measDurSec
       }
     })
@@ -273,6 +282,10 @@ class MidiOutputEngine {
         setTimeout(() => {
           Tone.Transport.stop()
           Tone.Transport.cancel()
+          for (let ch = 0; ch < 16; ch++) {
+            output.send([0xB0 | ch, 123, 0])  // All Notes Off
+            output.send([0xB0 | ch, 64, 0])   // Sustain pedal off
+          }
           onStop?.()
         }, 0)
       }
@@ -288,6 +301,7 @@ class MidiOutputEngine {
         Tone.Transport.cancel()
         for (let ch = 0; ch < 16; ch++) {
           output.send([0xB0 | ch, 123, 0])
+          output.send([0xB0 | ch, 64, 0])
         }
         onStop?.()
       },
