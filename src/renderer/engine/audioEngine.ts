@@ -32,12 +32,14 @@ export function pitchToHz(noteName: string, octave: number, accidental: string |
 
 export interface PlaybackController {
   stop: () => void
+  getPositionSec: () => number
 }
 
 export async function playScore(
   score: Score,
   bpm = 120,
   onStop?: () => void,
+  resumeFrom = 0,
 ): Promise<PlaybackController> {
   await Tone.start()
 
@@ -162,7 +164,7 @@ export async function playScore(
     }
   }, totalDuration + 0.3)
 
-  Tone.Transport.start()
+  Tone.Transport.start('+0', resumeFrom > 0 ? resumeFrom : undefined)
 
   return {
     stop() {
@@ -174,5 +176,6 @@ export async function playScore(
       setTimeout(() => synth.dispose(), 300)
       onStop?.()
     },
+    getPositionSec: () => Tone.Transport.seconds,
   }
 }

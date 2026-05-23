@@ -132,11 +132,12 @@ class MidiOutputEngine {
     score: Score,
     bpm = 120,
     onStop?: () => void,
+    resumeFrom = 0,
   ): Promise<PlaybackController> {
     const output = this._output
     if (!output) {
       onStop?.()
-      return { stop: () => {} }
+      return { stop: () => {}, getPositionSec: () => 0 }
     }
 
     await Tone.start()
@@ -277,7 +278,7 @@ class MidiOutputEngine {
       }
     }, totalDuration + 0.3)
 
-    Tone.Transport.start()
+    Tone.Transport.start('+0', resumeFrom > 0 ? resumeFrom : undefined)
 
     return {
       stop() {
@@ -290,6 +291,7 @@ class MidiOutputEngine {
         }
         onStop?.()
       },
+      getPositionSec: () => Tone.Transport.seconds,
     }
   }
 }

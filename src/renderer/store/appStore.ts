@@ -58,7 +58,8 @@ export interface AppState {
 
   // Playback
   isPlaying: boolean
-  playbackManualStop: boolean   // true when user manually stopped; false on natural end
+  playbackManualStop: boolean      // true when user manually stopped; false on natural end
+  playbackResumePositionSec: number // transport seconds to resume from (0 = beginning)
   playbackPositionTick: number
 
   // Duration resize
@@ -158,6 +159,7 @@ export const useAppStore = create<AppState>()(
 
     isPlaying: false,
     playbackManualStop: false,
+    playbackResumePositionSec: 0,
     playbackPositionTick: 0,
 
     pendingResize: null,
@@ -372,20 +374,27 @@ export const useAppStore = create<AppState>()(
 
     startPlayback: async () => {
       if (_playback) return
-      const { score, audioMode } = get()
-      const onDone = () => { _playback = null; set(s => { s.isPlaying = false; s.playbackManualStop = false }) }
+      const { score, audioMode, playbackResumePositionSec } = get()
+      const resumeFrom = playbackResumePositionSec
+      const onDone = () => {
+        _playback = null
+        set(s => { s.isPlaying = false; s.playbackManualStop = false; s.playbackResumePositionSec = 0 })
+      }
       if (audioMode === 'midi-out') {
-        _playback = await midiOutputEngine.playScore(score, 120, onDone)
+        _playback = await midiOutputEngine.playScore(score, 120, onDone, resumeFrom)
       } else {
-        _playback = await playScoreWithSampler(score, 120, onDone)
+        _playback = await playScoreWithSampler(score, 120, onDone, resumeFrom)
       }
       set(s => { s.isPlaying = true; s.playbackManualStop = false })
     },
 
     stopPlayback: () => {
-      _playback?.stop()
+      // Read position before stop() resets the transport
+      const pos = _playback?.getPositionSec() ?? 0
+      _playback?.stop()   // fires onDone synchronously (sets isPlaying=false, resets pos)
       _playback = null
-      set(s => { s.isPlaying = false; s.playbackManualStop = true })
+      // Override: keep the position and mark as manual stop
+      set(s => { s.isPlaying = false; s.playbackManualStop = true; s.playbackResumePositionSec = pos })
     },
     setSelectedDuration: (duration) => set(s => { s.selectedDuration = duration }),
     setIsDotted: (dotted) => set(s => { s.isDotted = dotted }),

@@ -49,12 +49,13 @@ export async function playScoreWithSampler(
   score: Score,
   bpm = 120,
   onStop?: () => void,
+  resumeFrom = 0,
 ): Promise<PlaybackController> {
   loadSampler()
 
   if (!_samplerReady) {
     const { playScore } = await import('./audioEngine')
-    return playScore(score, bpm, onStop)
+    return playScore(score, bpm, onStop, resumeFrom)
   }
 
   await Tone.start()
@@ -141,7 +142,7 @@ export async function playScoreWithSampler(
     }
   }, totalDuration + 0.5)
 
-  Tone.Transport.start()
+  Tone.Transport.start('+0', resumeFrom > 0 ? resumeFrom : undefined)
 
   return {
     stop() {
@@ -152,5 +153,6 @@ export async function playScoreWithSampler(
       sampler.releaseAll()
       onStop?.()
     },
+    getPositionSec: () => Tone.Transport.seconds,
   }
 }
