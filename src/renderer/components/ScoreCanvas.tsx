@@ -40,6 +40,7 @@ import {
 } from '@shared/musicUtils'
 import { pitchToHz } from '../engine/audioEngine'
 import { previewNote } from '../engine/notePreview'
+import { pitchToMidi, midiOutputEngine } from '../engine/midiOutputEngine'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
 import { ClefPicker } from './ClefPicker'
@@ -57,12 +58,18 @@ import { TextBoxLayer, makeTextBox } from './TextBoxLayer'
 function triggerInputPreview(
   noteName: string, octave: number, accidental: string | null | undefined,
   volDb: number, isPizz: boolean, transposeSemitones: number,
+  audioMode: 'builtin' | 'midi-out' = 'builtin',
+  midiChannel = 0,
+  midiProgram = 0,
 ): void {
-  // Always use internal audio for note-entry feedback regardless of playback
-  // audio mode — sending preview via MIDI output causes a feedback loop on
-  // virtual buses like IAC Driver (output loops back as input, entering notes).
-  const hz = pitchToHz(noteName, octave, accidental ?? null, transposeSemitones)
-  void previewNote(hz, volDb, isPizz)
+  if (audioMode === 'midi-out') {
+    const midiNote = pitchToMidi(noteName, octave, accidental, transposeSemitones)
+    const velocity = Math.max(1, Math.min(127, Math.round(Math.pow(10, volDb / 20) * 100)))
+    midiOutputEngine.previewNote(midiNote, velocity, midiChannel, midiProgram)
+  } else {
+    const hz = pitchToHz(noteName, octave, accidental ?? null, transposeSemitones)
+    void previewNote(hz, volDb, isPizz)
+  }
 }
 
 // ── Rest-replace helpers ──────────────────────────────────────────────────────
@@ -672,7 +679,9 @@ export function ScoreCanvas(): JSX.Element {
             const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
             const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
             const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
-            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
+            const partIdx = score.parts.indexOf(part)
+            const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
           }
           setPrimedAccidental(null)
           setLastEnteredPitch(noteWithDot.pitch)
@@ -725,7 +734,9 @@ export function ScoreCanvas(): JSX.Element {
           const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
           const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
-          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
+          const partIdx = score.parts.indexOf(part)
+          const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
         }
 
         setPrimedAccidental(null)
@@ -800,7 +811,9 @@ export function ScoreCanvas(): JSX.Element {
             const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
             const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
             const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
-            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
+            const partIdx = score.parts.indexOf(part)
+            const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
           }
           setLastEnteredPitch(noteWithDot.pitch)
           setSelectedMeasure(null)
@@ -846,7 +859,9 @@ export function ScoreCanvas(): JSX.Element {
           const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
           const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
-          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
+          const partIdx = score.parts.indexOf(part)
+          const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
         }
         setLastEnteredPitch(noteWithDot.pitch)
         setSelectedMeasure(null)
@@ -1315,14 +1330,16 @@ export function ScoreCanvas(): JSX.Element {
               const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
               const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
               const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
-              triggerInputPreview(updated.pitch.noteName, newOctave, updated.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
+              const partIdx = score.parts.indexOf(part)
+              const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+              triggerInputPreview(updated.pitch.noteName, newOctave, updated.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
             }
             return
           }
         }
       }
     }
-  }, [score, selectedNoteId, dispatch, soundOnInput])
+  }, [score, selectedNoteId, dispatch, soundOnInput, audioMode])
 
   const moveSelectedNotes = useCallback((direction: 'up' | 'down') => {
     if (selectedNoteIds.length === 0) return
@@ -1346,14 +1363,16 @@ export function ScoreCanvas(): JSX.Element {
               const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
               const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
               const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
-              triggerInputPreview(newPitch.noteName, newPitch.octave, newPitch.accidental, volDb, midi === 45, part.transposeSemitones)
+              const partIdx = score.parts.indexOf(part)
+              const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+              triggerInputPreview(newPitch.noteName, newPitch.octave, newPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
               break outer
             }
           }
         }
       }
     }
-  }, [selectedNoteIds, findFullNoteLocation, dispatch, soundOnInput, score])
+  }, [selectedNoteIds, findFullNoteLocation, dispatch, soundOnInput, score, audioMode])
 
   const transposeSelectedNotes = useCallback((semitones: number) => {
     if (selectedNoteIds.length === 0) return
@@ -1764,7 +1783,9 @@ export function ScoreCanvas(): JSX.Element {
                 const dyn   = resolveDirectiveDynamic(staff!.measures, mIdx)
                 const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
                 const midi  = resolveDirectiveMidiProgram(staff!.measures, mIdx, part.midiProgram)
-                triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
+                const partIdx = score.parts.indexOf(part)
+                const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+                triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
               }
               setPrimedAccidental(null)
               setLastEnteredPitch(noteWithDot.pitch)
@@ -1822,7 +1843,9 @@ export function ScoreCanvas(): JSX.Element {
           const dyn   = resolveDirectiveDynamic(clickStaff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? clickPart.volume))
           const midi  = resolveDirectiveMidiProgram(clickStaff.measures, mIdx, clickPart.midiProgram)
-          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, clickPart.transposeSemitones)
+          const partIdx = score.parts.indexOf(clickPart)
+          const ch = Math.min((clickPart.midiChannel ?? (partIdx + 1)) - 1, 15)
+          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, clickPart.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
         }
       }
 
@@ -2060,11 +2083,13 @@ export function ScoreCanvas(): JSX.Element {
                     const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? selPart.volume))
                     const midi  = resolveDirectiveMidiProgram(selStaff.measures, mIdx, selPart.midiProgram)
                     const isPizz = midi === 45
+                    const partIdx = score.parts.indexOf(selPart)
+                    const ch = Math.min((selPart.midiChannel ?? (partIdx + 1)) - 1, 15)
                     if (ev.type === 'note') {
-                      triggerInputPreview(ev.pitch.noteName, ev.pitch.octave, ev.pitch.accidental, volDb, isPizz, selPart.transposeSemitones)
+                      triggerInputPreview(ev.pitch.noteName, ev.pitch.octave, ev.pitch.accidental, volDb, isPizz, selPart.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
                     } else if (ev.type === 'chord') {
                       const top = ev.pitches[ev.pitches.length - 1]
-                      triggerInputPreview(top.noteName, top.octave, top.accidental, volDb, isPizz, selPart.transposeSemitones)
+                      triggerInputPreview(top.noteName, top.octave, top.accidental, volDb, isPizz, selPart.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
                     }
                   }
                 }

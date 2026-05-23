@@ -122,11 +122,14 @@ class MidiOutputEngine {
     }
   }
 
-  previewNote(midiNote: number, velocity: number, durationMs = 400): void {
+  previewNote(midiNote: number, velocity: number, channel = 0, program?: number, durationMs = 400): void {
     if (!this._output) return
-    this._output.send([0x90, midiNote, velocity])
+    if (program !== undefined) {
+      this._output.send([0xC0 | channel, Math.max(0, Math.min(127, program))])
+    }
+    this._output.send([0x90 | channel, midiNote, velocity])
     const out = this._output
-    setTimeout(() => out.send([0x80, midiNote, 0]), durationMs)
+    setTimeout(() => out.send([0x80 | channel, midiNote, 0]), durationMs)
   }
 
   async playScore(

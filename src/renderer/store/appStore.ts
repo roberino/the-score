@@ -149,7 +149,7 @@ export const useAppStore = create<AppState>()(
     lastEnteredPitch: null,
 
     keyboardVisible: false,
-    soundOnInput: false,
+    soundOnInput: true,
 
     audioMode: 'builtin',
     midiOutputDeviceId: null,
