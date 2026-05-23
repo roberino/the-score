@@ -8,13 +8,13 @@ import { AudioSettingsPanel } from './AudioSettingsPanel'
 import { MidiInputPanel } from './MidiInputPanel'
 
 const NOTE_CHARS: Record<Duration, string> = {
-  whole:   '\u{1D15D}',           // 𝅝
-  half:    '\u{1D157}\u{1D165}',  // 𝅗𝅥
-  quarter: '♩',              // ♩
-  eighth:  '♪',              // ♪
-  '16th':  '\u{1D158}\u{1D165}\u{1D16F}', // 𝅘𝅥𝅯
-  '32nd':  '\u{1D158}\u{1D165}\u{1D170}', // 𝅘𝅥𝅰
-  '64th':  '\u{1D158}\u{1D165}\u{1D171}', // 𝅘𝅥𝅱
+  whole:   '\u{1D15D}',                            // whole note
+  half:    '\u{1D157}\u{1D165}',                   // void notehead + stem
+  quarter: '\u{1D158}\u{1D165}',                   // black notehead + stem
+  eighth:  '\u{1D158}\u{1D165}\u{1D16E}',          // black notehead + stem + 1 flag
+  '16th':  '\u{1D158}\u{1D165}\u{1D16F}',          // + 2 flags
+  '32nd':  '\u{1D158}\u{1D165}\u{1D170}',          // + 3 flags
+  '64th':  '\u{1D158}\u{1D165}\u{1D171}',          // + 4 flags
 }
 
 const REST_CHARS: Record<Duration, string> = {
