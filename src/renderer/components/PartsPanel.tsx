@@ -9,9 +9,10 @@ import { v4 as uuid } from 'uuid'
 interface InstrumentPickerProps {
   onSelect: (inst: InstrumentDef) => void
   onClose: () => void
+  style?: React.CSSProperties
 }
 
-function InstrumentPicker({ onSelect, onClose }: InstrumentPickerProps): JSX.Element {
+function InstrumentPicker({ onSelect, onClose, style: outerStyle }: InstrumentPickerProps): JSX.Element {
   const [search, setSearch] = useState('')
   const q = search.toLowerCase()
 
@@ -25,6 +26,7 @@ function InstrumentPicker({ onSelect, onClose }: InstrumentPickerProps): JSX.Ele
       background: '#1e1e1e', border: '1px solid #444', borderRadius: 4,
       width: 220, maxHeight: 380, overflowY: 'auto',
       boxShadow: '2px 2px 12px rgba(0,0,0,0.5)', zIndex: 200,
+      ...outerStyle,
     }}>
       <div style={{ padding: '6px 8px', borderBottom: '1px solid #333' }}>
         <input
@@ -409,12 +411,11 @@ export function PartsPanel({ onClose }: PartsPanelProps): JSX.Element {
           + Add part
         </button>
         {showInstPicker && (
-          <div style={{ position: 'absolute', bottom: '100%', left: 8, right: 8, marginBottom: 4 }}>
-            <InstrumentPicker
-              onSelect={handleAddInstrument}
-              onClose={() => setShowInstPicker(false)}
-            />
-          </div>
+          <InstrumentPicker
+            onSelect={handleAddInstrument}
+            onClose={() => setShowInstPicker(false)}
+            style={{ left: 0, right: 0, top: 'auto', bottom: '100%', marginLeft: 0, marginBottom: 4, width: 'auto' }}
+          />
         )}
       </div>
     </div>
