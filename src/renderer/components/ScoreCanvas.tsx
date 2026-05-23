@@ -9,6 +9,8 @@ import {
   LABEL_MARGIN_X,
   HEADING_MARGIN_Y,
   STAVE_HEIGHT_PX,
+  LYRIC_Y_OFFSET,
+  PEDAL_BASE_BELOW_STAVE,
   headingFieldBounds,
   type MeasureLayout,
   type HeadingFieldBound,
@@ -1127,7 +1129,7 @@ export function ScoreCanvas(): JSX.Element {
           for (const voice of measure.voices) {
             if (voice.events.some(e => e.id === lyricCursorNoteId)) {
               const layout = layouts.find(l => l.measureId === measure.id && l.staffId === staff.id)
-              if (layout) return { x: noteX, y: layout.staveTopY + STAVE_HEIGHT_PX + 20 }
+              if (layout) return { x: noteX, y: layout.staveTopY + LYRIC_Y_OFFSET }
             }
           }
         }
@@ -1610,11 +1612,12 @@ export function ScoreCanvas(): JSX.Element {
     }
 
     // ── Pedal mark zone: below each stave (Text mode only) ──────────────────
+    // Zone covers the full dynamic pedal range (base + max note overhang headroom).
     if (inputMode === 'text') for (const l of layouts) {
       const staveBottom = l.staveTopY + STAVE_HEIGHT_PX
       if (
         canvasX >= l.x && canvasX <= l.x + l.width &&
-        canvasY >= staveBottom + 2 && canvasY <= staveBottom + 18
+        canvasY >= staveBottom + 2 && canvasY <= staveBottom + PEDAL_BASE_BELOW_STAVE + 20
       ) {
         const part  = score.parts.find(p => p.id === l.partId)
         const staff = part?.staves.find(s => s.id === l.staffId)
@@ -1645,11 +1648,12 @@ export function ScoreCanvas(): JSX.Element {
     }
 
     // ── MIDI event zone: below each stave (MIDI mode only) ───────────────────
+    // Zone covers both pedal level and MIDI level so either can be targeted.
     if (inputMode === 'midi') for (const l of layouts) {
       const staveBottom = l.staveTopY + STAVE_HEIGHT_PX
       if (
         canvasX >= l.x && canvasX <= l.x + l.width &&
-        canvasY >= staveBottom - 4 && canvasY <= staveBottom + 36
+        canvasY >= staveBottom + 2 && canvasY <= staveBottom + PEDAL_BASE_BELOW_STAVE + 42
       ) {
         const part  = score.parts.find(p => p.id === l.partId)
         const staff = part?.staves.find(s => s.id === l.staffId)
@@ -1682,9 +1686,8 @@ export function ScoreCanvas(): JSX.Element {
 
     // ── Lyric text click: select or lyric mode → enter lyric edit for that note ──
     if (inputMode === 'select' || inputMode === 'lyric') {
-      const LYRIC_Y_OFF = 60   // must match notationRenderer LYRIC_Y_OFFSET
       for (const l of layouts) {
-        const lyricY = l.staveTopY + LYRIC_Y_OFF
+        const lyricY = l.staveTopY + LYRIC_Y_OFFSET
         if (Math.abs(canvasY - lyricY) > 14) continue
         const lPart   = score.parts.find(p => p.id === l.partId)
         const lStaff  = lPart?.staves.find(s => s.id === l.staffId)

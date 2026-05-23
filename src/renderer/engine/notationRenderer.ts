@@ -177,7 +177,7 @@ export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
   canvasWidth: 1200,
   measuresPerLine: 8,
   staveWidth: 260,
-  staveHeight: 120,
+  staveHeight: 140,
   marginX: 75,
   marginRight: 75,
   marginY: HEADING_MARGIN_Y,
@@ -559,11 +559,11 @@ export function renderScore(
   const ctx = renderer.getContext()
   ctx.clear()
 
-  renderFromLayouts(ctx, score, layouts, selectedNoteIds, notePositions, noteStartX)
+  const lyricYMap = renderFromLayouts(ctx, score, layouts, selectedNoteIds, notePositions, noteStartX)
   drawHeadings(ctx, score, options)
 
   const nativeCtx = canvas.getContext('2d')
-  if (nativeCtx) drawAllLyrics(nativeCtx, score, notePositions, layouts, lyricCursorNoteId)
+  if (nativeCtx) drawAllLyrics(nativeCtx, score, notePositions, layouts, lyricCursorNoteId, lyricYMap)
 
   if (selectedMeasureId) {
     drawMeasureHighlight(canvas, selectedMeasureId, layouts)
@@ -585,7 +585,7 @@ function renderFromLayouts(
   selectedNoteIds: ReadonlySet<string>,
   notePositions: Map<string, number>,
   noteStartX: Map<string, number>
-): void {
+): Map<string, number> {   // returns measureId → lyricY
   // Build fast lookup: staffId → staff / part
   type StaffEntry = { staff: Staff; part: Part }
   const staffMap = new Map<string, StaffEntry>()
@@ -594,6 +594,20 @@ function renderFromLayouts(
       staffMap.set(staff.id, { staff, part })
     }
   }
+
+  // ── Pre-pass: row max note overhang for row-consistent below-stave positioning
+  // Keyed by staveY so all measures in the same row use the same pedal/MIDI baseline.
+  const rowOverhangMap = new Map<number, number>()
+  for (const layout of layouts) {
+    const entry = staffMap.get(layout.staffId)
+    if (!entry) continue
+    const mIdx = entry.staff.measures.findIndex(m => m.id === layout.measureId)
+    if (mIdx === -1) continue
+    const overhang = lowestNoteOverhangPx(entry.staff.measures[mIdx], layout.clef)
+    rowOverhangMap.set(layout.staveY, Math.max(rowOverhangMap.get(layout.staveY) ?? 0, overhang))
+  }
+
+  const measureLyricY = new Map<string, number>()
 
   // Maps for second-pass tie/slur rendering
   const staveNoteMap   = new Map<string, StaveNote>()   // eventId → StaveNote
@@ -675,19 +689,30 @@ function renderFromLayouts(
       }
     }
 
+    // ── Below-stave Y positions ─────────────────────────────────────────────
+    // pedalY is row-consistent (uses max overhang across the whole row).
+    // lyricY is per-measure but capped above pedalY.
+    const rowOverhang  = rowOverhangMap.get(layout.staveY) ?? 0
+    const staveBottom  = layout.staveTopY + STAVE_HEIGHT_PX
+    const pedalY       = staveBottom + Math.max(PEDAL_BASE_BELOW_STAVE, rowOverhang + 26)
+    const midiY        = pedalY + MIDI_BELOW_PEDAL
+    const rawLyricY    = staveBottom + Math.max(LYRIC_BASE_BELOW_STAVE, rowOverhang + 8)
+    const lyricY       = Math.min(rawLyricY, pedalY - 18)
+    measureLyricY.set(layout.measureId, lyricY)
+
     // Directives: drawn in the VexFlow headroom zone above the top staff line
     drawDirectives(ctx, layout, measure, staff, score, part === score.parts[0], stave.getNoteStartX())
     // Pedal marks below the stave
     if (measure.pedalMarks?.length) {
-      drawPedalMarks(ctx, layout, measure, staff, score, stave.getNoteStartX())
+      drawPedalMarks(ctx, layout, measure, staff, score, stave.getNoteStartX(), pedalY)
     }
     // MIDI score events below the stave
     if (measure.midiEvents?.length) {
-      drawMidiEvents(ctx, layout, measure, staff, score, stave.getNoteStartX())
+      drawMidiEvents(ctx, layout, measure, staff, score, stave.getNoteStartX(), midiY)
     }
     // Note-attached dynamics below the stave
     if (staveNotes.length > 0) {
-      drawNoteDynamics(ctx, layout, measure, staff, staveNotes, events)
+      drawNoteDynamics(ctx, layout, measure, staff, staveNotes, events, pedalY)
     }
   }
 
@@ -707,6 +732,8 @@ function renderFromLayouts(
       }
     }
   }
+
+  return measureLyricY
 }
 
 // ── Group connectors (brackets, braces, spanning barlines) ────────────────────
@@ -875,6 +902,7 @@ function drawNoteDynamics(
   staff: Staff,
   staveNotes: StaveNote[],
   events: NoteEvent[],
+  pedalY: number,
 ): void {
   const nativeCtx: CanvasRenderingContext2D | null =
     typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
@@ -883,6 +911,13 @@ function drawNoteDynamics(
   const mIdx = staff.measures.findIndex(m => m.id === measure.id)
   const clef = resolveClef(staff.measures, mIdx, staff.clef)
   const staveBottom = layout.staveTopY + STAVE_HEIGHT_PX
+
+  // Compute y once for the whole measure: clear note heads, but never overlap pedal marks.
+  const overhang = lowestNoteOverhangPx(measure, clef)
+  const y = Math.min(
+    staveBottom + Math.max(14, overhang + 10),
+    pedalY - 14,
+  )
 
   nativeCtx.save()
   nativeCtx.font      = 'bold italic 13px Edwin, serif'
@@ -893,9 +928,6 @@ function drawNoteDynamics(
   events.forEach((event, i) => {
     const dynamic = (event as any).dynamic as DynamicLevel | undefined
     if (!dynamic) return
-    // Clear past any low notes in this measure so the label never overlaps noteheads.
-    const overhang = lowestNoteOverhangPx(measure, clef)
-    const y = staveBottom + Math.max(14, overhang + 10)
     const x = staveNotes[i].getAbsoluteX()
     nativeCtx.fillText(dynamic, x, y)
   })
@@ -911,7 +943,8 @@ function drawPedalMarks(
   measure: Measure,
   staff: Staff,
   score: Score,
-  noteStartX: number
+  noteStartX: number,
+  pedalY: number,
 ): void {
   const nativeCtx: CanvasRenderingContext2D | null =
     typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
@@ -924,7 +957,7 @@ function drawPedalMarks(
   const timeSig     = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
   const capacity    = measureCapacityUnits(timeSig)
   const noteAreaWidth = layout.x + layout.width - noteStartX
-  const y = layout.staveTopY + STAVE_HEIGHT_PX + 6
+  const y = pedalY
 
   nativeCtx.save()
   // U+E650 = keyboardPedalPed, U+E655 = keyboardPedalUp (SMuFL, Bravura loaded by VexFlow)
@@ -958,7 +991,8 @@ function drawMidiEvents(
   measure: Measure,
   staff: Staff,
   score: Score,
-  noteStartX: number
+  noteStartX: number,
+  midiY: number,
 ): void {
   const nativeCtx: CanvasRenderingContext2D | null =
     typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
@@ -971,7 +1005,7 @@ function drawMidiEvents(
   const timeSig = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
   const capacity = measureCapacityUnits(timeSig)
   const noteAreaWidth = layout.x + layout.width - noteStartX
-  const y = layout.staveTopY + STAVE_HEIGHT_PX + 28
+  const y = midiY
 
   nativeCtx.save()
   nativeCtx.font          = '9px monospace'
@@ -1448,7 +1482,14 @@ function drawHairpinsForStaff(
 
 const LINE_SPACING_PX       = 10
 export const STAVE_HEIGHT_PX = 4 * LINE_SPACING_PX
-const LYRIC_Y_OFFSET         = 60   // px below staveTopY (20px below bottom staff line)
+
+// ── Below-stave layout constants ─────────────────────────────────────────────
+// Stack order from stave bottom: lyrics → note dynamics → pedal marks → MIDI events.
+// PEDAL_BASE_BELOW_STAVE and LYRIC_Y_OFFSET are exported for ScoreCanvas hit-zone sizing.
+export const LYRIC_Y_OFFSET          = 56  // fallback lyric baseline: px below staveTopY
+export const PEDAL_BASE_BELOW_STAVE  = 34  // pedal baseline offset from staveBottom (no overhang)
+const        MIDI_BELOW_PEDAL        = 22  // MIDI label center below pedalY
+const        LYRIC_BASE_BELOW_STAVE  = 16  // lyric baseline offset from staveBottom (no overhang)
 
 // ── Lyric rendering ───────────────────────────────────────────────────────────
 
@@ -1458,6 +1499,7 @@ function drawAllLyrics(
   notePositions: Map<string, number>,
   layouts: MeasureLayout[],
   lyricCursorNoteId: string | null,
+  lyricYMap: Map<string, number>,
 ): void {
   // Index layouts by measureId for fast staveTopY lookup
   const measureLayoutMap = new Map<string, MeasureLayout>()
@@ -1479,7 +1521,7 @@ function drawAllLyrics(
         if (!voice) continue
         const layout = measureLayoutMap.get(measure.id)
         if (!layout) continue
-        const lyricY = layout.staveTopY + LYRIC_Y_OFFSET
+        const lyricY = lyricYMap.get(measure.id) ?? (layout.staveTopY + LYRIC_Y_OFFSET)
 
         for (const event of voice.events) {
           if (event.type === 'rest') continue
