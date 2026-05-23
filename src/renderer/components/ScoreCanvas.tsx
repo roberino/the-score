@@ -12,7 +12,7 @@ import {
   type MeasureLayout,
   type HeadingFieldBound,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta, type Duration } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import {
   DURATION_UNITS,
@@ -29,6 +29,8 @@ import {
   resolveKeySig,
   resolveDirectiveDynamic,
   resolveDirectiveMidiProgram,
+  eventDurationUnits,
+  shiftPitchBySemitones,
 } from '@shared/musicUtils'
 import { pitchToHz } from '../engine/audioEngine'
 import { previewNote } from '../engine/notePreview'
@@ -53,6 +55,45 @@ function triggerInputPreview(
   // virtual buses like IAC Driver (output loops back as input, entering notes).
   const hz = pitchToHz(noteName, octave, accidental ?? null, transposeSemitones)
   void previewNote(hz, volDb, isPizz)
+}
+
+// ── Rest-replace helpers ──────────────────────────────────────────────────────
+
+function findEventAtBeat(events: readonly NoteEvent[], beat: number): { event: NoteEvent; index: number } | null {
+  let acc = 0
+  for (let i = 0; i < events.length; i++) {
+    if (acc === beat) return { event: events[i], index: i }
+    acc += eventDurationUnits(events[i])
+    if (acc > beat) break
+  }
+  return null
+}
+
+const REST_DECOMP: Array<{ units: number; duration: Duration; dots: 0 | 1 }> = [
+  { units: 64, duration: 'whole',   dots: 0 },
+  { units: 48, duration: 'half',    dots: 1 },
+  { units: 32, duration: 'half',    dots: 0 },
+  { units: 24, duration: 'quarter', dots: 1 },
+  { units: 16, duration: 'quarter', dots: 0 },
+  { units: 12, duration: 'eighth',  dots: 1 },
+  { units: 8,  duration: 'eighth',  dots: 0 },
+  { units: 6,  duration: '16th',    dots: 1 },
+  { units: 4,  duration: '16th',    dots: 0 },
+  { units: 3,  duration: '32nd',    dots: 1 },
+  { units: 2,  duration: '32nd',    dots: 0 },
+  { units: 1,  duration: '64th',    dots: 0 },
+]
+
+function decomposeToRests(units: number): Array<{ duration: Duration; dots: 0 | 1 }> {
+  const result: Array<{ duration: Duration; dots: 0 | 1 }> = []
+  let remaining = units
+  while (remaining > 0) {
+    const match = REST_DECOMP.find(d => d.units <= remaining)
+    if (!match) break
+    result.push({ duration: match.duration, dots: match.dots })
+    remaining -= match.units
+  }
+  return result
 }
 
 const LINE_SPACING_PX  = 10
@@ -450,14 +491,14 @@ export function ScoreCanvas(): JSX.Element {
       canvas,
       score,
       options,
-      new Set(selectedNoteIds),
+      inputMode === 'select' ? new Set(selectedNoteIds) : new Set(),
       cursorMeasureId
         ? { cursorMeasureId, cursorBeatPosition, totalCapacityUnits: capacity }
         : null,
       selectedMeasureId,
       lyricCursorNoteId
     )
-  }, [score, zoom, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId])
+  }, [score, zoom, inputMode, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId])
 
   // ── Note entry helpers ──────────────────────────────────────────────────────
 
@@ -475,6 +516,55 @@ export function ScoreCanvas(): JSX.Element {
         const timeSig = measure.timeSignature ?? score.timeSignature
         const dots    = isDotted ? 1 : 0 as 0 | 1
         const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
+
+        // Rest-replace: if cursor sits on a rest, replace it rather than append
+        const atCursor = existingVoice ? findEventAtBeat(voiceEvents, cursorBeatPosition) : null
+        if (atCursor?.event.type === 'rest') {
+          const restUnits = eventDurationUnits(atCursor.event)
+          if (units > restUnits) {
+            canvasRef.current?.classList.add('cursor-reject')
+            setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+            return
+          }
+          const octave      = closestOctave(noteName, lastEnteredPitch)
+          const accidental  = primedAccidental as Accidental
+          const note        = createNote(noteName, octave, selectedDuration, accidental)
+          const noteWithDot = { ...note, dots } as Note
+          const cmds: Command[] = [{
+            type: 'REPLACE_NOTE',
+            partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: existingVoice.id,
+            noteId: atCursor.event.id, event: noteWithDot,
+          }]
+          const remainder = restUnits - units
+          if (remainder > 0) {
+            let insertIdx = atCursor.index + 1
+            for (const r of decomposeToRests(remainder)) {
+              cmds.push({ type: 'ADD_NOTE', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: existingVoice.id, event: { ...createRest(r.duration), dots: r.dots }, index: insertIdx++ })
+            }
+          }
+          dispatchBatch(cmds)
+          if (soundOnInput) {
+            const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
+            const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
+            const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
+            const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
+            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
+          }
+          setPrimedAccidental(null)
+          setLastEnteredPitch(noteWithDot.pitch)
+          setSelectedMeasure(null)
+          const newBeat = cursorBeatPosition + units
+          const capacity = measureCapacityUnits(timeSig)
+          if (newBeat >= capacity) {
+            const measureIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
+            const nextMeasure = staff.measures[measureIdx + 1]
+            if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
+            else             setCursor(null, 0)
+          } else {
+            setCursor(cursorMeasureId, newBeat)
+          }
+          return
+        }
 
         if (remainingUnits(voiceEvents, timeSig) < units) {
           canvasRef.current?.classList.add('cursor-reject')
@@ -556,6 +646,53 @@ export function ScoreCanvas(): JSX.Element {
         const timeSig = measure.timeSignature ?? score.timeSignature
         const dots    = isDotted ? 1 : 0 as 0 | 1
         const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
+
+        // Rest-replace: if cursor sits on a rest, replace it rather than append
+        const atCursor = existingVoice ? findEventAtBeat(voiceEvents, cursorBeatPosition) : null
+        if (atCursor?.event.type === 'rest') {
+          const restUnits = eventDurationUnits(atCursor.event)
+          if (units > restUnits) {
+            canvasRef.current?.classList.add('cursor-reject')
+            setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+            return
+          }
+          const note        = createNote(noteName, octave, selectedDuration, accidental ?? null)
+          const noteWithDot = { ...note, dots } as Note
+          const cmds: Command[] = [{
+            type: 'REPLACE_NOTE',
+            partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: existingVoice.id,
+            noteId: atCursor.event.id, event: noteWithDot,
+          }]
+          const remainder = restUnits - units
+          if (remainder > 0) {
+            let insertIdx = atCursor.index + 1
+            for (const r of decomposeToRests(remainder)) {
+              cmds.push({ type: 'ADD_NOTE', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: existingVoice.id, event: { ...createRest(r.duration), dots: r.dots }, index: insertIdx++ })
+            }
+          }
+          dispatchBatch(cmds)
+          if (soundOnInput && !skipPreview) {
+            const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
+            const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
+            const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
+            const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
+            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
+          }
+          setLastEnteredPitch(noteWithDot.pitch)
+          setSelectedMeasure(null)
+          const newBeat  = cursorBeatPosition + units
+          const capacity = measureCapacityUnits(timeSig)
+          if (newBeat >= capacity) {
+            const mIdx        = staff.measures.findIndex(m => m.id === cursorMeasureId)
+            const nextMeasure = staff.measures[mIdx + 1]
+            if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
+            else             setCursor(null, 0)
+          } else {
+            setCursor(cursorMeasureId, newBeat)
+          }
+          return
+        }
+
         if (remainingUnits(voiceEvents, timeSig) < units) {
           canvasRef.current?.classList.add('cursor-reject')
           setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
@@ -885,15 +1022,46 @@ export function ScoreCanvas(): JSX.Element {
 
   const deleteSelectedNotes = useCallback(() => {
     if (selectedNoteIds.length === 0) return
+
     if (selectedNoteIds.length === 1) {
-      const id = selectedNoteIds[0]
+      const id  = selectedNoteIds[0]
       const loc = findFullNoteLocation(id)
-      if (loc) {
-        dispatch({ type: 'DELETE_NOTE', ...loc, noteId: id })
-        clearSelection()
+      if (!loc) return
+      const part    = score.parts.find(p => p.id === loc.partId)
+      const staff   = part?.staves.find(s => s.id === loc.staffId)
+      const measure = staff?.measures.find(m => m.id === loc.measureId)
+      const voice   = measure?.voices.find(v => v.id === loc.voiceId)
+      if (!voice) return
+      const evIdx = voice.events.findIndex(e => e.id === id)
+      if (evIdx === -1) return
+      const ev = voice.events[evIdx]
+
+      // Find next event ID to select after the operation
+      let nextId: string | null = null
+      if (evIdx + 1 < voice.events.length) {
+        nextId = voice.events[evIdx + 1].id
+      } else if (staff) {
+        const mIdx = staff.measures.findIndex(m => m.id === loc.measureId)
+        for (let i = mIdx + 1; i < staff.measures.length; i++) {
+          const v = staff.measures[i].voices.find(v => v.events.length > 0)
+          if (v) { nextId = v.events[0].id; break }
+        }
       }
+
+      if (ev.type === 'note' || ev.type === 'chord') {
+        // Replace note with a rest of the same duration
+        const rest = { ...createRest(ev.duration), dots: ev.dots }
+        dispatch({ type: 'REPLACE_NOTE', ...loc, noteId: id, event: rest })
+      } else {
+        // Remove rest entirely
+        dispatch({ type: 'DELETE_NOTE', ...loc, noteId: id })
+      }
+      if (nextId) setSelectedNote(nextId)
+      else clearSelection()
       return
     }
+
+    // Multi-select: delete all
     const deletions: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] = []
     for (const noteId of selectedNoteIds) {
       const loc = findFullNoteLocation(noteId)
@@ -903,7 +1071,29 @@ export function ScoreCanvas(): JSX.Element {
       dispatch({ type: 'DELETE_NOTES', deletions })
       clearSelection()
     }
-  }, [score, selectedNoteIds, findFullNoteLocation, dispatch, clearSelection])
+  }, [score, selectedNoteIds, findFullNoteLocation, dispatch, clearSelection, setSelectedNote])
+
+  const navigateSelection = useCallback((direction: 'prev' | 'next') => {
+    const anchorId = selectedNoteId ?? selectedNoteIds[selectedNoteIds.length - 1]
+    if (!anchorId) return
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        // Build a flat list of all event IDs in voice 0 across all measures
+        const flat: string[] = []
+        for (const measure of staff.measures) {
+          const voice = measure.voices[0]
+          if (voice) for (const ev of voice.events) flat.push(ev.id)
+        }
+        const idx = flat.indexOf(anchorId)
+        if (idx === -1) continue
+        const targetIdx = direction === 'prev' ? idx - 1 : idx + 1
+        if (targetIdx >= 0 && targetIdx < flat.length) {
+          setSelectedNote(flat[targetIdx])
+        }
+        return
+      }
+    }
+  }, [score, selectedNoteId, selectedNoteIds, setSelectedNote])
 
   // Locate a note event's part and staff (used for tie/slur dispatch)
   const findNoteLocation = useCallback((noteId: string): { partId: string; staffId: string } | null => {
@@ -927,6 +1117,19 @@ export function ScoreCanvas(): JSX.Element {
   }, [selectedNoteId, findNoteLocation, dispatch])
 
   const handleSlurKey = useCallback(() => {
+    // Multi-select: apply slur across the full selection
+    if (selectedNoteIds.length > 1) {
+      const fromId  = selectedNoteIds[0]
+      const toId    = selectedNoteIds[selectedNoteIds.length - 1]
+      const fromLoc = findNoteLocation(fromId)
+      const toLoc   = findNoteLocation(toId)
+      if (fromLoc && toLoc && fromLoc.staffId === toLoc.staffId) {
+        const slur: Slur = { id: uuid(), fromNoteId: fromId, toNoteId: toId }
+        dispatch({ type: 'ADD_SLUR', partId: fromLoc.partId, staffId: fromLoc.staffId, slur })
+      }
+      return
+    }
+
     if (!selectedNoteId) return
     if (slurPendingId) {
       setSlurPendingId(null)  // cancel pending
@@ -944,7 +1147,7 @@ export function ScoreCanvas(): JSX.Element {
     }
     // Start pending — slur commits when a different note is next selected
     setSlurPendingId(selectedNoteId)
-  }, [selectedNoteId, slurPendingId, score, dispatch])
+  }, [selectedNoteId, selectedNoteIds, slurPendingId, score, dispatch, findNoteLocation])
 
   // Auto-commit slur when user selects a different note while slurPendingId is active.
   // findNoteLocation/dispatch intentionally omitted from deps: including findNoteLocation
@@ -966,7 +1169,8 @@ export function ScoreCanvas(): JSX.Element {
     if (!selectedNoteId) return
     for (const part of score.parts) {
       for (const staff of part.staves) {
-        for (const measure of staff.measures) {
+        for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
+          const measure = staff.measures[mIdx]
           for (const voice of measure.voices) {
             const event = voice.events.find(e => e.id === selectedNoteId)
             if (!event || event.type !== 'note') return
@@ -983,12 +1187,18 @@ export function ScoreCanvas(): JSX.Element {
               noteId:    selectedNoteId,
               event:     updated,
             })
+            if (soundOnInput) {
+              const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
+              const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
+              const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
+              triggerInputPreview(updated.pitch.noteName, newOctave, updated.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
+            }
             return
           }
         }
       }
     }
-  }, [score, selectedNoteId, dispatch])
+  }, [score, selectedNoteId, dispatch, soundOnInput])
 
   const moveSelectedNotes = useCallback((direction: 'up' | 'down') => {
     if (selectedNoteIds.length === 0) return
@@ -997,8 +1207,29 @@ export function ScoreCanvas(): JSX.Element {
       const loc = findFullNoteLocation(noteId)
       if (loc) moves.push({ ...loc, noteId })
     }
-    if (moves.length > 0) dispatch({ type: 'MOVE_NOTES_STEP', moves, direction })
-  }, [selectedNoteIds, findFullNoteLocation, dispatch])
+    if (moves.length === 0) return
+    dispatch({ type: 'MOVE_NOTES_STEP', moves, direction })
+    if (soundOnInput && selectedNoteIds.length === 1) {
+      const id = selectedNoteIds[0]
+      const delta = direction === 'up' ? 1 : -1
+      outer: for (const part of score.parts) {
+        for (const staff of part.staves) {
+          for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
+            for (const voice of staff.measures[mIdx].voices) {
+              const ev = voice.events.find(e => e.id === id)
+              if (!ev || ev.type !== 'note') continue
+              const newPitch = shiftPitchBySemitones(ev.pitch.noteName, ev.pitch.octave, ev.pitch.accidental, delta)
+              const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
+              const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
+              const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
+              triggerInputPreview(newPitch.noteName, newPitch.octave, newPitch.accidental, volDb, midi === 45, part.transposeSemitones)
+              break outer
+            }
+          }
+        }
+      }
+    }
+  }, [selectedNoteIds, findFullNoteLocation, dispatch, soundOnInput, score])
 
   const transposeSelectedNotes = useCallback((semitones: number) => {
     if (selectedNoteIds.length === 0) return
@@ -1101,10 +1332,12 @@ export function ScoreCanvas(): JSX.Element {
         setTransposeDialogOpen(true); return
       }
 
-      // Arrow keys: chromatic step move in select mode; accidental priming in note mode
+      // Arrow keys in select mode: left/right navigate, up/down transpose
       if (!mod && inputMode === 'select' && selectedNoteIds.length > 0) {
-        if (e.key === 'ArrowUp')   { e.preventDefault(); moveSelectedNotes('up');   return }
-        if (e.key === 'ArrowDown') { e.preventDefault(); moveSelectedNotes('down'); return }
+        if (e.key === 'ArrowLeft')  { e.preventDefault(); navigateSelection('prev'); return }
+        if (e.key === 'ArrowRight') { e.preventDefault(); navigateSelection('next'); return }
+        if (e.key === 'ArrowUp')    { e.preventDefault(); moveSelectedNotes('up');   return }
+        if (e.key === 'ArrowDown')  { e.preventDefault(); moveSelectedNotes('down'); return }
       }
       if (inputMode === 'note' && !mod) {
         if (e.key === 'ArrowUp')   { e.preventDefault(); setPrimedAccidental('sharp'); return }
@@ -1117,7 +1350,6 @@ export function ScoreCanvas(): JSX.Element {
         if (e.key === 'n' || e.key === 'N') { setInputMode('note');   return }
         if (e.key === 'r' || e.key === 'R') { setInputMode('rest');   return }
         if (e.key === 's' || e.key === 'S') { setInputMode('select'); return }
-        if (e.key === 'e' || e.key === 'E') { setInputMode('eraser'); return }
         if (e.key === 't' || e.key === 'T') { setInputMode('text');   return }
         if (e.key === 'l' || e.key === 'L') { setInputMode('lyric');  return }
         if (e.key === 'k' || e.key === 'K') { toggleKeyboard();       return }
@@ -1195,7 +1427,7 @@ export function ScoreCanvas(): JSX.Element {
   }, [
     inputMode, score, selectedNoteId, selectedNoteIds, slurPendingId,
     enterNote, enterRest, deleteSelectedNotes, nudgeOctave,
-    moveSelectedNotes, selectAllInMeasure,
+    moveSelectedNotes, navigateSelection, selectAllInMeasure,
     toggleTie, handleSlurKey,
     setInputMode, setSelectedDuration, toggleDot, resizeNote, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
     insertMeasure, deleteMeasure, selectedMeasureId, insertTuplet,
@@ -1290,7 +1522,6 @@ export function ScoreCanvas(): JSX.Element {
     }
 
     if (inputMode === 'note') {
-      // Set cursor to end of existing events in the clicked measure (active voice)
       const part    = score.parts.find(p => p.id === layout.partId)
       const staff   = part?.staves.find(s => s.id === layout.staffId)
       const measure = staff?.measures.find(m => m.id === layout.measureId)
@@ -1298,16 +1529,70 @@ export function ScoreCanvas(): JSX.Element {
       const existingVoice = measure.voices[activeVoice]
       const voiceEvents   = existingVoice?.events ?? []
       const timeSig = measure.timeSignature ?? score.timeSignature
+      const dots    = isDotted ? 1 : 0 as 0 | 1
+      const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
       const used    = usedUnits(voiceEvents)
       const capacity = measureCapacityUnits(timeSig)
+
+      // Check if the click landed on an existing rest — replace it
+      if (existingVoice) {
+        let beatAcc = 0
+        for (let i = 0; i < voiceEvents.length; i++) {
+          const ev    = voiceEvents[i]
+          const evUnits = eventDurationUnits(ev)
+          if (ev.type === 'rest') {
+            const restX = notePositionsRef.current.get(ev.id)
+            if (restX !== undefined && Math.abs(canvasX - restX) <= 20) {
+              if (units > evUnits) return
+              const step      = yToStep(canvasY, layout.staveTopY, LINE_SPACING_PX)
+              const pitchInfo = stepToPitch(step, layout.clef)
+              const accidental = primedAccidental as Accidental
+              const note        = createNote(pitchInfo.noteName, pitchInfo.octave, selectedDuration, accidental)
+              const noteWithDot = { ...note, dots } as Note
+              const cmds: Command[] = [{
+                type: 'REPLACE_NOTE',
+                partId: layout.partId, staffId: layout.staffId, measureId: layout.measureId,
+                voiceId: existingVoice.id, noteId: ev.id, event: noteWithDot,
+              }]
+              const remainder = evUnits - units
+              if (remainder > 0) {
+                let insertIdx = i + 1
+                for (const r of decomposeToRests(remainder)) {
+                  cmds.push({ type: 'ADD_NOTE', partId: layout.partId, staffId: layout.staffId, measureId: layout.measureId, voiceId: existingVoice.id, event: { ...createRest(r.duration), dots: r.dots }, index: insertIdx++ })
+                }
+              }
+              dispatchBatch(cmds)
+              if (soundOnInput && part) {
+                const mIdx  = staff!.measures.findIndex(m => m.id === layout.measureId)
+                const dyn   = resolveDirectiveDynamic(staff!.measures, mIdx)
+                const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
+                const midi  = resolveDirectiveMidiProgram(staff!.measures, mIdx, part.midiProgram)
+                triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones)
+              }
+              setPrimedAccidental(null)
+              setLastEnteredPitch(noteWithDot.pitch)
+              const newBeat = beatAcc + units
+              if (newBeat >= capacity) {
+                const mIdx = staff!.measures.findIndex(m => m.id === layout.measureId)
+                const nextMeasure = staff!.measures[mIdx + 1]
+                if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
+                else             setCursor(null, 0)
+              } else {
+                setCursor(layout.measureId, newBeat)
+              }
+              return
+            }
+          }
+          beatAcc += evUnits
+        }
+      }
+
+      // No rest hit — append at end of existing events
       if (used >= capacity) return
       setCursor(layout.measureId, used)
 
-      // Also enter a note at the clicked Y pitch
       const step      = yToStep(canvasY, layout.staveTopY, LINE_SPACING_PX)
       const pitchInfo = stepToPitch(step, layout.clef)
-      const dots      = isDotted ? 1 : 0 as 0 | 1
-      const units     = dottedUnits(DURATION_UNITS[selectedDuration], dots)
       if (remainingUnits(voiceEvents, timeSig) < units) return
 
       const accidental  = primedAccidental as Accidental
@@ -1405,37 +1690,6 @@ export function ScoreCanvas(): JSX.Element {
         }
       } else {
         setCursor(layout.measureId, newBeat)
-      }
-      return
-    }
-
-    if (inputMode === 'eraser') {
-      const part  = score.parts.find(p => p.id === layout.partId)
-      const staff = part?.staves.find(s => s.id === layout.staffId)
-      if (!staff) return
-      const mIdx = staff.measures.findIndex(m => m.id === layout.measureId)
-      if (mIdx === -1) return
-      const measure = staff.measures[mIdx]
-      const voice   = measure.voices[0]
-      if (!voice || voice.events.length === 0) return
-
-      let closest: { id: string; dist: number } | null = null
-      for (const event of voice.events) {
-        const noteX = notePositionsRef.current.get(event.id)
-        if (noteX === undefined) continue
-        const dist = Math.abs(canvasX - noteX)
-        if (!closest || dist < closest.dist) closest = { id: event.id, dist }
-      }
-
-      if (closest) {
-        dispatch({
-          type:      'DELETE_NOTE',
-          partId:    layout.partId,
-          staffId:   layout.staffId,
-          measureId: layout.measureId,
-          voiceId:   voice.id,
-          noteId:    closest.id,
-        })
       }
       return
     }
@@ -1637,10 +1891,10 @@ export function ScoreCanvas(): JSX.Element {
 
   // ── Barline picker handlers ─────────────────────────────────────────────────
 
-  // ── Double-click: create text box on empty space (select/eraser mode) ────────
+  // ── Double-click: create text box on empty space (select mode) ───────────────
 
   const handleCanvasDblClick = useCallback((event: React.MouseEvent<HTMLCanvasElement>): void => {
-    if (inputMode !== 'select' && inputMode !== 'eraser') return
+    if (inputMode !== 'select') return
     const canvas = canvasRef.current
     if (!canvas) return
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
@@ -1741,10 +1995,9 @@ export function ScoreCanvas(): JSX.Element {
 
   const cursorStyle =
     inputMode === 'note'   ? 'crosshair'
-    : inputMode === 'rest'   ? 'cell'
-    : inputMode === 'eraser' ? 'pointer'
-    : inputMode === 'text'   ? 'text'
-    : inputMode === 'lyric'  ? 'text'
+    : inputMode === 'rest'  ? 'cell'
+    : inputMode === 'text'  ? 'text'
+    : inputMode === 'lyric' ? 'text'
     : 'default'
 
   return (

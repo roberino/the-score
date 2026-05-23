@@ -626,6 +626,13 @@ export function applyCommand(score: Score, command: Command): Score {
             }
             if (!nextNote) break
             const tying = !note.tieStart
+            if (tying) {
+              const normAcc = (a: any) => (a === 'natural' || a == null) ? null : a
+              const samePitch = note.pitch.noteName   === nextNote.pitch.noteName
+                             && note.pitch.octave     === nextNote.pitch.octave
+                             && normAcc(note.pitch.accidental) === normAcc(nextNote.pitch.accidental)
+              if (!samePitch) break
+            }
             note.tieStart = tying
             nextNote.tieEnd = tying
             found = true

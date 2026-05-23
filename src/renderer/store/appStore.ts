@@ -13,7 +13,7 @@ let _playback: PlaybackController | null = null
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type InputMode = 'select' | 'note' | 'rest' | 'eraser' | 'text' | 'lyric'
+export type InputMode = 'select' | 'note' | 'rest' | 'text' | 'lyric'
 
 export interface AppState {
   // Score data
