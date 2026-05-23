@@ -42,7 +42,7 @@ export function resolveTimeSig(
   idx: number,
   scoreDefault: TimeSignature
 ): TimeSignature {
-  for (let i = idx; i >= 0; i--) {
+  for (let i = Math.min(idx, measures.length - 1); i >= 0; i--) {
     if (measures[i].timeSignature) return measures[i].timeSignature!
   }
   return scoreDefault
@@ -57,7 +57,7 @@ export function resolveKeySig(
   idx: number,
   scoreDefault: KeySignature
 ): KeySignature {
-  for (let i = idx; i >= 0; i--) {
+  for (let i = Math.min(idx, measures.length - 1); i >= 0; i--) {
     if (measures[i].keySignature) return measures[i].keySignature!
   }
   return scoreDefault
@@ -78,7 +78,7 @@ export function resolveClef(
   idx: number,
   staffDefault: ClefType
 ): ClefType {
-  for (let i = idx; i >= 0; i--) {
+  for (let i = Math.min(idx, measures.length - 1); i >= 0; i--) {
     if (measures[i].clef) return measures[i].clef!.type
   }
   return staffDefault

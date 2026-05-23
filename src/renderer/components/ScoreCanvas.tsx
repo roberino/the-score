@@ -1957,6 +1957,7 @@ export function ScoreCanvas(): JSX.Element {
           if (!displaysKeySig) continue
 
           const rect = canvas.getBoundingClientRect()
+          setSelectionMenuPos(null)
           setKeySigPickerState({
             measureId: l.measureId,
             partId:    l.partId,
@@ -1990,6 +1991,7 @@ export function ScoreCanvas(): JSX.Element {
           if (!displaysTimeSig) continue
 
           const rect = canvas.getBoundingClientRect()
+          setSelectionMenuPos(null)
           setTimeSigPickerState({
             measureId: l.measureId,
             partId: l.partId,
@@ -2014,6 +2016,7 @@ export function ScoreCanvas(): JSX.Element {
           const staff = part?.staves.find(s => s.id === l.staffId)
           const isLastMeasure = staff?.measures[staff.measures.length - 1]?.id === l.measureId
           const rect = canvas.getBoundingClientRect()
+          setSelectionMenuPos(null)
           setSelectedBarline(l.measureId)
           setPickerState({
             measureId: l.measureId,
