@@ -677,6 +677,10 @@ function renderFromLayouts(
 
     // Directives: drawn in the VexFlow headroom zone above the top staff line
     drawDirectives(ctx, layout, measure, staff, score, part === score.parts[0], stave.getNoteStartX())
+    // Pedal marks below the stave
+    if (measure.pedalMarks?.length) {
+      drawPedalMarks(ctx, layout, measure, staff, score, stave.getNoteStartX())
+    }
     // MIDI score events below the stave
     if (measure.midiEvents?.length) {
       drawMidiEvents(ctx, layout, measure, staff, score, stave.getNoteStartX())
@@ -895,6 +899,44 @@ function drawNoteDynamics(
     const x = staveNotes[i].getAbsoluteX()
     nativeCtx.fillText(dynamic, x, y)
   })
+
+  nativeCtx.restore()
+}
+
+// ── Draw pedal marks for one measure ─────────────────────────────────────────
+
+function drawPedalMarks(
+  ctx: RenderContext,
+  layout: MeasureLayout,
+  measure: Measure,
+  staff: Staff,
+  score: Score,
+  noteStartX: number
+): void {
+  const nativeCtx: CanvasRenderingContext2D | null =
+    typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
+  if (!nativeCtx) return
+
+  const marks = measure.pedalMarks ?? []
+  if (marks.length === 0) return
+
+  const mIdx        = staff.measures.findIndex(m => m.id === measure.id)
+  const timeSig     = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
+  const capacity    = measureCapacityUnits(timeSig)
+  const noteAreaWidth = layout.x + layout.width - noteStartX
+  const y = layout.staveTopY + STAVE_HEIGHT_PX + 6
+
+  nativeCtx.save()
+  // U+E650 = keyboardPedalPed, U+E655 = keyboardPedalUp (SMuFL, Bravura loaded by VexFlow)
+  nativeCtx.font          = '16px Bravura, Academico'
+  nativeCtx.fillStyle     = '#2a2a8a'
+  nativeCtx.textBaseline  = 'alphabetic'
+  nativeCtx.textAlign     = 'left'
+
+  for (const mark of marks) {
+    const x = noteStartX + (mark.beatPosition / capacity) * noteAreaWidth
+    nativeCtx.fillText(mark.type === 'down' ? '' : '', x, y)
+  }
 
   nativeCtx.restore()
 }

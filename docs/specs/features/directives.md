@@ -222,3 +222,120 @@ Note: MIDI program switching in the current Tone.js synth-based engine will be a
 - Rehearsal marks
 - Multi-measure spanning directives
 - Beat-level positioning within a measure (all directives attach at measure start)
+
+---
+
+## Amendment: Piano Pedal Marks
+
+### Overview
+
+Piano pedal marks indicate when the sustain pedal should be depressed and released. They are beat-precise, first-class notation elements rendered below the stave using traditional symbols.
+
+| Symbol | Meaning    | MIDI effect        |
+|--------|------------|--------------------|
+| `Ped`  | Pedal down | CC 64, value 127   |
+| `✤`    | Pedal up   | CC 64, value 0     |
+
+Pedal marks are available on any part and are per-staff. Playback fires CC64 on MIDI output only — the sampler engine ignores them.
+
+---
+
+### Data model
+
+#### `PedalMark` (new, in `score.ts`)
+
+```ts
+export interface PedalMark {
+  readonly id:           string
+  readonly type:         'down' | 'up'
+  readonly beatPosition: number   // in sixteenth-note units (0 = measure start)
+}
+```
+
+#### `Measure` addition
+
+```ts
+readonly pedalMarks?: readonly PedalMark[]
+```
+
+---
+
+### Commands
+
+```ts
+| { type: 'ADD_PEDAL_MARK';    partId: string; staffId: string; measureId: string; mark: PedalMark }
+| { type: 'REMOVE_PEDAL_MARK'; partId: string; staffId: string; measureId: string; markId: string }
+```
+
+`ADD_PEDAL_MARK` appends to `measure.pedalMarks`. `REMOVE_PEDAL_MARK` filters by `markId`.
+
+---
+
+### Rendering
+
+Pedal marks are drawn **below the stave**, in the zone used by MIDI event labels (the 40 px band below the bottom staff line). They sit on a separate row from MIDI event labels to avoid overlap — pedal marks occupy the first row (closest to the stave), MIDI labels the second.
+
+```
+                   │  ════════════════════════════════ │  ← bottom staff line
+staveBottom + 6    │  Ped              ✤               │  ← pedal mark row
+staveBottom + 22   │  [cc:7=64]                        │  ← MIDI event label row
+```
+
+#### Symbol rendering
+
+- **`Ped`** — italic serif font, 13 px, color `#2a2a8a` (dark blue), positioned at the beat-precise X using the same `noteStartX` interpolation as MIDI events.
+- **`✤`** — same font/size/color, positioned at its beat-precise X.
+
+Beat-precise X is computed as: `noteStartX + (beatPosition / measureCapacity) * (staveRight - noteStartX)`.
+
+---
+
+### Placement UI
+
+Pedal marks are placed in **Marks (text) mode** (`T` key). Clicking in the pedal zone below a stave (y between `staveBottom + 2` and `staveBottom + 18`) opens a small `PedalMarkPicker` popover.
+
+#### `PedalMarkPicker`
+
+A minimal floating popover (similar to `MidiEventPicker` in style) containing:
+
+1. **Beat position** — number input (sixteenth-note units, 0–`measureCapacity-1`), pre-filled from click X.
+2. **Type** — two buttons: `Ped` and `✤`. Selected type is highlighted.
+3. **Existing marks** — list of current pedal marks on this measure with `×` remove buttons (shows beat position + symbol).
+4. **Add** button → dispatches `ADD_PEDAL_MARK`.
+
+The popover is positioned at the click's screen coordinates (fixed, like other pickers).
+
+---
+
+### Playback
+
+Only `midiOutputEngine` fires CC64 events. `audioEngine` and `samplerEngine` ignore pedal marks.
+
+In `midiOutputEngine.playScore`, after the note scheduling loop for each part, iterate `sequence` and for each measure schedule each `PedalMark`:
+
+```ts
+const eventT = measStartT + (mark.beatPosition / 16) * (60 / localBpm)
+Tone.Transport.schedule((time) => {
+  const ts = perfAudioOffset + time * 1000
+  output.send([0xB0 | channel, 64, mark.type === 'down' ? 127 : 0], ts)
+}, eventT)
+```
+
+At playback stop, CC64 is silenced implicitly by the existing `allNotesOff` (which sends CC 123 and CC 120). An explicit CC64=0 reset is also sent to each channel on stop:
+
+```ts
+output.send([0xB0 | ch, 64, 0])
+```
+
+---
+
+### File changes summary
+
+| File | Change |
+|------|--------|
+| `src/shared/score.ts` | Add `PedalMark` interface; add `pedalMarks?` to `Measure` |
+| `src/shared/commands.ts` | Add `ADD_PEDAL_MARK`, `REMOVE_PEDAL_MARK` to Command union and reducer |
+| `src/renderer/engine/midiOutputEngine.ts` | Schedule CC64 events from `pedalMarks`; send CC64=0 on stop |
+| `src/renderer/engine/notationRenderer.ts` | Add `drawPedalMarks` function; call after `drawMidiEvents` |
+| `src/renderer/components/PedalMarkPicker.tsx` | New component (beat input, Ped/✤ toggle, existing list) |
+| `src/renderer/components/ScoreCanvas.tsx` | Add pedal zone click detection in text mode; render `PedalMarkPicker` |

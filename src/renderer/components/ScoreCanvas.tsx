@@ -13,7 +13,7 @@ import {
   type MeasureLayout,
   type HeadingFieldBound,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta, type Duration, type MidiScoreEvent } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta, type Duration, type MidiScoreEvent, type PedalMark } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import {
   DURATION_UNITS,
@@ -43,6 +43,7 @@ import { CircleOfFifths } from './CircleOfFifths'
 import { ClefPicker } from './ClefPicker'
 import { DirectivePicker } from './DirectivePicker'
 import { MidiEventPicker } from './MidiEventPicker'
+import { PedalMarkPicker } from './PedalMarkPicker'
 import { VirtualKeyboard } from './VirtualKeyboard'
 import { TransposeDialog } from './TransposeDialog'
 import { useMidiInput } from '../hooks/useMidiInput'
@@ -398,6 +399,17 @@ interface MidiEventPickerState {
   screenY: number
 }
 
+interface PedalMarkPickerState {
+  measureId: string
+  partId: string
+  staffId: string
+  existing: readonly PedalMark[]
+  beatPosition: number
+  capacity: number
+  screenX: number
+  screenY: number
+}
+
 const ARTICULATION_BUTTONS: { art: Articulation; label: string; title: string }[] = [
   { art: 'staccato', label: '·',  title: 'Staccato' },
   { art: 'accent',   label: '>',  title: 'Accent' },
@@ -424,6 +436,7 @@ export function ScoreCanvas(): JSX.Element {
   const [clefPickerState, setClefPickerState] = useState<ClefPickerState | null>(null)
   const [directivePickerState, setDirectivePickerState] = useState<DirectivePickerState | null>(null)
   const [midiEventPickerState, setMidiEventPickerState] = useState<MidiEventPickerState | null>(null)
+  const [pedalMarkPickerState, setPedalMarkPickerState] = useState<PedalMarkPickerState | null>(null)
   const [editingHeading, setEditingHeading] = useState<HeadingFieldBound | null>(null)
   const [slurPendingId, setSlurPendingId] = useState<string | null>(null)
   const [transposeDialogOpen, setTransposeDialogOpen] = useState(false)
@@ -1596,6 +1609,41 @@ export function ScoreCanvas(): JSX.Element {
       }
     }
 
+    // ── Pedal mark zone: below each stave (Text mode only) ──────────────────
+    if (inputMode === 'text') for (const l of layouts) {
+      const staveBottom = l.staveTopY + STAVE_HEIGHT_PX
+      if (
+        canvasX >= l.x && canvasX <= l.x + l.width &&
+        canvasY >= staveBottom + 2 && canvasY <= staveBottom + 18
+      ) {
+        const part  = score.parts.find(p => p.id === l.partId)
+        const staff = part?.staves.find(s => s.id === l.staffId)
+        const measure = staff?.measures.find(m => m.id === l.measureId)
+        if (!measure || !staff) break
+        const mIdx     = staff.measures.findIndex(m => m.id === l.measureId)
+        const timeSig  = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
+        const capacity = measureCapacityUnits(timeSig)
+        const noteAreaOffset = l.isLineStart ? 70 : 20
+        const noteAreaStart  = l.x + noteAreaOffset
+        const noteAreaWidth  = l.width - noteAreaOffset
+        const beatPos = Math.max(0, Math.min(capacity - 1, Math.round(
+          (canvasX - noteAreaStart) / noteAreaWidth * capacity
+        )))
+        const rect = canvas.getBoundingClientRect()
+        setPedalMarkPickerState({
+          measureId:   l.measureId,
+          partId:      l.partId,
+          staffId:     l.staffId,
+          existing:    measure.pedalMarks ?? [],
+          beatPosition: beatPos,
+          capacity,
+          screenX:     rect.left + canvasX,
+          screenY:     rect.top  + staveBottom + 4,
+        })
+        return
+      }
+    }
+
     // ── MIDI event zone: below each stave (MIDI mode only) ───────────────────
     if (inputMode === 'midi') for (const l of layouts) {
       const staveBottom = l.staveTopY + STAVE_HEIGHT_PX
@@ -2110,6 +2158,22 @@ export function ScoreCanvas(): JSX.Element {
     setMidiEventPickerState(prev => prev ? { ...prev, existing: prev.existing.filter(e => e.id !== eventId) } : null)
   }, [midiEventPickerState, dispatch])
 
+  // ── Pedal mark picker handlers ──────────────────────────────────────────────
+
+  const handlePedalMarkAdd = useCallback((mark: PedalMark) => {
+    const s = pedalMarkPickerState
+    if (!s) return
+    dispatch({ type: 'ADD_PEDAL_MARK', partId: s.partId, staffId: s.staffId, measureId: s.measureId, mark })
+    setPedalMarkPickerState(prev => prev ? { ...prev, existing: [...prev.existing, mark] } : null)
+  }, [pedalMarkPickerState, dispatch])
+
+  const handlePedalMarkRemove = useCallback((markId: string) => {
+    const s = pedalMarkPickerState
+    if (!s) return
+    dispatch({ type: 'REMOVE_PEDAL_MARK', partId: s.partId, staffId: s.staffId, measureId: s.measureId, markId })
+    setPedalMarkPickerState(prev => prev ? { ...prev, existing: prev.existing.filter(m => m.id !== markId) } : null)
+  }, [pedalMarkPickerState, dispatch])
+
   // ── Clef picker handlers ────────────────────────────────────────────────────
 
   const closeClefPicker = useCallback(() => setClefPickerState(null), [])
@@ -2146,6 +2210,7 @@ export function ScoreCanvas(): JSX.Element {
     }
     if (inputMode !== 'text') {
       setDirectivePickerState(null)
+      setPedalMarkPickerState(null)
     }
     if (inputMode !== 'midi') {
       setMidiEventPickerState(null)
@@ -2286,6 +2351,18 @@ export function ScoreCanvas(): JSX.Element {
           onAdd={handleMidiEventAdd}
           onRemove={handleMidiEventRemove}
           onClose={() => setMidiEventPickerState(null)}
+        />
+      )}
+      {pedalMarkPickerState && (
+        <PedalMarkPicker
+          existing={pedalMarkPickerState.existing}
+          capacity={pedalMarkPickerState.capacity}
+          initialBeat={pedalMarkPickerState.beatPosition}
+          screenX={pedalMarkPickerState.screenX}
+          screenY={pedalMarkPickerState.screenY}
+          onAdd={handlePedalMarkAdd}
+          onRemove={handlePedalMarkRemove}
+          onClose={() => setPedalMarkPickerState(null)}
         />
       )}
       {transposeDialogOpen && (

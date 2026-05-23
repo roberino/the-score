@@ -89,6 +89,14 @@ export interface Directive {
   readonly midiProgram?: number   // expression only — -1 = restore original, ≥0 = override
 }
 
+// ── Piano pedal marks ─────────────────────────────────────────────────────────
+
+export interface PedalMark {
+  readonly id:           string
+  readonly type:         'down' | 'up'
+  readonly beatPosition: number   // 64th-note units from measure start
+}
+
 // ── MIDI score events ─────────────────────────────────────────────────────────
 
 export type MidiScoreEventType = 'cc' | 'pc' | 'pb' | 'sysex'
@@ -135,6 +143,7 @@ export interface Measure {
   readonly barline?: BarlineType
   readonly directives?: readonly Directive[]  // performance directives at this measure
   readonly midiEvents?: readonly MidiScoreEvent[]
+  readonly pedalMarks?: readonly PedalMark[]
 }
 
 // ── Tuplets ───────────────────────────────────────────────────────────────────
