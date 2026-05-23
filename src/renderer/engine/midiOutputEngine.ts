@@ -269,9 +269,11 @@ class MidiOutputEngine {
     Tone.Transport.schedule(() => {
       if (!stopped) {
         stopped = true
-        Tone.Transport.stop()
-        Tone.Transport.cancel()
-        onStop?.()
+        setTimeout(() => {
+          Tone.Transport.stop()
+          Tone.Transport.cancel()
+          onStop?.()
+        }, 0)
       }
     }, totalDuration + 0.3)
 
