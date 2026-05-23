@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { useAppStore } from '../store/appStore'
 import type { Command } from '@shared/commands'
+import * as Tone from 'tone'
 import {
   renderScore,
   computeLayout,
@@ -31,6 +32,9 @@ import {
   resolveDirectiveMidiProgram,
   eventDurationUnits,
   shiftPitchBySemitones,
+  buildPlaybackSequence,
+  buildMeasureTimeline,
+  type MeasureTimeEntry,
 } from '@shared/musicUtils'
 import { pitchToHz } from '../engine/audioEngine'
 import { previewNote } from '../engine/notePreview'
@@ -408,7 +412,11 @@ const ARTICULATION_BUTTONS: { art: Articulation; label: string; title: string }[
 
 export function ScoreCanvas(): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const notePositionsRef = useRef(new Map<string, number>())
+  const notePositionsRef   = useRef(new Map<string, number>())
+  const noteStartXRef      = useRef(new Map<string, number>())
+  const layoutsRef         = useRef<MeasureLayout[]>([])
+  const playbackTimelineRef = useRef<MeasureTimeEntry[]>([])
+  const playbackCursorElRef = useRef<HTMLDivElement>(null)
   const [selectionMenuPos, setSelectionMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [pickerState, setPickerState] = useState<PickerState | null>(null)
   const [timeSigPickerState, setTimeSigPickerState] = useState<TimeSigPickerState | null>(null)
@@ -444,6 +452,7 @@ export function ScoreCanvas(): JSX.Element {
     addVolta,
     removeVolta,
     lyricCursorNoteId, setLyricCursor,
+    isPlaying, playbackManualStop,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -500,7 +509,7 @@ export function ScoreCanvas(): JSX.Element {
     const options = getRenderOptions(zoom, score.showPartLabels)
     const timeSig = score.timeSignature
     const capacity = measureCapacityUnits(timeSig)
-    notePositionsRef.current = renderScore(
+    const result = renderScore(
       canvas,
       score,
       options,
@@ -511,7 +520,94 @@ export function ScoreCanvas(): JSX.Element {
       selectedMeasureId,
       lyricCursorNoteId
     )
+    notePositionsRef.current = result.notePositions
+    noteStartXRef.current    = result.noteStartX
+    layoutsRef.current       = result.layouts
   }, [score, zoom, inputMode, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId])
+
+  // ── Playback cursor ──────────────────────────────────────────────────────────
+
+  // Build measure timeline whenever playback starts
+  useEffect(() => {
+    if (!isPlaying) return
+    const tempoStaff = score.parts[0]?.staves[0]
+    if (!tempoStaff) return
+    const sequence = buildPlaybackSequence(tempoStaff.measures, score.voltas ?? [])
+    playbackTimelineRef.current = buildMeasureTimeline(
+      tempoStaff, sequence, tempoStaff, score.tempo ?? 120, score.timeSignature
+    )
+  }, [isPlaying, score])
+
+  // Hide or keep cursor when playback stops
+  useEffect(() => {
+    if (isPlaying) return
+    const cursor = playbackCursorElRef.current
+    if (!cursor) return
+    if (!playbackManualStop) {
+      cursor.style.display = 'none'
+    }
+    // On manual stop: leave cursor visible at its current position
+  }, [isPlaying, playbackManualStop])
+
+  // RAF animation loop: move cursor during playback
+  useEffect(() => {
+    if (!isPlaying) return
+    let rafId: number
+
+    const tick = () => {
+      const cursor = playbackCursorElRef.current
+      const timeline = playbackTimelineRef.current
+      if (!cursor || !timeline.length) { rafId = requestAnimationFrame(tick); return }
+
+      const t = Tone.Transport.seconds
+
+      // Find current measure in timeline
+      let entry = timeline[timeline.length - 1]
+      for (const e of timeline) {
+        if (t < e.startSec + e.durationSec) { entry = e; break }
+      }
+      const fraction = Math.max(0, Math.min(1,
+        (t - entry.startSec) / Math.max(0.001, entry.durationSec)
+      ))
+
+      // Find layouts for this measure index (all parts in the column share same X)
+      const colLayouts = layoutsRef.current.filter(l => l.measureIndex === entry.mIdx)
+      if (!colLayouts.length) { rafId = requestAnimationFrame(tick); return }
+
+      const first = colLayouts[0]
+      const nsx   = noteStartXRef.current.get(`${first.partId}:${first.staffId}:${first.measureId}`) ?? (first.x + 20)
+      const noteAreaEnd = first.x + first.width
+      const x = nsx + fraction * (noteAreaEnd - nsx)
+
+      const topY = Math.min(...colLayouts.map(l => l.staveTopY)) - 8
+      const botY = Math.max(...colLayouts.map(l => l.staveTopY + STAVE_HEIGHT_PX)) + 8
+
+      cursor.style.left    = `${x}px`
+      cursor.style.top     = `${topY}px`
+      cursor.style.height  = `${botY - topY}px`
+      cursor.style.display = 'block'
+
+      // Auto-scroll: keep cursor in view vertically
+      const canvas = canvasRef.current
+      const scrollContainer = canvas?.parentElement?.parentElement
+      if (scrollContainer) {
+        const canvasOffsetTop = canvas!.parentElement!.offsetTop
+        const cursorAbsTop = canvasOffsetTop + topY
+        const { scrollTop, clientHeight } = scrollContainer
+        const margin = 80
+        if (cursorAbsTop < scrollTop + margin) {
+          scrollContainer.scrollTop = cursorAbsTop - margin
+        } else if (cursorAbsTop + (botY - topY) > scrollTop + clientHeight - margin) {
+          scrollContainer.scrollTop = cursorAbsTop - clientHeight * 0.3
+        }
+      }
+
+      rafId = requestAnimationFrame(tick)
+    }
+
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+  }, [isPlaying])
 
   // ── Note entry helpers ──────────────────────────────────────────────────────
 
@@ -2086,6 +2182,20 @@ export function ScoreCanvas(): JSX.Element {
           style={{ cursor: cursorStyle, display: 'block' }}
         />
         <TextBoxLayer zoom={zoom} />
+        <div
+          ref={playbackCursorElRef}
+          style={{
+            display: 'none',
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: 2,
+            background: 'rgba(30, 140, 255, 0.65)',
+            pointerEvents: 'none',
+            zIndex: 20,
+            borderRadius: 1,
+          }}
+        />
         {inputMode === 'lyric' && lyricCursorNoteId && lyricInputPos && (
           <LyricEditorInput
             key={lyricCursorNoteId}

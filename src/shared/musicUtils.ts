@@ -530,6 +530,35 @@ export function buildFlatSchedule(
   return result
 }
 
+export interface MeasureTimeEntry {
+  mIdx: number       // actual measure index in the staff
+  startSec: number   // transport seconds at start of this measure
+  durationSec: number
+}
+
+// Builds a time-ordered list of measure timings for the playback sequence,
+// mirroring the same logic as buildFlatSchedule but without note events.
+export function buildMeasureTimeline(
+  staff: Staff,
+  sequence: number[],
+  tempoStaff: Staff,
+  baseBpm: number,
+  baseTimeSig: TimeSignature,
+): MeasureTimeEntry[] {
+  const result: MeasureTimeEntry[] = []
+  let t = 0
+  for (const mIdx of sequence) {
+    const measure = staff.measures[mIdx]
+    if (!measure) continue
+    const bpm        = resolveDirectiveTempo(tempoStaff.measures, mIdx, baseBpm)
+    const timeSig    = resolveTimeSig(staff.measures, mIdx, baseTimeSig)
+    const durationSec = (measureCapacityUnits(timeSig) / 16) * (60 / bpm)
+    result.push({ mIdx, startSec: t, durationSec })
+    t += durationSec
+  }
+  return result
+}
+
 export const DURATION_LABELS: Record<Duration, string> = {
   '64th':    '64th',
   '32nd':    '32nd',

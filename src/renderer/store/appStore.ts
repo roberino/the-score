@@ -58,6 +58,7 @@ export interface AppState {
 
   // Playback
   isPlaying: boolean
+  playbackManualStop: boolean   // true when user manually stopped; false on natural end
   playbackPositionTick: number
 
   // Duration resize
@@ -156,6 +157,7 @@ export const useAppStore = create<AppState>()(
     midiInputDeviceName: localStorage.getItem('midiInputDeviceName') ?? null,
 
     isPlaying: false,
+    playbackManualStop: false,
     playbackPositionTick: 0,
 
     pendingResize: null,
@@ -371,19 +373,19 @@ export const useAppStore = create<AppState>()(
     startPlayback: async () => {
       if (_playback) return
       const { score, audioMode } = get()
-      const onDone = () => { _playback = null; set(s => { s.isPlaying = false }) }
+      const onDone = () => { _playback = null; set(s => { s.isPlaying = false; s.playbackManualStop = false }) }
       if (audioMode === 'midi-out') {
         _playback = await midiOutputEngine.playScore(score, 120, onDone)
       } else {
         _playback = await playScoreWithSampler(score, 120, onDone)
       }
-      set(s => { s.isPlaying = true })
+      set(s => { s.isPlaying = true; s.playbackManualStop = false })
     },
 
     stopPlayback: () => {
       _playback?.stop()
       _playback = null
-      set(s => { s.isPlaying = false })
+      set(s => { s.isPlaying = false; s.playbackManualStop = true })
     },
     setSelectedDuration: (duration) => set(s => { s.selectedDuration = duration }),
     setIsDotted: (dotted) => set(s => { s.isDotted = dotted }),

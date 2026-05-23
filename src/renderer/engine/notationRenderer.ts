@@ -523,6 +523,12 @@ export interface RenderCursorOptions {
   totalCapacityUnits: number
 }
 
+export interface RenderScoreResult {
+  notePositions: Map<string, number>
+  noteStartX:    Map<string, number>   // key: `${partId}:${staffId}:${measureId}`
+  layouts:       MeasureLayout[]
+}
+
 export function renderScore(
   canvas: HTMLCanvasElement,
   score: Score,
@@ -531,14 +537,15 @@ export function renderScore(
   cursor: RenderCursorOptions | null = null,
   selectedMeasureId: string | null = null,
   lyricCursorNoteId: string | null = null
-): Map<string, number> {
+): RenderScoreResult {
   const notePositions = new Map<string, number>()
+  const noteStartX    = new Map<string, number>()
   const renderer = new VexRenderer(canvas, VexRenderer.Backends.CANVAS)
 
   const firstPart = score.parts[0]
-  if (!firstPart) return notePositions
+  if (!firstPart) return { notePositions, noteStartX, layouts: [] }
   const firstStaff = firstPart.staves[0]
-  if (!firstStaff) return notePositions
+  if (!firstStaff) return { notePositions, noteStartX, layouts: [] }
 
   const layouts = computeLayout(score, options)
 
@@ -552,7 +559,7 @@ export function renderScore(
   const ctx = renderer.getContext()
   ctx.clear()
 
-  renderFromLayouts(ctx, score, layouts, selectedNoteIds, notePositions)
+  renderFromLayouts(ctx, score, layouts, selectedNoteIds, notePositions, noteStartX)
   drawHeadings(ctx, score, options)
 
   const nativeCtx = canvas.getContext('2d')
@@ -566,7 +573,7 @@ export function renderScore(
     drawCursor(canvas, cursor, layouts)
   }
 
-  return notePositions
+  return { notePositions, noteStartX, layouts }
 }
 
 // ── Render all measures from precomputed layouts ──────────────────────────────
@@ -576,7 +583,8 @@ function renderFromLayouts(
   score: Score,
   layouts: MeasureLayout[],
   selectedNoteIds: ReadonlySet<string>,
-  notePositions: Map<string, number>
+  notePositions: Map<string, number>,
+  noteStartX: Map<string, number>
 ): void {
   // Build fast lookup: staffId → staff / part
   type StaffEntry = { staff: Staff; part: Part }
@@ -643,6 +651,8 @@ function renderFromLayouts(
       staveNoteMap.set(e.id, staveNotes[i])
       eventStaveMap.set(e.id, stave)
     })
+
+    noteStartX.set(`${layout.partId}:${layout.staffId}:${layout.measureId}`, stave.getNoteStartX())
 
     // Collect stave references for group connector drawing
     const pKey = `${layout.partId}:${mIdx}`
