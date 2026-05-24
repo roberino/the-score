@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useAppStore, type InputMode } from '../store/appStore'
 import { DURATION_LABELS, KEY_TO_DURATION, resolveTimeSig, resolveKeySig, keyLabel, measureCapacityUnits, usedUnits } from '@shared/musicUtils'
 import type { Duration, TimeSignature, KeySignature } from '@shared/score'
@@ -70,9 +70,24 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     midiInputDeviceId, midiInputDeviceName,
     selectedMeasureId,
     insertMeasure,
+    selectedNoteId,
+    playbackMode, setPlaybackMode,
   } = useAppStore()
 
   const [timeSigError, setTimeSigError] = useState<string | null>(null)
+  const [playDropdownOpen, setPlayDropdownOpen] = useState(false)
+  const playSplitRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!playDropdownOpen) return
+    const handler = (e: MouseEvent) => {
+      if (playSplitRef.current && !playSplitRef.current.contains(e.target as Node)) {
+        setPlayDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [playDropdownOpen])
 
   const [audioSettingsPos, setAudioSettingsPos] = useState<{ x: number; y: number } | null>(null)
   const audioSettingsBtnRef = useRef<HTMLButtonElement>(null)
@@ -246,12 +261,69 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
 
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
 
-        <ToolbarButton
-          onClick={() => isPlaying ? stopPlayback() : startPlayback()}
-          title={isPlaying ? 'Stop (Space)' : 'Play (Space)'}
-          label={isPlaying ? '⏹ Stop' : '▶ Play'}
-          accent={isPlaying}
-        />
+        {/* Split play button */}
+        <div ref={playSplitRef} style={{ position: 'relative', display: 'inline-flex', borderRadius: 3, overflow: 'visible' }}>
+          <button
+            onClick={() => isPlaying ? stopPlayback() : void startPlayback()}
+            title={isPlaying ? 'Stop (Space)' : playbackMode === 'from-note' ? 'Play from selected note (Space)' : 'Play from beginning (Space)'}
+            style={{
+              padding: '4px 10px', fontSize: 12, border: 'none', cursor: 'pointer',
+              borderRadius: isPlaying ? 3 : '3px 0 0 3px',
+              background: isPlaying ? '#1a8a1a' : 'transparent',
+              color: isPlaying ? '#fff' : '#9d9d9d',
+            }}
+          >
+            {isPlaying ? '⏹ Stop' : '▶ Play'}
+          </button>
+          {!isPlaying && (
+            <button
+              onClick={() => setPlayDropdownOpen(o => !o)}
+              title="Playback options"
+              style={{
+                padding: '4px 5px', fontSize: 10, border: 'none', cursor: 'pointer',
+                borderRadius: '0 3px 3px 0',
+                borderLeft: '1px solid #555',
+                background: playDropdownOpen ? '#0e639c' : 'transparent',
+                color: playDropdownOpen ? '#fff' : '#777',
+              }}
+            >
+              ▾
+            </button>
+          )}
+          {playDropdownOpen && !isPlaying && (
+            <div style={{
+              position: 'absolute', top: 'calc(100% + 4px)', left: 0,
+              background: '#252526', border: '1px solid #555', borderRadius: 4,
+              zIndex: 2000, minWidth: 190,
+              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+            }}>
+              {([
+                { mode: 'beginning' as const, label: '▶ Play from beginning', disabled: false },
+                { mode: 'from-note' as const,  label: '▶ Play from here',      disabled: !selectedNoteId },
+              ] as const).map(({ mode, label, disabled }) => (
+                <button
+                  key={mode}
+                  disabled={disabled}
+                  onClick={() => {
+                    if (disabled) return
+                    setPlaybackMode(mode)
+                    setPlayDropdownOpen(false)
+                    void startPlayback()
+                  }}
+                  style={{
+                    display: 'block', width: '100%', textAlign: 'left',
+                    padding: '7px 12px', fontSize: 12, border: 'none',
+                    cursor: disabled ? 'not-allowed' : 'pointer',
+                    background: playbackMode === mode ? '#37373d' : 'transparent',
+                    color: disabled ? '#555' : '#ccc',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
 

@@ -3,7 +3,7 @@ import { immer } from 'zustand/middleware/immer'
 import { createScore, type Score, type Pitch, type Duration, type Accidental, type HairpinType, type Hairpin, type DynamicLevel, type Volta } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import { applyCommand, type Command } from '@shared/commands'
-import { measureCapacityUnits, usedUnits, resolveTimeSig, dottedUnits, DURATION_UNITS } from '@shared/musicUtils'
+import { measureCapacityUnits, usedUnits, resolveTimeSig, dottedUnits, DURATION_UNITS, buildPlaybackSequence, buildFlatSchedule } from '@shared/musicUtils'
 import type { PlaybackController } from '../engine/audioEngine'
 import { playScoreWithSampler } from '../engine/samplerEngine'
 import { midiOutputEngine } from '../engine/midiOutputEngine'
@@ -61,6 +61,7 @@ export interface AppState {
   playbackManualStop: boolean      // true when user manually stopped; false on natural end
   playbackResumePositionSec: number // transport seconds to resume from (0 = beginning)
   playbackPositionTick: number
+  playbackMode: 'beginning' | 'from-note'
 
   // Duration resize
   pendingResize: {
@@ -75,6 +76,7 @@ export interface AppState {
   // Actions
   startPlayback: () => Promise<void>
   stopPlayback: () => void
+  setPlaybackMode: (mode: 'beginning' | 'from-note') => void
   dispatch: (command: Command) => void
   undo: () => void
   redo: () => void
@@ -161,6 +163,7 @@ export const useAppStore = create<AppState>()(
     playbackManualStop: false,
     playbackResumePositionSec: 0,
     playbackPositionTick: 0,
+    playbackMode: 'beginning',
 
     pendingResize: null,
     resizeError: null,
@@ -374,8 +377,27 @@ export const useAppStore = create<AppState>()(
 
     startPlayback: async () => {
       if (_playback) return
-      const { score, audioMode, playbackResumePositionSec } = get()
-      const resumeFrom = playbackResumePositionSec
+      const { score, audioMode, playbackMode, selectedNoteId } = get()
+
+      let resumeFrom = 0
+      if (playbackMode === 'from-note' && selectedNoteId) {
+        const tempoStaff = score.parts[0]?.staves[0]
+        if (tempoStaff) {
+          const sequence = buildPlaybackSequence(tempoStaff.measures, score.voltas ?? [])
+          outer: for (const part of score.parts) {
+            const staff = part.staves[0]
+            if (!staff) continue
+            const schedule = buildFlatSchedule(staff, sequence, tempoStaff, score.tempo, score.timeSignature)
+            for (const fe of schedule) {
+              if (fe.event.id === selectedNoteId) {
+                resumeFrom = fe.startSec
+                break outer
+              }
+            }
+          }
+        }
+      }
+
       const onDone = () => {
         _playback = null
         set(s => { s.isPlaying = false; s.playbackManualStop = false; s.playbackResumePositionSec = 0 })
@@ -385,7 +407,7 @@ export const useAppStore = create<AppState>()(
       } else {
         _playback = await playScoreWithSampler(score, 120, onDone, resumeFrom)
       }
-      set(s => { s.isPlaying = true; s.playbackManualStop = false })
+      set(s => { s.isPlaying = true; s.playbackManualStop = false; s.playbackResumePositionSec = resumeFrom })
     },
 
     stopPlayback: () => {
@@ -396,6 +418,8 @@ export const useAppStore = create<AppState>()(
       // Override: keep the position and mark as manual stop
       set(s => { s.isPlaying = false; s.playbackManualStop = true; s.playbackResumePositionSec = pos })
     },
+    setPlaybackMode: (mode) => set(s => { s.playbackMode = mode }),
+
     setSelectedDuration: (duration) => set(s => { s.selectedDuration = duration }),
     setIsDotted: (dotted) => set(s => { s.isDotted = dotted }),
     toggleDot: () => {
