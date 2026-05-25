@@ -26,7 +26,7 @@ import {
 } from 'vexflow'
 
 import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent } from '@shared/score'
-import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo } from '@shared/musicUtils'
+import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo, eventDurationUnits } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
 
@@ -570,7 +570,7 @@ export function renderScore(
   }
 
   if (cursor?.cursorMeasureId) {
-    drawCursor(canvas, cursor, layouts)
+    drawCursor(canvas, cursor, layouts, score, notePositions, noteStartX)
   }
 
   return { notePositions, noteStartX, layouts }
@@ -1607,17 +1607,46 @@ function drawMeasureHighlight(
 function drawCursor(
   canvas: HTMLCanvasElement,
   cursor: RenderCursorOptions,
-  layouts: MeasureLayout[]
+  layouts: MeasureLayout[],
+  score: Score,
+  notePositions: Map<string, number>,
+  noteStartX: Map<string, number>
 ): void {
   const layout = layouts.find(l => l.measureId === cursor.cursorMeasureId)
   if (!layout) return
 
-  const noteAreaStart = layout.x + 20
-  const noteAreaWidth = layout.width - 40
-  const fraction      = cursor.totalCapacityUnits > 0
-    ? cursor.cursorBeatPosition / cursor.totalCapacityUnits
-    : 0
-  const cursorX = noteAreaStart + fraction * noteAreaWidth
+  // Prefer the actual VexFlow-rendered X of the note/rest at the cursor beat.
+  // VexFlow spaces notes non-linearly (minimum widths, beaming, etc.), so a
+  // simple linear fraction produces visible misalignment for short durations.
+  let cursorX: number | null = null
+  const part    = score.parts.find(p => p.id === layout.partId)
+  const staff   = part?.staves.find(s => s.id === layout.staffId)
+  const measure = staff?.measures.find(m => m.id === layout.measureId)
+
+  if (measure) {
+    outer: for (const voice of measure.voices) {
+      if (!voice) continue
+      let acc = 0
+      for (const event of voice.events) {
+        if (acc === cursor.cursorBeatPosition) {
+          const x = notePositions.get(event.id)
+          if (x !== undefined) { cursorX = x; break outer }
+        }
+        acc += eventDurationUnits(event)
+        if (acc > cursor.cursorBeatPosition) break
+      }
+    }
+  }
+
+  // Fallback for cursor past all events: proportional with correct note-area bounds.
+  if (cursorX === null) {
+    const key       = `${layout.partId}:${layout.staffId}:${layout.measureId}`
+    const noteStart = noteStartX.get(key) ?? layout.x + 20
+    const fraction  = cursor.totalCapacityUnits > 0
+      ? cursor.cursorBeatPosition / cursor.totalCapacityUnits
+      : 0
+    cursorX = noteStart + fraction * (layout.x + layout.width - noteStart)
+  }
 
   const ctx2d = canvas.getContext('2d')
   if (!ctx2d) return
