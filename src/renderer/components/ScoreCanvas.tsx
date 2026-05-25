@@ -511,6 +511,8 @@ export function ScoreCanvas(): JSX.Element {
   const layoutsRef         = useRef<MeasureLayout[]>([])
   const playbackTimelineRef = useRef<MeasureTimeEntry[]>([])
   const playbackCursorElRef = useRef<HTMLDivElement>(null)
+  const shiftHeldRef = useRef(false)
+  const [shiftHoverOnNote, setShiftHoverOnNote] = useState(false)
   const [selectionMenuPos, setSelectionMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [pickerState, setPickerState] = useState<PickerState | null>(null)
   const [timeSigPickerState, setTimeSigPickerState] = useState<TimeSigPickerState | null>(null)
@@ -1781,6 +1783,44 @@ export function ScoreCanvas(): JSX.Element {
     }
   }, [inputMode])
 
+  // ── Shift-key cursor indicator ──────────────────────────────────────────────
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => { if (e.key === 'Shift') shiftHeldRef.current = true }
+    const up   = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') { shiftHeldRef.current = false; setShiftHoverOnNote(false) }
+    }
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup',   up)
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up) }
+  }, [])
+
+  const handleCanvasMouseMove = (event: React.MouseEvent<HTMLCanvasElement>): void => {
+    if (inputMode !== 'note' || !shiftHeldRef.current) {
+      if (shiftHoverOnNote) setShiftHoverOnNote(false)
+      return
+    }
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
+    const layout = findClickedLayout(canvasX, canvasY, layoutsRef.current)
+    if (!layout) { if (shiftHoverOnNote) setShiftHoverOnNote(false); return }
+    const part    = score.parts.find(p => p.id === layout.partId)
+    const staff   = part?.staves.find(s => s.id === layout.staffId)
+    const measure = staff?.measures.find(m => m.id === layout.measureId)
+    const voice   = measure?.voices[activeVoice]
+    if (!voice) { if (shiftHoverOnNote) setShiftHoverOnNote(false); return }
+    for (const ev of voice.events) {
+      if (ev.type !== 'note' && ev.type !== 'chord') continue
+      const noteX = notePositionsRef.current.get(ev.id)
+      if (noteX !== undefined && Math.abs(canvasX - noteX) <= 20) {
+        if (!shiftHoverOnNote) setShiftHoverOnNote(true)
+        return
+      }
+    }
+    if (shiftHoverOnNote) setShiftHoverOnNote(false)
+  }
+
   // ── Mouse click handler ─────────────────────────────────────────────────────
 
   const handleCanvasClick = (event: React.MouseEvent<HTMLCanvasElement>): void => {
@@ -1955,8 +1995,73 @@ export function ScoreCanvas(): JSX.Element {
           const noteX   = notePositionsRef.current.get(ev.id)
           if (noteX !== undefined && Math.abs(canvasX - noteX) <= 20) {
             if (ev.type === 'note' || ev.type === 'chord') {
-              // Position cursor at this note for chord-building via keyboard
-              setCursor(layout.measureId, beatAcc)
+              if (event.shiftKey) {
+                // Shift+click: build chord or change duration on this note
+                const step      = yToStep(canvasY, layout.staveTopY, LINE_SPACING_PX)
+                const pitchInfo = stepToPitch(step, layout.clef)
+                const clickAccidental = primedAccidental as Accidental
+                const existingEvent = ev
+                const isSamePitch = existingEvent.type === 'note' &&
+                  existingEvent.pitch.noteName === pitchInfo.noteName &&
+                  existingEvent.pitch.octave   === pitchInfo.octave
+                let newEvent: NoteEvent
+                if (isSamePitch) {
+                  newEvent = { ...(existingEvent as Note), duration: selectedDuration, dots } as Note
+                } else {
+                  const newPitch: Pitch = { noteName: pitchInfo.noteName, octave: pitchInfo.octave, accidental: clickAccidental ?? null }
+                  if (existingEvent.type === 'chord') {
+                    const sortedPitches = [...existingEvent.pitches, newPitch].sort((a, b) =>
+                      (a.octave * 7 + 'CDEFGAB'.indexOf(a.noteName)) - (b.octave * 7 + 'CDEFGAB'.indexOf(b.noteName))
+                    )
+                    newEvent = { ...existingEvent, pitches: sortedPitches, duration: selectedDuration, dots } as Chord
+                  } else {
+                    const sortedPitches = [(existingEvent as Note).pitch, newPitch].sort((a, b) =>
+                      (a.octave * 7 + 'CDEFGAB'.indexOf(a.noteName)) - (b.octave * 7 + 'CDEFGAB'.indexOf(b.noteName))
+                    )
+                    newEvent = {
+                      id: uuid(), type: 'chord', pitches: sortedPitches,
+                      duration: selectedDuration, dots,
+                      articulations: (existingEvent as Note).articulations ?? [],
+                    } as Chord
+                  }
+                }
+                const result = buildNoteInsertCommands(voiceEvents, i, units, newEvent, layout.partId, layout.staffId, layout.measureId, existingVoice.id)
+                if (!result) {
+                  canvasRef.current?.classList.add('cursor-reject')
+                  setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+                  return
+                }
+                dispatchBatch(result.cmds)
+                if (soundOnInput && part) {
+                  const mIdx  = staff!.measures.findIndex(m => m.id === layout.measureId)
+                  const dyn   = resolveDirectiveDynamic(staff!.measures, mIdx)
+                  const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
+                  const midi  = resolveDirectiveMidiProgram(staff!.measures, mIdx, part.midiProgram)
+                  const partIdx = score.parts.indexOf(part)
+                  const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+                  const previewPitch = newEvent.type === 'chord'
+                    ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
+                    : (newEvent as Note).pitch
+                  triggerInputPreview(previewPitch.noteName, previewPitch.octave, previewPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+                }
+                setPrimedAccidental(null)
+                const lastPitch = newEvent.type === 'chord'
+                  ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
+                  : (newEvent as Note).pitch
+                setLastEnteredPitch(lastPitch)
+                const newBeat = beatAcc + units
+                if (newBeat >= capacity) {
+                  const mIdx = staff!.measures.findIndex(m => m.id === layout.measureId)
+                  const nextMeasure = staff!.measures[mIdx + 1]
+                  if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
+                  else             setCursor(null, 0)
+                } else {
+                  setCursor(layout.measureId, newBeat)
+                }
+              } else {
+                // Plain click: position cursor at this note for chord-building via keyboard
+                setCursor(layout.measureId, beatAcc)
+              }
               return
             }
             if (ev.type === 'rest') {
@@ -2455,11 +2560,12 @@ export function ScoreCanvas(): JSX.Element {
   // ── Cursor style per mode ───────────────────────────────────────────────────
 
   const cursorStyle =
-    inputMode === 'note'   ? 'crosshair'
-    : inputMode === 'rest'  ? 'cell'
-    : inputMode === 'text'  ? 'text'
-    : inputMode === 'lyric' ? 'text'
-    : inputMode === 'midi'  ? 'crosshair'
+    (inputMode === 'note' && shiftHoverOnNote) ? 'copy'
+    : inputMode === 'note'   ? 'crosshair'
+    : inputMode === 'rest'   ? 'cell'
+    : inputMode === 'text'   ? 'text'
+    : inputMode === 'lyric'  ? 'text'
+    : inputMode === 'midi'   ? 'crosshair'
     : 'default'
 
   return (
@@ -2475,6 +2581,8 @@ export function ScoreCanvas(): JSX.Element {
           ref={canvasRef}
           onClick={handleCanvasClick}
           onDoubleClick={handleCanvasDblClick}
+          onMouseMove={handleCanvasMouseMove}
+          onMouseLeave={() => setShiftHoverOnNote(false)}
           style={{ cursor: cursorStyle, display: 'block' }}
         />
         <TextBoxLayer zoom={zoom} />
