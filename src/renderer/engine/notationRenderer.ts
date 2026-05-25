@@ -712,7 +712,7 @@ function renderFromLayouts(
     }
     // Note-attached dynamics below the stave
     if (staveNotes.length > 0) {
-      drawNoteDynamics(ctx, layout, measure, staff, staveNotes, events, pedalY)
+      drawNoteDynamics(ctx, layout, staveNotes, events, pedalY)
     }
   }
 
@@ -898,8 +898,6 @@ function drawDirectives(
 function drawNoteDynamics(
   ctx: RenderContext,
   layout: MeasureLayout,
-  measure: Measure,
-  staff: Staff,
   staveNotes: StaveNote[],
   events: NoteEvent[],
   pedalY: number,
@@ -908,14 +906,20 @@ function drawNoteDynamics(
     typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
   if (!nativeCtx) return
 
-  const mIdx = staff.measures.findIndex(m => m.id === measure.id)
-  const clef = resolveClef(staff.measures, mIdx, staff.clef)
   const staveBottom = layout.staveTopY + STAVE_HEIGHT_PX
 
-  // Compute y once for the whole measure: clear note heads, but never overlap pedal marks.
-  const overhang = lowestNoteOverhangPx(measure, clef)
+  // Compute y from actual stem extents so downward stems don't cause overlap.
+  // VexFlow: topY = stem tip (largest Y for stem-down), baseY = notehead side.
+  let maxStemY = staveBottom
+  for (const sn of staveNotes) {
+    try {
+      const ext = sn.getStemExtents()
+      maxStemY = Math.max(maxStemY, Math.max(ext.topY, ext.baseY))
+    } catch { /* no stem (rest) */ }
+  }
+  const stemOverhang = Math.max(0, maxStemY - staveBottom)
   const y = Math.min(
-    staveBottom + Math.max(14, overhang + 10),
+    staveBottom + Math.max(14, stemOverhang + 10),
     pedalY - 14,
   )
 
@@ -1400,8 +1404,10 @@ function drawHairpinWedge(
 }
 
 // Returns the Y coordinate below which a hairpin wedge should sit, scanning
-// the stem extents of all notes in the hairpin range so beamed stems don't
-// overlap the wedge.
+// the stem extents of all notes in the hairpin range so beamed/downward stems
+// don't overlap the wedge.
+// VexFlow Stem.getExtents(): topY = stem TIP (large Y for stem-down), baseY = notehead side.
+// Using Math.max(topY, baseY) gives the lowest canvas point regardless of stem direction.
 function hairpinY(
   staff: Staff,
   fromNoteId: string,
@@ -1409,24 +1415,32 @@ function hairpinY(
   staveNoteMap: Map<string, StaveNote>,
   defaultY: number,
 ): number {
-  let inRange = false
-  let done    = false
-  let maxY    = defaultY
-
-  for (const measure of staff.measures) {
-    if (done) break
-    for (const event of measure.voices[0]?.events ?? []) {
-      if (event.id === fromNoteId) inRange = true
-      if (inRange && event.type !== 'rest') {
-        const sn = staveNoteMap.get(event.id)
-        if (sn) {
-          try { maxY = Math.max(maxY, sn.getStemExtents().baseY + 8) } catch { /* no stem */ }
-        }
+  // Find measure-level range for the hairpin
+  let fromMIdx = -1, toMIdx = staff.measures.length - 1
+  for (let mi = 0; mi < staff.measures.length; mi++) {
+    for (const voice of staff.measures[mi].voices) {
+      for (const ev of voice.events) {
+        if (ev.id === fromNoteId) fromMIdx = mi
+        if (ev.id === toNoteId)   toMIdx   = mi
       }
-      if (event.id === toNoteId) { done = true; break }
     }
   }
+  if (fromMIdx === -1) return defaultY
 
+  let maxY = defaultY
+  for (let mi = fromMIdx; mi <= toMIdx; mi++) {
+    for (const voice of staff.measures[mi].voices) {
+      for (const ev of voice.events) {
+        if (ev.type === 'rest') continue
+        const sn = staveNoteMap.get(ev.id)
+        if (!sn) continue
+        try {
+          const ext = sn.getStemExtents()
+          maxY = Math.max(maxY, Math.max(ext.topY, ext.baseY) + 8)
+        } catch { /* no stem */ }
+      }
+    }
+  }
   return maxY
 }
 
@@ -1469,9 +1483,10 @@ function drawHairpinsForStaff(
       const defaultY1 = fromStave.getYForLine(4) + HAIRPIN_BELOW_STAFF
       const defaultY2 = toStave.getYForLine(4)   + HAIRPIN_BELOW_STAFF
       const y1 = hairpinY(staff, hairpin.fromNoteId, hairpin.toNoteId, staveNoteMap, defaultY1)
+      const y2 = hairpinY(staff, hairpin.fromNoteId, hairpin.toNoteId, staveNoteMap, defaultY2)
 
       drawHairpinWedge(ctx2d, x1, rightEdge, y1, isCrescendo, 0, splitFrac)
-      drawHairpinWedge(ctx2d, leftEdge, x2, defaultY2, isCrescendo, splitFrac, 1)
+      drawHairpinWedge(ctx2d, leftEdge, x2, y2, isCrescendo, splitFrac, 1)
     }
 
     ctx2d.restore()
