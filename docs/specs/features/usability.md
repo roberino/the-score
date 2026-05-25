@@ -58,3 +58,31 @@ There is a single cursor, always visible on the score regardless of mode:
 * **Play from beginning** — resets the cursor to measure 1, beat 0, then starts playback from there.
 * **Play from cursor** — starts playback from the current cursor position. This replaces the previous "Play from here" which required a selected note; now the cursor position is the authoritative start point.
 * You never see two cursor elements simultaneously.
+
+**Mouse Pointer**
+
+The pointer should guide the user.
+
+Note and rest insertion mode:
+
+* The pointer should default to a cross-hair pointer
+* The pointer should change in style to a pencil when hovering over a valid insertion point
+* A valid insertion point is any measure area with space to insert
+* Use a not-allowed pointer when an invalid insertion point is hovered over
+* The existing shift to add chord behaviour should still remain
+* The existing set cursor position should be unaltered
+
+Marks and Midi mode:
+
+* The pointer should default to a arrow pointer
+* The pointer should change in style to a cross-hair when hovering over a valid insertion point
+
+Select Mode:
+
+* The pointer should default to a arrow pointer
+* The existing set cursor position should be unaltered
+* The pointer should change in style to a hand when hovering over a note or rest
+
+ Lyric mode and text mode:
+
+ Out of scope for now

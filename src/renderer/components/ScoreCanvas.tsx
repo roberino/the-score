@@ -53,6 +53,10 @@ import { useMidiInput } from '../hooks/useMidiInput'
 import type { NoteInput } from '../services/midiService'
 import { TextBoxLayer, makeTextBox } from './TextBoxLayer'
 
+// ── Pencil cursor (note/rest insertion hover) ─────────────────────────────────
+// Material Design edit icon scaled to 20×20; hotspot at pencil tip (bottom-left).
+const PENCIL_CURSOR = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24'%3E%3Cpath d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z' fill='%23333'/%3E%3C/svg%3E\") 2 18, crosshair"
+
 // ── Preview helper ────────────────────────────────────────────────────────────
 
 function triggerInputPreview(
@@ -513,6 +517,7 @@ export function ScoreCanvas(): JSX.Element {
   const playbackCursorElRef = useRef<HTMLDivElement>(null)
   const shiftHeldRef = useRef(false)
   const [shiftHoverOnNote, setShiftHoverOnNote] = useState(false)
+  const [hoverCursor, setHoverCursor] = useState<'default' | 'valid' | 'invalid' | 'hand'>('default')
   const [selectionMenuPos, setSelectionMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [pickerState, setPickerState] = useState<PickerState | null>(null)
   const [timeSigPickerState, setTimeSigPickerState] = useState<TimeSigPickerState | null>(null)
@@ -1796,29 +1801,94 @@ export function ScoreCanvas(): JSX.Element {
   }, [])
 
   const handleCanvasMouseMove = (event: React.MouseEvent<HTMLCanvasElement>): void => {
-    if (inputMode !== 'note' || !shiftHeldRef.current) {
-      if (shiftHoverOnNote) setShiftHoverOnNote(false)
-      return
-    }
     const canvas = canvasRef.current
     if (!canvas) return
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
-    const layout = findClickedLayout(canvasX, canvasY, layoutsRef.current)
-    if (!layout) { if (shiftHoverOnNote) setShiftHoverOnNote(false); return }
-    const part    = score.parts.find(p => p.id === layout.partId)
-    const staff   = part?.staves.find(s => s.id === layout.staffId)
-    const measure = staff?.measures.find(m => m.id === layout.measureId)
-    const voice   = measure?.voices[activeVoice]
-    if (!voice) { if (shiftHoverOnNote) setShiftHoverOnNote(false); return }
-    for (const ev of voice.events) {
-      if (ev.type !== 'note' && ev.type !== 'chord') continue
-      const noteX = notePositionsRef.current.get(ev.id)
-      if (noteX !== undefined && Math.abs(canvasX - noteX) <= 20) {
-        if (!shiftHoverOnNote) setShiftHoverOnNote(true)
+
+    // ── Shift+hover: chord-building indicator (note mode only) ─────────────
+    if (inputMode === 'note' && shiftHeldRef.current) {
+      const layout = findClickedLayout(canvasX, canvasY, layoutsRef.current)
+      if (layout) {
+        const part    = score.parts.find(p => p.id === layout.partId)
+        const staff   = part?.staves.find(s => s.id === layout.staffId)
+        const measure = staff?.measures.find(m => m.id === layout.measureId)
+        const voice   = measure?.voices[activeVoice]
+        if (voice) {
+          for (const ev of voice.events) {
+            if (ev.type !== 'note' && ev.type !== 'chord') continue
+            const noteX = notePositionsRef.current.get(ev.id)
+            if (noteX !== undefined && Math.abs(canvasX - noteX) <= 20) {
+              if (!shiftHoverOnNote) setShiftHoverOnNote(true)
+              return
+            }
+          }
+        }
+      }
+      if (shiftHoverOnNote) setShiftHoverOnNote(false)
+    } else {
+      if (shiftHoverOnNote) setShiftHoverOnNote(false)
+    }
+
+    // ── Hover cursor: note/rest insertion mode ──────────────────────────────
+    if (inputMode === 'note' || inputMode === 'rest') {
+      const layout = findClickedLayout(canvasX, canvasY, layoutsRef.current)
+      if (!layout) {
+        if (hoverCursor !== 'default') setHoverCursor('default')
         return
       }
+      const part    = score.parts.find(p => p.id === layout.partId)
+      const staff   = part?.staves.find(s => s.id === layout.staffId)
+      const measure = staff?.measures.find(m => m.id === layout.measureId)
+      const voice   = measure?.voices[activeVoice]
+      const voiceEvents = voice?.events ?? []
+      // Valid when there's at least one rest to replace (or voice is brand-new).
+      // remainingUnits() counts rests as used capacity, so a full-rest measure
+      // would wrongly read as 0 remaining — check for rests directly instead.
+      const hasRest = voiceEvents.length === 0 || voiceEvents.some(e => e.type === 'rest')
+      const next = hasRest ? 'valid' : 'invalid'
+      if (hoverCursor !== next) setHoverCursor(next)
+      return
     }
-    if (shiftHoverOnNote) setShiftHoverOnNote(false)
+
+    // ── Hover cursor: select mode ───────────────────────────────────────────
+    if (inputMode === 'select') {
+      const layout = findClickedLayout(canvasX, canvasY, layoutsRef.current)
+      if (layout) {
+        const part    = score.parts.find(p => p.id === layout.partId)
+        const staff   = part?.staves.find(s => s.id === layout.staffId)
+        const measure = staff?.measures.find(m => m.id === layout.measureId)
+        if (measure) {
+          for (const voice of measure.voices) {
+            if (!voice) continue
+            for (const ev of voice.events) {
+              const noteX = notePositionsRef.current.get(ev.id)
+              if (noteX !== undefined && Math.abs(canvasX - noteX) <= 20) {
+                if (hoverCursor !== 'hand') setHoverCursor('hand')
+                return
+              }
+            }
+          }
+        }
+      }
+      if (hoverCursor !== 'default') setHoverCursor('default')
+      return
+    }
+
+    // ── Hover cursor: MIDI mode ─────────────────────────────────────────────
+    if (inputMode === 'midi') {
+      const overMidiZone = layoutsRef.current.some(l => {
+        const staveBottom = l.staveTopY + STAVE_HEIGHT_PX
+        return (
+          canvasX >= l.x && canvasX <= l.x + l.width &&
+          canvasY >= staveBottom + 2 && canvasY <= staveBottom + PEDAL_BASE_BELOW_STAVE + 42
+        )
+      })
+      const next = overMidiZone ? 'valid' : 'default'
+      if (hoverCursor !== next) setHoverCursor(next)
+      return
+    }
+
+    if (hoverCursor !== 'default') setHoverCursor('default')
   }
 
   // ── Mouse click handler ─────────────────────────────────────────────────────
@@ -2560,12 +2630,17 @@ export function ScoreCanvas(): JSX.Element {
   // ── Cursor style per mode ───────────────────────────────────────────────────
 
   const cursorStyle =
-    (inputMode === 'note' && shiftHoverOnNote) ? 'copy'
-    : inputMode === 'note'   ? 'crosshair'
-    : inputMode === 'rest'   ? 'cell'
-    : inputMode === 'text'   ? 'text'
-    : inputMode === 'lyric'  ? 'text'
-    : inputMode === 'midi'   ? 'crosshair'
+    (inputMode === 'note' || inputMode === 'rest')
+      ? shiftHoverOnNote         ? 'copy'
+        : hoverCursor === 'valid'   ? PENCIL_CURSOR
+        : hoverCursor === 'invalid' ? 'not-allowed'
+        : 'crosshair'
+    : inputMode === 'select'
+      ? hoverCursor === 'hand'   ? 'pointer' : 'default'
+    : inputMode === 'midi'
+      ? hoverCursor === 'valid'  ? 'crosshair' : 'default'
+    : inputMode === 'text'       ? 'text'
+    : inputMode === 'lyric'      ? 'text'
     : 'default'
 
   return (
@@ -2582,7 +2657,7 @@ export function ScoreCanvas(): JSX.Element {
           onClick={handleCanvasClick}
           onDoubleClick={handleCanvasDblClick}
           onMouseMove={handleCanvasMouseMove}
-          onMouseLeave={() => setShiftHoverOnNote(false)}
+          onMouseLeave={() => { setShiftHoverOnNote(false); setHoverCursor('default') }}
           style={{ cursor: cursorStyle, display: 'block' }}
         />
         <TextBoxLayer zoom={zoom} />
