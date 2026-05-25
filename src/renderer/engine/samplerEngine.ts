@@ -75,7 +75,7 @@ export async function playScoreWithSampler(
     const staff = part.staves[0]
     if (!staff || !tempoStaff) continue
 
-    const schedule = buildFlatSchedule(staff, sequence, tempoStaff, bpm, score.timeSignature)
+    const schedule = buildFlatSchedule(staff, sequence, tempoStaff, bpm, score.timeSignature, staff.slurs)
 
     for (const fe of schedule) {
       if (fe.skip) continue

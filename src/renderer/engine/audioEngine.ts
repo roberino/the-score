@@ -85,7 +85,7 @@ export async function playScore(
     const staff = part.staves[0]
     if (!staff || !tempoStaff) continue
 
-    const schedule    = buildFlatSchedule(staff, sequence, tempoStaff, bpm, score.timeSignature)
+    const schedule    = buildFlatSchedule(staff, sequence, tempoStaff, bpm, score.timeSignature, staff.slurs)
     const hairpinDbs  = buildHairpinDbMap(staff.hairpins, schedule)
 
     for (const fe of schedule) {

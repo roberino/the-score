@@ -37,9 +37,10 @@ export function ClefPicker({ current, screenX, screenY, onClose, onSelect }: Cle
       data-clef-picker=""
       style={{
         position: 'fixed', left: screenX, top: screenY,
-        background: '#fff', border: '1px solid #ccc', borderRadius: 4,
-        padding: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-        zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 150,
+        background: '#1e1e1e', border: '1px solid #444', borderRadius: 6,
+        padding: '6px 8px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+        zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 2,
+        minWidth: 160, fontSize: 12, color: '#d4d4d4',
       }}
     >
       {CLEF_OPTIONS.map(({ clef, label, detail }) => (
@@ -49,13 +50,14 @@ export function ClefPicker({ current, screenX, screenY, onClose, onSelect }: Cle
           style={{
             padding: '4px 8px', fontSize: 12, textAlign: 'left',
             cursor: 'pointer', borderRadius: 3,
-            background: clef === current ? '#e8f0fe' : 'none',
-            border: clef === current ? '1px solid #4a90d9' : '1px solid transparent',
+            background: clef === current ? '#0e639c' : 'none',
+            border: clef === current ? '1px solid #0e639c' : '1px solid transparent',
+            color: clef === current ? '#fff' : '#ccc',
             display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
           }}
         >
           <span style={{ fontWeight: clef === current ? 600 : 400 }}>{label}</span>
-          <span style={{ fontSize: 10, color: '#888' }}>{detail}</span>
+          <span style={{ fontSize: 10, color: clef === current ? 'rgba(255,255,255,0.7)' : '#666' }}>{detail}</span>
         </button>
       ))}
     </div>

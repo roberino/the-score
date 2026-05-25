@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid'
-import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, TimeSignature, KeySignature, ClefType, Measure, TupletInfo, Volta } from './score'
+import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, Slur, TimeSignature, KeySignature, ClefType, Measure, TupletInfo, Volta } from './score'
 
 // ── Duration arithmetic (64th-note units) ─────────────────────────────────────
 
@@ -517,6 +517,7 @@ export function buildFlatSchedule(
   tempoStaff: Staff,
   baseBpm: number,
   baseTimeSig: TimeSignature,
+  slurs?: readonly Slur[],
 ): FlatScheduleEntry[] {
   const result: FlatScheduleEntry[] = []
   let t = 0
@@ -564,6 +565,27 @@ export function buildFlatSchedule(
       j++
     }
     fe.playDurSec = merged
+  }
+
+  // Legato pass: for each slur, extend notes within the span so they sustain
+  // until the next note begins rather than releasing early.
+  // Uses Math.max so we never shorten a note (e.g. a note already extended by a tie).
+  // Within each voice the schedule entries are sequential by time, so
+  // result[i+1].startSec > result[i].startSec for same-voice consecutive notes.
+  // Parallel-voice entries share the same startSec, so gap ≤ 0 → no change.
+  if (slurs?.length) {
+    for (const slur of slurs) {
+      const fromIdx = result.findIndex(fe => fe.event.id === slur.fromNoteId)
+      const toIdx   = result.findIndex(fe => fe.event.id === slur.toNoteId)
+      if (fromIdx === -1 || toIdx === -1) continue
+      const lo = Math.min(fromIdx, toIdx)
+      const hi = Math.max(fromIdx, toIdx)
+      for (let i = lo; i < hi; i++) {
+        if (result[i].skip) continue
+        const gap = result[i + 1].startSec - result[i].startSec
+        if (gap > 0) result[i].playDurSec = Math.max(result[i].playDurSec, gap)
+      }
+    }
   }
 
   return result
