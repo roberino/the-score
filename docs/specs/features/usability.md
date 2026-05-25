@@ -29,6 +29,7 @@ This mode is a bit redundant and it conflicts with the shortcut key for entering
 * Left and right arrow keys should move the selection respectively
 * When not in select mode, the selected note should not appear as selected but when back in select mode, the current selected note should be remembered.
 * Tie should only work when the next note is the same pitch.
+* Clicking away from a selectable item should deselect the current note and the context menu should be hidden
 
 **Note Selection - multiple notes in the same position** 
 

@@ -159,12 +159,11 @@ function noteEventToStaveNote(
       if (c.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
       if (c.articulations.length > 0) attachArticulations(staveNote, c.articulations)
       if (selected && selectedPitchIndex !== undefined) {
-        // Individual pitch selected: highlight only that notehead, others default
+        // Individual pitch selected: highlight only that notehead, others default.
+        // Do NOT call setStyle() here — it overrides setKeyStyle() during VexFlow's draw pipeline.
         c.pitches.forEach((_, i) => {
           staveNote.setKeyStyle(i, i === selectedPitchIndex ? SEL_STYLE : DEFAULT_STYLE)
         })
-        // Also style stem/flag in selection colour
-        staveNote.setStyle(SEL_STYLE)
       } else {
         applyColor(staveNote)
       }
