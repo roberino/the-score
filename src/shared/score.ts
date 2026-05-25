@@ -233,9 +233,11 @@ export interface Score {
 // Equivalent to C# static factory methods or object initialisers.
 
 import { v4 as uuid } from 'uuid'
+import { measureCapacityUnits, fillWithRests } from './musicUtils'
 
 export function createScore(title: string = 'Untitled'): Score {
   const now = new Date().toISOString()
+  const defaultTimeSig: TimeSignature = { numerator: 4, denominator: 4 }
   return {
     id: uuid(),
     metadata: {
@@ -248,9 +250,9 @@ export function createScore(title: string = 'Untitled'): Score {
       createdAt: now,
       updatedAt: now
     },
-    parts: [createPart('Piano', 'Pno.', 0, 0)],
+    parts: [createPart('Piano', 'Pno.', 0, 0, 'treble', INITIAL_MEASURE_COUNT, undefined, defaultTimeSig)],
     keySignature: { fifths: 0, mode: 'major' },
-    timeSignature: { numerator: 4, denominator: 4 },
+    timeSignature: defaultTimeSig,
     tempo: 120,
     showPartLabels: true,
     textBoxes: [],
@@ -266,6 +268,7 @@ export function createPart(
   clef: ClefType = 'treble',
   measureCount: number = INITIAL_MEASURE_COUNT,
   midiChannel?: number,
+  timeSig?: TimeSignature,
 ): Part {
   return {
     id: uuid(),
@@ -274,7 +277,7 @@ export function createPart(
     midiProgram,
     ...(midiChannel !== undefined ? { midiChannel } : {}),
     transposeSemitones,
-    staves: [createStaff(clef, measureCount)],
+    staves: [createStaff(clef, measureCount, timeSig)],
     volume: 0.8,
     muted: false,
     labelVisible: true,
@@ -283,18 +286,19 @@ export function createPart(
 
 const INITIAL_MEASURE_COUNT = 8
 
-export function createStaff(clef: ClefType, measureCount: number = INITIAL_MEASURE_COUNT): Staff {
+export function createStaff(clef: ClefType, measureCount: number = INITIAL_MEASURE_COUNT, timeSig?: TimeSignature): Staff {
   const measures = Array.from({ length: measureCount }, (_, i) =>
-    createMeasure(i + 1, i === measureCount - 1 ? 'final' : 'single')
+    createMeasure(i + 1, i === measureCount - 1 ? 'final' : 'single', timeSig)
   )
   return { id: uuid(), clef, measures }
 }
 
-export function createMeasure(number: number, barline: BarlineType = 'single'): Measure {
+export function createMeasure(number: number, barline: BarlineType = 'single', timeSig?: TimeSignature): Measure {
+  const events: NoteEvent[] = timeSig ? fillWithRests(measureCapacityUnits(timeSig)) : []
   return {
     id: uuid(),
     number,
-    voices: [{ id: uuid(), events: [] }],
+    voices: [{ id: uuid(), events }],
     barline,
   }
 }

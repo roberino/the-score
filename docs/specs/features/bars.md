@@ -41,9 +41,10 @@ The auto-add check runs after every successful note or rest entry (dispatched vi
 
 ### What "last bar full" means
 
-The last bar is full when:
+With the stored-rests model, capacity is always reached (rests fill the measure). The bar is considered *full* when voice 0 contains **no rest events** — every beat is occupied by a note or chord:
+
 ```
-usedUnits(lastBar.voices[0].events) >= measureCapacityUnits(timeSig)
+!lastBar.voices[0].events.some(e => e.type === 'rest')
 ```
 
 Only voice 0 is checked (consistent with the note-input spec).
@@ -102,9 +103,15 @@ Bar numbers are rendered above the first bar of each line (system). They use the
 
 ---
 
-## Whole Rests in Empty Bars
+## Measures and Completeness
 
-An empty bar (voice 0 has no events) renders a whole rest centred in the bar. This is standard notation for "nothing written here yet." The rest is display-only — it is not stored in the voice's events array and does not count toward beat capacity.
+A measure's voice 0 is always mathematically complete: its events sum exactly to the measure's capacity. This means:
+
+- A new empty measure starts with stored rest events that fill the full duration (e.g. a whole rest in 4/4, a dotted-half rest in 3/4). The rest(s) are real `NoteEvent` objects in `voice[0].events`, not a display-only placeholder.
+- When a note is entered, the rest at the cursor position is replaced by the note and any remaining duration is filled with decomposed rests.
+- When files are loaded, any measure with an empty `voice[0].events` array is normalised by filling it with the appropriate rests.
+
+The renderer no longer needs special empty-measure handling; it renders the stored rest(s) as normal events via VexFlow.
 
 ---
 
@@ -155,7 +162,7 @@ This action lives in the store rather than a component so it fires regardless of
 
 ### Whole rests
 
-`renderMeasure` currently returns early if `voice0.events.length === 0`. Instead, when the voice is empty, render a centred whole rest glyph. VexFlow's `StaveNote` with `duration: 'wr'` handles this automatically.
+With the stored-rests model, `voice0.events` is never empty for a properly initialised measure. The stored whole/dotted-half rest is rendered as a normal `StaveNote` event. The legacy empty-measure whole-rest fallback (`events.length === 0 → render 'wr'`) is retained only as a safety net for edge cases (e.g. voice 2).
 
 ### Barline types
 

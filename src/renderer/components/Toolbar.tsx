@@ -70,7 +70,6 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     midiInputDeviceId, midiInputDeviceName,
     selectedMeasureId,
     insertMeasure,
-    selectedNoteId,
     playbackMode, setPlaybackMode,
   } = useAppStore()
 
@@ -265,7 +264,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
         <div ref={playSplitRef} style={{ position: 'relative', display: 'inline-flex', borderRadius: 3, overflow: 'visible' }}>
           <button
             onClick={() => isPlaying ? stopPlayback() : void startPlayback()}
-            title={isPlaying ? 'Stop (Space)' : playbackMode === 'from-note' ? 'Play from selected note (Space)' : 'Play from beginning (Space)'}
+            title={isPlaying ? 'Stop (Space)' : playbackMode === 'from-cursor' ? 'Play from cursor (Space)' : 'Play from beginning (Space)'}
             style={{
               padding: '4px 10px', fontSize: 12, border: 'none', cursor: 'pointer',
               borderRadius: isPlaying ? 3 : '3px 0 0 3px',
@@ -298,8 +297,8 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
               boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
             }}>
               {([
-                { mode: 'beginning' as const, label: '▶ Play from beginning', disabled: false },
-                { mode: 'from-note' as const,  label: '▶ Play from here',      disabled: !selectedNoteId },
+                { mode: 'beginning' as const,   label: '▶ Play from beginning', disabled: false },
+                { mode: 'from-cursor' as const, label: '▶ Play from cursor',    disabled: false },
               ] as const).map(({ mode, label, disabled }) => (
                 <button
                   key={mode}

@@ -3,13 +3,33 @@ import { immer } from 'zustand/middleware/immer'
 import { createScore, type Score, type Pitch, type Duration, type Accidental, type HairpinType, type Hairpin, type DynamicLevel, type Volta } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import { applyCommand, type Command } from '@shared/commands'
-import { measureCapacityUnits, usedUnits, resolveTimeSig, dottedUnits, DURATION_UNITS, buildPlaybackSequence, buildFlatSchedule } from '@shared/musicUtils'
+import { measureCapacityUnits, resolveTimeSig, dottedUnits, DURATION_UNITS, buildPlaybackSequence, buildMeasureTimeline, firstRestBeat, fillWithRests, eventDurationUnits } from '@shared/musicUtils'
+import { produce } from 'immer'
 import type { PlaybackController } from '../engine/audioEngine'
 import { playScoreWithSampler } from '../engine/samplerEngine'
 import { midiOutputEngine } from '../engine/midiOutputEngine'
 import { midiService } from '../services/midiService'
 
 let _playback: PlaybackController | null = null
+const _initialScore = createScore()
+
+// Ensures every voice[0] in every measure has stored rests filling it to capacity.
+// Applied when loading existing scores that predate the stored-rests model.
+function normalizeMeasureRests(score: Score): Score {
+  return produce(score, draft => {
+    for (const part of draft.parts) {
+      for (const staff of part.staves) {
+        for (let i = 0; i < staff.measures.length; i++) {
+          const measure = staff.measures[i]
+          const voice0 = measure.voices[0] as any
+          if (!voice0 || voice0.events.length > 0) continue
+          const timeSig = resolveTimeSig(staff.measures as any, i, draft.timeSignature)
+          voice0.events = fillWithRests(measureCapacityUnits(timeSig))
+        }
+      }
+    }
+  })
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -61,7 +81,7 @@ export interface AppState {
   playbackManualStop: boolean      // true when user manually stopped; false on natural end
   playbackResumePositionSec: number // transport seconds to resume from (0 = beginning)
   playbackPositionTick: number
-  playbackMode: 'beginning' | 'from-note'
+  playbackMode: 'beginning' | 'from-cursor'
 
   // Duration resize
   pendingResize: {
@@ -76,7 +96,7 @@ export interface AppState {
   // Actions
   startPlayback: () => Promise<void>
   stopPlayback: () => void
-  setPlaybackMode: (mode: 'beginning' | 'from-note') => void
+  setPlaybackMode: (mode: 'beginning' | 'from-cursor') => void
   dispatch: (command: Command) => void
   undo: () => void
   redo: () => void
@@ -128,7 +148,7 @@ export interface AppState {
 
 export const useAppStore = create<AppState>()(
   immer((set, get) => ({
-    score: createScore(),
+    score: _initialScore,
     filePath: null,
     isDirty: false,
     undoStack: [],
@@ -146,7 +166,7 @@ export const useAppStore = create<AppState>()(
     primedAccidental: null,
     activeVoice: 0,
     lyricCursorNoteId: null,
-    cursorMeasureId: null,
+    cursorMeasureId: (_initialScore.parts[0]?.staves[0]?.measures[0]?.id as string | undefined) ?? null,
     cursorBeatPosition: 0,
     lastEnteredPitch: null,
 
@@ -205,13 +225,14 @@ export const useAppStore = create<AppState>()(
 
     newScore: () => {
       _playback?.stop(); _playback = null
+      const freshScore = createScore()
       set(state => {
-        state.score = createScore() as any
+        state.score = freshScore as any
         state.filePath = null
         state.isDirty = false
         state.undoStack = []
         state.redoStack = []
-        state.cursorMeasureId = null
+        state.cursorMeasureId = (freshScore.parts[0]?.staves[0]?.measures[0]?.id as string | undefined) ?? null
         state.cursorBeatPosition = 0
         state.lastEnteredPitch = null
         state.selectedNoteId = null
@@ -226,12 +247,13 @@ export const useAppStore = create<AppState>()(
       _playback?.stop(); _playback = null
       set(state => {
         // Normalise fields added after the initial file format
-        state.score = { ...score, textBoxes: score.textBoxes ?? [] } as any
+        const normalizedScore = normalizeMeasureRests({ ...score, textBoxes: score.textBoxes ?? [] })
+        state.score = normalizedScore as any
         state.filePath = path
         state.isDirty = false
         state.undoStack = []
         state.redoStack = []
-        state.cursorMeasureId = null
+        state.cursorMeasureId = (normalizedScore.parts[0]?.staves[0]?.measures[0]?.id as string | undefined) ?? null
         state.cursorBeatPosition = 0
         state.lastEnteredPitch = null
         state.selectedNoteId = null
@@ -270,18 +292,12 @@ export const useAppStore = create<AppState>()(
         s.inputMode = mode
         s.primedAccidental = null
         s.selectedBarlineId = null
-        if (mode !== 'note' && mode !== 'rest') {
-          s.cursorMeasureId = null
-          s.cursorBeatPosition = 0
-        }
         if (mode !== 'lyric') {
           s.lyricCursorNoteId = null
         }
       })
-      if (mode === 'note' || mode === 'rest') {
-        const { cursorMeasureId } = get()
-        if (!cursorMeasureId) get().moveCursorToFirstAvailable()
-      }
+      // Recover cursor if somehow lost
+      if (!get().cursorMeasureId) get().moveCursorToFirstAvailable()
       if (mode === 'lyric') {
         const { score, selectedNoteId } = get()
         // Start at the currently selected note if it's pitched
@@ -377,25 +393,30 @@ export const useAppStore = create<AppState>()(
 
     startPlayback: async () => {
       if (_playback) return
-      const { score, audioMode, playbackMode, selectedNoteId } = get()
+      const { score, audioMode, playbackMode, cursorMeasureId, cursorBeatPosition } = get()
 
       let resumeFrom = 0
-      if (playbackMode === 'from-note' && selectedNoteId) {
+      if (playbackMode === 'from-cursor' && cursorMeasureId) {
         const tempoStaff = score.parts[0]?.staves[0]
         if (tempoStaff) {
           const sequence = buildPlaybackSequence(tempoStaff.measures, score.voltas ?? [])
-          outer: for (const part of score.parts) {
-            const staff = part.staves[0]
-            if (!staff) continue
-            const schedule = buildFlatSchedule(staff, sequence, tempoStaff, score.tempo, score.timeSignature)
-            for (const fe of schedule) {
-              if (fe.event.id === selectedNoteId) {
-                resumeFrom = fe.startSec
-                break outer
-              }
-            }
+          const timeline = buildMeasureTimeline(tempoStaff, sequence, tempoStaff, score.tempo ?? 120, score.timeSignature)
+          for (let mIdx = 0; mIdx < tempoStaff.measures.length; mIdx++) {
+            if (tempoStaff.measures[mIdx].id !== cursorMeasureId) continue
+            const entry = timeline.find(e => e.mIdx === mIdx)
+            if (!entry) break
+            const timeSig = resolveTimeSig(tempoStaff.measures, mIdx, score.timeSignature)
+            const capacity = measureCapacityUnits(timeSig)
+            const fraction = capacity > 0 ? cursorBeatPosition / capacity : 0
+            resumeFrom = entry.startSec + fraction * entry.durationSec
+            break
           }
         }
+      } else if (playbackMode === 'beginning') {
+        resumeFrom = 0
+        // Reset cursor to start of score
+        const firstMeasureId = (score.parts[0]?.staves[0]?.measures[0]?.id as string | undefined) ?? null
+        if (firstMeasureId) set(s => { s.cursorMeasureId = firstMeasureId; s.cursorBeatPosition = 0 })
       }
 
       const onDone = () => {
@@ -411,14 +432,55 @@ export const useAppStore = create<AppState>()(
     },
 
     stopPlayback: () => {
-      // Read position before stop() resets the transport
       const pos = _playback?.getPositionSec() ?? 0
-      _playback?.stop()   // fires onDone synchronously (sets isPlaying=false, resets pos)
+      _playback?.stop()
       _playback = null
-      // Override: keep the position and mark as manual stop
-      set(s => { s.isPlaying = false; s.playbackManualStop = true; s.playbackResumePositionSec = pos })
+
+      // Convert stopped time position back to {measureId, beatPosition}
+      const { score } = get()
+      let newCursorMeasureId: string | null = null
+      let newCursorBeatPosition = 0
+      const tempoStaff = score.parts[0]?.staves[0]
+      if (tempoStaff && pos >= 0) {
+        const sequence = buildPlaybackSequence(tempoStaff.measures, score.voltas ?? [])
+        const timeline = buildMeasureTimeline(tempoStaff, sequence, tempoStaff, score.tempo ?? 120, score.timeSignature)
+        let entry = timeline.length > 0 ? timeline[timeline.length - 1] : null
+        for (const e of timeline) {
+          if (pos < e.startSec + e.durationSec) { entry = e; break }
+        }
+        if (entry) {
+          const measure = tempoStaff.measures[entry.mIdx]
+          if (measure) {
+            newCursorMeasureId = measure.id
+            const timeSig = resolveTimeSig(tempoStaff.measures, entry.mIdx, score.timeSignature)
+            const capacity = measureCapacityUnits(timeSig)
+            const fraction = entry.durationSec > 0
+              ? Math.max(0, Math.min(1, (pos - entry.startSec) / entry.durationSec))
+              : 0
+            const rawBeat = Math.floor(fraction * capacity)
+            // Snap rawBeat to the start of whichever event contains it
+            let acc = 0
+            newCursorBeatPosition = 0
+            for (const ev of (measure.voices[0]?.events ?? [])) {
+              const evUnits = eventDurationUnits(ev)
+              if (rawBeat >= acc && rawBeat < acc + evUnits) { newCursorBeatPosition = acc; break }
+              acc += evUnits
+            }
+          }
+        }
+      }
+
+      set(s => {
+        s.isPlaying = false
+        s.playbackManualStop = true
+        s.playbackResumePositionSec = pos
+        if (newCursorMeasureId) {
+          s.cursorMeasureId = newCursorMeasureId
+          s.cursorBeatPosition = newCursorBeatPosition
+        }
+      })
     },
-    setPlaybackMode: (mode) => set(s => { s.playbackMode = mode }),
+    setPlaybackMode: (mode: 'beginning' | 'from-cursor') => set(s => { s.playbackMode = mode }),
 
     setSelectedDuration: (duration) => set(s => { s.selectedDuration = duration }),
     setIsDotted: (dotted) => set(s => { s.isDotted = dotted }),
@@ -572,10 +634,10 @@ export const useAppStore = create<AppState>()(
               const voice = measure.voices[av] ?? measure.voices[0]
               const timeSig = resolveTimeSig(staff.measures, i, score.timeSignature)
               const capacity = measureCapacityUnits(timeSig)
-              const used = usedUnits(voice?.events ?? [])
-              if (used < capacity) {
+              const freeAt = firstRestBeat(voice?.events ?? [])
+              if (freeAt < capacity) {
                 state.cursorMeasureId = measure.id
-                state.cursorBeatPosition = used
+                state.cursorBeatPosition = freeAt
                 return
               }
             }
@@ -735,8 +797,8 @@ export const useAppStore = create<AppState>()(
       if (!lastMeasure) return
 
       const voice = lastMeasure.voices[0]
-      const timeSig = resolveTimeSig(firstStaff.measures, firstStaff.measures.length - 1, score.timeSignature)
-      if (usedUnits(voice?.events ?? []) < measureCapacityUnits(timeSig)) return
+      const hasRests = voice?.events.some(e => e.type === 'rest') ?? true
+      if (hasRests) return
 
       // Atomically: add measure + fix barlines (single undo step)
       set(state => {

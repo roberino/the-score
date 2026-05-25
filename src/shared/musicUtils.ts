@@ -1,3 +1,4 @@
+import { v4 as uuid } from 'uuid'
 import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, TimeSignature, KeySignature, ClefType, Measure, TupletInfo, Volta } from './score'
 
 // ── Duration arithmetic (64th-note units) ─────────────────────────────────────
@@ -35,6 +36,44 @@ export function usedUnits(events: readonly NoteEvent[]): number {
 
 export function remainingUnits(events: readonly NoteEvent[], timeSig: TimeSignature): number {
   return measureCapacityUnits(timeSig) - usedUnits(events)
+}
+
+// Returns the beat position of the first rest event (i.e. the first "free" input position).
+// If there are no rests, returns the total used units (measure is full of notes).
+export function firstRestBeat(events: readonly NoteEvent[]): number {
+  let beat = 0
+  for (const e of events) {
+    if (e.type === 'rest') return beat
+    beat += eventDurationUnits(e)
+  }
+  return beat
+}
+
+const FILL_REST_TABLE: { units: number; duration: Duration; dots: 0 | 1 | 2 }[] = [
+  { units: 64, duration: 'whole',   dots: 0 },
+  { units: 48, duration: 'half',    dots: 1 },
+  { units: 32, duration: 'half',    dots: 0 },
+  { units: 24, duration: 'quarter', dots: 1 },
+  { units: 16, duration: 'quarter', dots: 0 },
+  { units: 12, duration: 'eighth',  dots: 1 },
+  { units:  8, duration: 'eighth',  dots: 0 },
+  { units:  6, duration: '16th',    dots: 1 },
+  { units:  4, duration: '16th',    dots: 0 },
+  { units:  3, duration: '32nd',    dots: 1 },
+  { units:  2, duration: '32nd',    dots: 0 },
+  { units:  1, duration: '64th',    dots: 0 },
+]
+
+export function fillWithRests(units: number): NoteEvent[] {
+  const result: NoteEvent[] = []
+  let remaining = units
+  for (const row of FILL_REST_TABLE) {
+    while (remaining >= row.units) {
+      result.push({ id: uuid(), type: 'rest', duration: row.duration, dots: row.dots } as NoteEvent)
+      remaining -= row.units
+    }
+  }
+  return result
 }
 
 export function resolveTimeSig(

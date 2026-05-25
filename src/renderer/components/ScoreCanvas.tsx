@@ -21,7 +21,6 @@ import {
   DURATION_UNITS,
   dottedUnits,
   measureCapacityUnits,
-  usedUnits,
   closestOctave,
   stepToPitch,
   yToStep,
@@ -36,6 +35,7 @@ import {
   shiftPitchBySemitones,
   buildPlaybackSequence,
   buildMeasureTimeline,
+  firstRestBeat,
   type MeasureTimeEntry,
 } from '@shared/musicUtils'
 import { pitchToHz } from '../engine/audioEngine'
@@ -109,6 +109,79 @@ function decomposeToRests(units: number): Array<{ duration: Duration; dots: 0 | 
     remaining -= match.units
   }
   return result
+}
+
+// Collects all consecutive rests starting at `startIdx`, replaces them with `newEvent`,
+// and fills any remainder with optimally compacted rests.
+// Returns the command batch + total rest space, or null if the note doesn't fit.
+function buildRestReplaceCommands(
+  events: readonly NoteEvent[],
+  startIdx: number,
+  units: number,
+  newEvent: NoteEvent,
+  partId: string, staffId: string, measureId: string, voiceId: string,
+): { cmds: Command[]; totalRestSpace: number } | null {
+  let totalRestSpace = 0
+  const restIds: string[] = []
+  for (let i = startIdx; i < events.length; i++) {
+    if (events[i].type !== 'rest') break
+    totalRestSpace += eventDurationUnits(events[i])
+    restIds.push(events[i].id)
+  }
+  if (restIds.length === 0 || units > totalRestSpace) return null
+  const cmds: Command[] = [
+    { type: 'REPLACE_NOTE', partId, staffId, measureId, voiceId, noteId: restIds[0], event: newEvent },
+  ]
+  for (let i = 1; i < restIds.length; i++) {
+    cmds.push({ type: 'DELETE_NOTE', partId, staffId, measureId, voiceId, noteId: restIds[i] })
+  }
+  const remainder = totalRestSpace - units
+  if (remainder > 0) {
+    let insertIdx = startIdx + 1
+    for (const r of decomposeToRests(remainder)) {
+      cmds.push({ type: 'ADD_NOTE', partId, staffId, measureId, voiceId, event: { ...createRest(r.duration), dots: r.dots }, index: insertIdx++ })
+    }
+  }
+  return { cmds, totalRestSpace }
+}
+
+// When cursor is on an existing note/chord, handles chord building (different pitch)
+// or duration change (same pitch). Available space = note-units + trailing-rest-units.
+function buildNoteInsertCommands(
+  events: readonly NoteEvent[],
+  noteIdx: number,
+  units: number,
+  newEvent: NoteEvent,
+  partId: string, staffId: string, measureId: string, voiceId: string,
+): { cmds: Command[] } | null {
+  const existingNote = events[noteIdx]
+  if (!existingNote || (existingNote.type !== 'note' && existingNote.type !== 'chord')) return null
+
+  const existingUnits = eventDurationUnits(existingNote)
+  let totalSpace = existingUnits
+  const trailingRestIds: string[] = []
+  for (let i = noteIdx + 1; i < events.length; i++) {
+    if (events[i].type !== 'rest') break
+    totalSpace += eventDurationUnits(events[i])
+    trailingRestIds.push(events[i].id)
+  }
+
+  if (units > totalSpace) return null
+
+  const cmds: Command[] = [
+    { type: 'REPLACE_NOTE', partId, staffId, measureId, voiceId, noteId: existingNote.id, event: newEvent },
+  ]
+  for (const restId of trailingRestIds) {
+    cmds.push({ type: 'DELETE_NOTE', partId, staffId, measureId, voiceId, noteId: restId })
+  }
+  const remainder = totalSpace - units
+  if (remainder > 0) {
+    let insertIdx = noteIdx + 1
+    for (const r of decomposeToRests(remainder)) {
+      cmds.push({ type: 'ADD_NOTE', partId, staffId, measureId, voiceId, event: { ...createRest(r.duration), dots: r.dots }, index: insertIdx++ })
+    }
+  }
+  return { cmds }
 }
 
 const LINE_SPACING_PX  = 10
@@ -474,7 +547,7 @@ export function ScoreCanvas(): JSX.Element {
     addVolta,
     removeVolta,
     lyricCursorNoteId, setLyricCursor,
-    isPlaying, playbackManualStop,
+    isPlaying,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -536,7 +609,8 @@ export function ScoreCanvas(): JSX.Element {
       score,
       options,
       inputMode === 'select' ? new Set(selectedNoteIds) : new Set(),
-      cursorMeasureId
+      // Hide canvas cursor during playback — DOM div handles it then
+      (!isPlaying && cursorMeasureId)
         ? { cursorMeasureId, cursorBeatPosition, totalCapacityUnits: capacity }
         : null,
       selectedMeasureId,
@@ -545,7 +619,7 @@ export function ScoreCanvas(): JSX.Element {
     notePositionsRef.current = result.notePositions
     noteStartXRef.current    = result.noteStartX
     layoutsRef.current       = result.layouts
-  }, [score, zoom, inputMode, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId])
+  }, [score, zoom, inputMode, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId, isPlaying])
 
   // ── Playback cursor ──────────────────────────────────────────────────────────
 
@@ -560,16 +634,12 @@ export function ScoreCanvas(): JSX.Element {
     )
   }, [isPlaying, score])
 
-  // Hide or keep cursor when playback stops
+  // Hide DOM div cursor whenever playback stops — canvas cursor takes over at stopped position
   useEffect(() => {
     if (isPlaying) return
     const cursor = playbackCursorElRef.current
-    if (!cursor) return
-    if (!playbackManualStop) {
-      cursor.style.display = 'none'
-    }
-    // On manual stop: leave cursor visible at its current position
-  }, [isPlaying, playbackManualStop])
+    if (cursor) cursor.style.display = 'none'
+  }, [isPlaying])
 
   // RAF animation loop: move cursor during playback
   useEffect(() => {
@@ -648,32 +718,22 @@ export function ScoreCanvas(): JSX.Element {
         const dots    = isDotted ? 1 : 0 as 0 | 1
         const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
 
-        // Rest-replace: if cursor sits on a rest, replace it rather than append
+        // Rest-replace or note-insert depending on what's at the cursor position
         const atCursor = existingVoice ? findEventAtBeat(voiceEvents, cursorBeatPosition) : null
+        const octave      = closestOctave(noteName, lastEnteredPitch)
+        const accidental  = primedAccidental as Accidental
+        const capacity    = measureCapacityUnits(timeSig)
+
         if (atCursor?.event.type === 'rest') {
-          const restUnits = eventDurationUnits(atCursor.event)
-          if (units > restUnits) {
+          const note        = createNote(noteName, octave, selectedDuration, accidental)
+          const noteWithDot = { ...note, dots } as Note
+          const result = buildRestReplaceCommands(voiceEvents, atCursor.index, units, noteWithDot, part.id, staff.id, measure.id, existingVoice.id)
+          if (!result) {
             canvasRef.current?.classList.add('cursor-reject')
             setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
             return
           }
-          const octave      = closestOctave(noteName, lastEnteredPitch)
-          const accidental  = primedAccidental as Accidental
-          const note        = createNote(noteName, octave, selectedDuration, accidental)
-          const noteWithDot = { ...note, dots } as Note
-          const cmds: Command[] = [{
-            type: 'REPLACE_NOTE',
-            partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: existingVoice.id,
-            noteId: atCursor.event.id, event: noteWithDot,
-          }]
-          const remainder = restUnits - units
-          if (remainder > 0) {
-            let insertIdx = atCursor.index + 1
-            for (const r of decomposeToRests(remainder)) {
-              cmds.push({ type: 'ADD_NOTE', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: existingVoice.id, event: { ...createRest(r.duration), dots: r.dots }, index: insertIdx++ })
-            }
-          }
-          dispatchBatch(cmds)
+          dispatchBatch(result.cmds)
           if (soundOnInput) {
             const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
             const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
@@ -687,11 +747,75 @@ export function ScoreCanvas(): JSX.Element {
           setLastEnteredPitch(noteWithDot.pitch)
           setSelectedMeasure(null)
           const newBeat = cursorBeatPosition + units
-          const capacity = measureCapacityUnits(timeSig)
           if (newBeat >= capacity) {
             const measureIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
             const nextMeasure = staff.measures[measureIdx + 1]
-            if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
+            if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
+            else             setCursor(null, 0)
+          } else {
+            setCursor(cursorMeasureId, newBeat)
+          }
+          return
+        }
+
+        if (atCursor?.event.type === 'note' || atCursor?.event.type === 'chord') {
+          const existingEvent = atCursor.event
+          const isSamePitch   = existingEvent.type === 'note' &&
+            existingEvent.pitch.noteName === noteName &&
+            existingEvent.pitch.octave   === octave
+
+          let newEvent: NoteEvent
+          if (isSamePitch) {
+            newEvent = { ...(existingEvent as Note), duration: selectedDuration, dots } as Note
+          } else {
+            const newPitch: Pitch = { noteName, octave, accidental: accidental ?? null }
+            if (existingEvent.type === 'chord') {
+              const sortedPitches = [...existingEvent.pitches, newPitch].sort((a, b) =>
+                (a.octave * 7 + 'CDEFGAB'.indexOf(a.noteName)) - (b.octave * 7 + 'CDEFGAB'.indexOf(b.noteName))
+              )
+              newEvent = { ...existingEvent, pitches: sortedPitches, duration: selectedDuration, dots } as Chord
+            } else {
+              const sortedPitches = [(existingEvent as Note).pitch, newPitch].sort((a, b) =>
+                (a.octave * 7 + 'CDEFGAB'.indexOf(a.noteName)) - (b.octave * 7 + 'CDEFGAB'.indexOf(b.noteName))
+              )
+              newEvent = {
+                id: uuid(), type: 'chord', pitches: sortedPitches,
+                duration: selectedDuration, dots,
+                articulations: (existingEvent as Note).articulations ?? [],
+              } as Chord
+            }
+          }
+
+          const result = buildNoteInsertCommands(voiceEvents, atCursor.index, units, newEvent, part.id, staff.id, measure.id, existingVoice.id)
+          if (!result) {
+            canvasRef.current?.classList.add('cursor-reject')
+            setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+            return
+          }
+          dispatchBatch(result.cmds)
+          if (soundOnInput) {
+            const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
+            const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
+            const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
+            const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
+            const partIdx = score.parts.indexOf(part)
+            const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+            const previewPitch = newEvent.type === 'chord'
+              ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
+              : (newEvent as Note).pitch
+            triggerInputPreview(previewPitch.noteName, previewPitch.octave, previewPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+          }
+          setPrimedAccidental(null)
+          const lastPitch = newEvent.type === 'chord'
+            ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
+            : (newEvent as Note).pitch
+          setLastEnteredPitch(lastPitch)
+          setSelectedMeasure(null)
+          const newBeat = cursorBeatPosition + units
+          if (newBeat >= capacity) {
+            const measureIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
+            const nextMeasure = staff.measures[measureIdx + 1]
+            if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
             else             setCursor(null, 0)
           } else {
             setCursor(cursorMeasureId, newBeat)
@@ -705,8 +829,6 @@ export function ScoreCanvas(): JSX.Element {
           return
         }
 
-        const octave      = closestOctave(noteName, lastEnteredPitch)
-        const accidental  = primedAccidental as Accidental
         const note        = createNote(noteName, octave, selectedDuration, accidental)
         const noteWithDot = { ...note, dots } as Note
 
@@ -745,13 +867,12 @@ export function ScoreCanvas(): JSX.Element {
 
         // Advance cursor
         const newBeat = cursorBeatPosition + units
-        const capacity = measureCapacityUnits(timeSig)
         if (newBeat >= capacity) {
           const measureIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const nextMeasure = staff.measures[measureIdx + 1]
           if (nextMeasure) {
             const nextVoice = nextMeasure.voices[activeVoice]
-            setCursor(nextMeasure.id, usedUnits(nextVoice?.events ?? []))
+            setCursor(nextMeasure.id, firstRestBeat(nextVoice?.events ?? []))
           } else {
             setCursor(null, 0)
           }
@@ -782,30 +903,19 @@ export function ScoreCanvas(): JSX.Element {
         const dots    = isDotted ? 1 : 0 as 0 | 1
         const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
 
-        // Rest-replace: if cursor sits on a rest, replace it rather than append
-        const atCursor = existingVoice ? findEventAtBeat(voiceEvents, cursorBeatPosition) : null
+        const capacity  = measureCapacityUnits(timeSig)
+        const atCursor  = existingVoice ? findEventAtBeat(voiceEvents, cursorBeatPosition) : null
+
         if (atCursor?.event.type === 'rest') {
-          const restUnits = eventDurationUnits(atCursor.event)
-          if (units > restUnits) {
+          const note        = createNote(noteName, octave, selectedDuration, accidental ?? null)
+          const noteWithDot = { ...note, dots } as Note
+          const result = buildRestReplaceCommands(voiceEvents, atCursor.index, units, noteWithDot, part.id, staff.id, measure.id, existingVoice.id)
+          if (!result) {
             canvasRef.current?.classList.add('cursor-reject')
             setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
             return
           }
-          const note        = createNote(noteName, octave, selectedDuration, accidental ?? null)
-          const noteWithDot = { ...note, dots } as Note
-          const cmds: Command[] = [{
-            type: 'REPLACE_NOTE',
-            partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: existingVoice.id,
-            noteId: atCursor.event.id, event: noteWithDot,
-          }]
-          const remainder = restUnits - units
-          if (remainder > 0) {
-            let insertIdx = atCursor.index + 1
-            for (const r of decomposeToRests(remainder)) {
-              cmds.push({ type: 'ADD_NOTE', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: existingVoice.id, event: { ...createRest(r.duration), dots: r.dots }, index: insertIdx++ })
-            }
-          }
-          dispatchBatch(cmds)
+          dispatchBatch(result.cmds)
           if (soundOnInput && !skipPreview) {
             const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
             const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
@@ -817,12 +927,75 @@ export function ScoreCanvas(): JSX.Element {
           }
           setLastEnteredPitch(noteWithDot.pitch)
           setSelectedMeasure(null)
-          const newBeat  = cursorBeatPosition + units
-          const capacity = measureCapacityUnits(timeSig)
+          const newBeat = cursorBeatPosition + units
           if (newBeat >= capacity) {
             const mIdx        = staff.measures.findIndex(m => m.id === cursorMeasureId)
             const nextMeasure = staff.measures[mIdx + 1]
-            if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
+            if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
+            else             setCursor(null, 0)
+          } else {
+            setCursor(cursorMeasureId, newBeat)
+          }
+          return
+        }
+
+        if (atCursor?.event.type === 'note' || atCursor?.event.type === 'chord') {
+          const existingEvent = atCursor.event
+          const isSamePitch   = existingEvent.type === 'note' &&
+            existingEvent.pitch.noteName === noteName &&
+            existingEvent.pitch.octave   === octave
+
+          let newEvent: NoteEvent
+          if (isSamePitch) {
+            newEvent = { ...(existingEvent as Note), duration: selectedDuration, dots } as Note
+          } else {
+            const newPitch: Pitch = { noteName, octave, accidental: (accidental ?? null) as Accidental }
+            if (existingEvent.type === 'chord') {
+              const sortedPitches = [...existingEvent.pitches, newPitch].sort((a, b) =>
+                (a.octave * 7 + 'CDEFGAB'.indexOf(a.noteName)) - (b.octave * 7 + 'CDEFGAB'.indexOf(b.noteName))
+              )
+              newEvent = { ...existingEvent, pitches: sortedPitches, duration: selectedDuration, dots } as Chord
+            } else {
+              const sortedPitches = [(existingEvent as Note).pitch, newPitch].sort((a, b) =>
+                (a.octave * 7 + 'CDEFGAB'.indexOf(a.noteName)) - (b.octave * 7 + 'CDEFGAB'.indexOf(b.noteName))
+              )
+              newEvent = {
+                id: uuid(), type: 'chord', pitches: sortedPitches,
+                duration: selectedDuration, dots,
+                articulations: (existingEvent as Note).articulations ?? [],
+              } as Chord
+            }
+          }
+
+          const result = buildNoteInsertCommands(voiceEvents, atCursor.index, units, newEvent, part.id, staff.id, measure.id, existingVoice.id)
+          if (!result) {
+            canvasRef.current?.classList.add('cursor-reject')
+            setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+            return
+          }
+          dispatchBatch(result.cmds)
+          if (soundOnInput && !skipPreview) {
+            const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
+            const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
+            const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
+            const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
+            const partIdx = score.parts.indexOf(part)
+            const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+            const previewPitch = newEvent.type === 'chord'
+              ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
+              : (newEvent as Note).pitch
+            triggerInputPreview(previewPitch.noteName, previewPitch.octave, previewPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+          }
+          const lastPitch = newEvent.type === 'chord'
+            ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
+            : (newEvent as Note).pitch
+          setLastEnteredPitch(lastPitch)
+          setSelectedMeasure(null)
+          const newBeat = cursorBeatPosition + units
+          if (newBeat >= capacity) {
+            const mIdx        = staff.measures.findIndex(m => m.id === cursorMeasureId)
+            const nextMeasure = staff.measures[mIdx + 1]
+            if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
             else             setCursor(null, 0)
           } else {
             setCursor(cursorMeasureId, newBeat)
@@ -865,12 +1038,11 @@ export function ScoreCanvas(): JSX.Element {
         }
         setLastEnteredPitch(noteWithDot.pitch)
         setSelectedMeasure(null)
-        const newBeat  = cursorBeatPosition + units
-        const capacity = measureCapacityUnits(timeSig)
+        const newBeat = cursorBeatPosition + units
         if (newBeat >= capacity) {
           const mIdx        = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const nextMeasure = staff.measures[mIdx + 1]
-          if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
+          if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
           else             setCursor(null, 0)
         } else {
           setCursor(cursorMeasureId, newBeat)
@@ -921,7 +1093,7 @@ export function ScoreCanvas(): JSX.Element {
         if (newBeat >= capacity) {
           const mIdx        = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const nextMeasure = staff.measures[mIdx + 1]
-          if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[0]?.events ?? []))
+          if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[0]?.events ?? []))
           else             setCursor(null, 0)
         } else {
           setCursor(cursorMeasureId, newBeat)
@@ -987,6 +1159,31 @@ export function ScoreCanvas(): JSX.Element {
         const dots    = isDotted ? 1 : 0 as 0 | 1
         const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
 
+        // Rest-replace: if cursor sits on a rest, collect all consecutive rests and replace
+        const atCursor = existingVoice ? findEventAtBeat(voiceEvents, cursorBeatPosition) : null
+        if (atCursor?.event.type === 'rest') {
+          const rest = createRest(selectedDuration)
+          const restWithDot = { ...rest, dots } as typeof rest
+          const result = buildRestReplaceCommands(voiceEvents, atCursor.index, units, restWithDot, part.id, staff.id, measure.id, existingVoice.id)
+          if (!result) {
+            canvasRef.current?.classList.add('cursor-reject')
+            setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+            return
+          }
+          dispatchBatch(result.cmds)
+          const newBeat  = cursorBeatPosition + units
+          const capacity = measureCapacityUnits(timeSig)
+          if (newBeat >= capacity) {
+            const nextMeasure = staff.measures[measureIdx + 1]
+            if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
+            else             setCursor(null, 0)
+          } else {
+            setCursor(cursorMeasureId, newBeat)
+          }
+          return
+        }
+
+        // Append path (fallback when cursor is not on a rest)
         if (remainingUnits(voiceEvents, timeSig) < units) {
           canvasRef.current?.classList.add('cursor-reject')
           setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
@@ -1019,7 +1216,7 @@ export function ScoreCanvas(): JSX.Element {
         if (newBeat >= capacity) {
           const nextMeasure = staff.measures[measureIdx + 1]
           if (nextMeasure) {
-            setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
+            setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
           } else {
             setCursor(null, 0)
           }
@@ -1053,7 +1250,7 @@ export function ScoreCanvas(): JSX.Element {
         const capacity = measureCapacityUnits(timeSig)
         if (newBeat >= capacity) {
           const next = staff.measures[measureIdx + 1]
-          if (next) setCursor(next.id, usedUnits(next.voices[0]?.events ?? []))
+          if (next) setCursor(next.id, firstRestBeat(next.voices[0]?.events ?? []))
           else      setCursor(null, 0)
         } else {
           setCursor(cursorMeasureId, newBeat)
@@ -1747,37 +1944,30 @@ export function ScoreCanvas(): JSX.Element {
       const timeSig = measure.timeSignature ?? score.timeSignature
       const dots    = isDotted ? 1 : 0 as 0 | 1
       const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
-      const used    = usedUnits(voiceEvents)
       const capacity = measureCapacityUnits(timeSig)
 
-      // Check if the click landed on an existing rest — replace it
+      // Check if the click landed on an existing note or rest
       if (existingVoice) {
         let beatAcc = 0
         for (let i = 0; i < voiceEvents.length; i++) {
-          const ev    = voiceEvents[i]
+          const ev      = voiceEvents[i]
           const evUnits = eventDurationUnits(ev)
-          if (ev.type === 'rest') {
-            const restX = notePositionsRef.current.get(ev.id)
-            if (restX !== undefined && Math.abs(canvasX - restX) <= 20) {
-              if (units > evUnits) return
+          const noteX   = notePositionsRef.current.get(ev.id)
+          if (noteX !== undefined && Math.abs(canvasX - noteX) <= 20) {
+            if (ev.type === 'note' || ev.type === 'chord') {
+              // Position cursor at this note for chord-building via keyboard
+              setCursor(layout.measureId, beatAcc)
+              return
+            }
+            if (ev.type === 'rest') {
               const step      = yToStep(canvasY, layout.staveTopY, LINE_SPACING_PX)
               const pitchInfo = stepToPitch(step, layout.clef)
               const accidental = primedAccidental as Accidental
               const note        = createNote(pitchInfo.noteName, pitchInfo.octave, selectedDuration, accidental)
               const noteWithDot = { ...note, dots } as Note
-              const cmds: Command[] = [{
-                type: 'REPLACE_NOTE',
-                partId: layout.partId, staffId: layout.staffId, measureId: layout.measureId,
-                voiceId: existingVoice.id, noteId: ev.id, event: noteWithDot,
-              }]
-              const remainder = evUnits - units
-              if (remainder > 0) {
-                let insertIdx = i + 1
-                for (const r of decomposeToRests(remainder)) {
-                  cmds.push({ type: 'ADD_NOTE', partId: layout.partId, staffId: layout.staffId, measureId: layout.measureId, voiceId: existingVoice.id, event: { ...createRest(r.duration), dots: r.dots }, index: insertIdx++ })
-                }
-              }
-              dispatchBatch(cmds)
+              const result = buildRestReplaceCommands(voiceEvents, i, units, noteWithDot, layout.partId, layout.staffId, layout.measureId, existingVoice.id)
+              if (!result) return
+              dispatchBatch(result.cmds)
               if (soundOnInput && part) {
                 const mIdx  = staff!.measures.findIndex(m => m.id === layout.measureId)
                 const dyn   = resolveDirectiveDynamic(staff!.measures, mIdx)
@@ -1793,7 +1983,7 @@ export function ScoreCanvas(): JSX.Element {
               if (newBeat >= capacity) {
                 const mIdx = staff!.measures.findIndex(m => m.id === layout.measureId)
                 const nextMeasure = staff!.measures[mIdx + 1]
-                if (nextMeasure) setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
+                if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
                 else             setCursor(null, 0)
               } else {
                 setCursor(layout.measureId, newBeat)
@@ -1805,9 +1995,10 @@ export function ScoreCanvas(): JSX.Element {
         }
       }
 
-      // No rest hit — append at end of existing events
-      if (used >= capacity) return
-      setCursor(layout.measureId, used)
+      // No event hit — append at end of existing events
+      const freeAt = firstRestBeat(voiceEvents)
+      if (freeAt >= capacity) return
+      setCursor(layout.measureId, freeAt)
 
       const step      = yToStep(canvasY, layout.staveTopY, LINE_SPACING_PX)
       const pitchInfo = stepToPitch(step, layout.clef)
@@ -1852,12 +2043,12 @@ export function ScoreCanvas(): JSX.Element {
       setPrimedAccidental(null)
       setLastEnteredPitch(noteWithDot.pitch)
 
-      const newBeat = used + units
+      const newBeat = freeAt + units
       if (newBeat >= capacity) {
         const measureIdx  = staff!.measures.findIndex(m => m.id === layout.measureId)
         const nextMeasure = staff!.measures[measureIdx + 1]
         if (nextMeasure) {
-          setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[activeVoice]?.events ?? []))
+          setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
         } else {
           setCursor(null, 0)
         }
@@ -1876,11 +2067,11 @@ export function ScoreCanvas(): JSX.Element {
       const measure = staff.measures[mIdx]
       const voice   = measure.voices[0]
       const timeSig = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
-      const used    = usedUnits(voice?.events ?? [])
       const capacity = measureCapacityUnits(timeSig)
-      if (used >= capacity) return
+      const freeAt   = firstRestBeat(voice?.events ?? [])
+      if (freeAt >= capacity) return
 
-      setCursor(layout.measureId, used)
+      setCursor(layout.measureId, freeAt)
 
       const dots  = isDotted ? 1 : 0 as 0 | 1
       const units = dottedUnits(DURATION_UNITS[selectedDuration], dots)
@@ -1900,11 +2091,11 @@ export function ScoreCanvas(): JSX.Element {
 
       setPrimedAccidental(null)
 
-      const newBeat = used + units
+      const newBeat = freeAt + units
       if (newBeat >= capacity) {
         const nextMeasure = staff.measures[mIdx + 1]
         if (nextMeasure) {
-          setCursor(nextMeasure.id, usedUnits(nextMeasure.voices[0]?.events ?? []))
+          setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[0]?.events ?? []))
         } else {
           setCursor(null, 0)
         }
@@ -2047,6 +2238,14 @@ export function ScoreCanvas(): JSX.Element {
               if (!closest || dist < closest.dist) closest = { id: ev.id, dist, noteX }
             }
             if (closest && closest.dist <= 20) {
+              // Position cursor at the beat of the clicked event
+              let clickedBeat = 0
+              for (const ev of selVoice.events) {
+                if (ev.id === closest.id) break
+                clickedBeat += eventDurationUnits(ev)
+              }
+              setCursor(layout.measureId, clickedBeat)
+
               const rect = canvas.getBoundingClientRect()
               const menuX = rect.left + closest.noteX
               const menuY = rect.top + layout.staveTopY + 4 * LINE_SPACING_PX + 12

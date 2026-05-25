@@ -13,7 +13,7 @@ import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
 import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, PedalMark } from './score'
-import { measureCapacityUnits, eventDurationUnits, dottedUnits, DURATION_UNITS, resolveClef, pitchToStep, stepToPitch, shiftPitchBySemitones } from './musicUtils'
+import { measureCapacityUnits, eventDurationUnits, dottedUnits, DURATION_UNITS, resolveClef, resolveTimeSig, pitchToStep, stepToPitch, shiftPitchBySemitones, fillWithRests } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
 
@@ -195,36 +195,6 @@ function repitchNotes(
   }
 }
 
-// ── fillWithRests ─────────────────────────────────────────────────────────────
-// Converts a duration in 64th-note units into the minimal list of rests that
-// cover it exactly, using a greedy largest-first algorithm.
-
-const FILL_REST_TABLE: { units: number; duration: Duration; dots: 0 | 1 | 2 }[] = [
-  { units: 64, duration: 'whole',   dots: 0 },
-  { units: 48, duration: 'half',    dots: 1 },
-  { units: 32, duration: 'half',    dots: 0 },
-  { units: 24, duration: 'quarter', dots: 1 },
-  { units: 16, duration: 'quarter', dots: 0 },
-  { units: 12, duration: 'eighth',  dots: 1 },
-  { units:  8, duration: 'eighth',  dots: 0 },
-  { units:  6, duration: '16th',    dots: 1 },
-  { units:  4, duration: '16th',    dots: 0 },
-  { units:  3, duration: '32nd',    dots: 1 },
-  { units:  2, duration: '32nd',    dots: 0 },
-  { units:  1, duration: '64th',    dots: 0 },
-]
-
-function fillWithRests(units: number): NoteEvent[] {
-  const result: NoteEvent[] = []
-  let remaining = units
-  for (const row of FILL_REST_TABLE) {
-    while (remaining >= row.units) {
-      result.push({ id: uuid(), type: 'rest', duration: row.duration, dots: row.dots } as NoteEvent)
-      remaining -= row.units
-    }
-  }
-  return result
-}
 
 // ── Command executor ─────────────────────────────────────────────────────────
 // Applies a command to a Score and returns the new Score (immutably, via Immer).
@@ -312,9 +282,10 @@ export function applyCommand(score: Score, command: Command): Score {
         const afterIdx = measures.findIndex(m => m.id === command.afterMeasureId)
         if (afterIdx === -1) break
         const newNumber = measures[afterIdx].number + 1
-        const newMeasure = createMeasure(newNumber, 'single')
+        const timeSig = resolveTimeSig(measures as any, afterIdx, draft.timeSignature)
+        const newMeasure = createMeasure(newNumber, 'single', timeSig) as any
         // Renumber all measures after insertion point
-        measures.splice(afterIdx + 1, 0, newMeasure as any)
+        measures.splice(afterIdx + 1, 0, newMeasure)
         for (let i = afterIdx + 2; i < measures.length; i++) {
           ;(measures[i] as any).number = i + 1
         }
@@ -330,9 +301,11 @@ export function applyCommand(score: Score, command: Command): Score {
             const isLast = afterMeasureIndex === measures.length - 1
             // If inserting at the end, demote the current final barline first
             if (isLast) measures[afterMeasureIndex].barline = 'single'
+            const insertTimeSig = resolveTimeSig(measures, afterMeasureIndex, draft.timeSignature)
             const newMeasure = createMeasure(
               measures[afterMeasureIndex].number + 1,
               isLast ? 'final' : 'single',
+              insertTimeSig,
             )
             measures.splice(afterMeasureIndex + 1, 0, newMeasure)
             for (let i = afterMeasureIndex + 2; i < measures.length; i++) {
@@ -502,7 +475,7 @@ export function applyCommand(score: Score, command: Command): Score {
 
       case 'ADD_PART': {
         const measureCount = (draft.parts[0]?.staves[0]?.measures as any[])?.length ?? 8
-        const staff = createStaff(command.clef, measureCount)
+        const staff = createStaff(command.clef, measureCount, draft.timeSignature)
         const defaultChannel = Math.min(draft.parts.length + 1, 16)
 
         // Auto-group: if no part has a groupId yet and this will make 2+ parts, group all
