@@ -690,13 +690,23 @@ function renderFromLayouts(
     }
 
     // ── Below-stave Y positions ─────────────────────────────────────────────
-    // pedalY is row-consistent (uses max overhang across the whole row).
-    // lyricY is per-measure but capped above pedalY.
+    // Use the greater of the pitch-based row overhang (consistent within the row)
+    // and the actual stem extents for this measure (so downward stems don't clash).
+    // VexFlow: topY = stem tip (large Y for stem-down), baseY = notehead side.
     const rowOverhang  = rowOverhangMap.get(layout.staveY) ?? 0
     const staveBottom  = layout.staveTopY + STAVE_HEIGHT_PX
-    const pedalY       = staveBottom + Math.max(PEDAL_BASE_BELOW_STAVE, rowOverhang + 26)
+    let   measureMaxStemY = staveBottom
+    for (const sn of staveNotes) {
+      try {
+        const ext = sn.getStemExtents()
+        measureMaxStemY = Math.max(measureMaxStemY, Math.max(ext.topY, ext.baseY))
+      } catch { /* no stem */ }
+    }
+    const stemOverhang     = Math.max(0, measureMaxStemY - staveBottom)
+    const effectiveOverhang = Math.max(rowOverhang, stemOverhang)
+    const pedalY       = staveBottom + Math.max(PEDAL_BASE_BELOW_STAVE, effectiveOverhang + 26)
     const midiY        = pedalY + MIDI_BELOW_PEDAL
-    const rawLyricY    = staveBottom + Math.max(LYRIC_BASE_BELOW_STAVE, rowOverhang + 8)
+    const rawLyricY    = staveBottom + Math.max(LYRIC_BASE_BELOW_STAVE, effectiveOverhang + 8)
     const lyricY       = Math.min(rawLyricY, pedalY - 18)
     measureLyricY.set(layout.measureId, lyricY)
 
@@ -712,7 +722,7 @@ function renderFromLayouts(
     }
     // Note-attached dynamics below the stave
     if (staveNotes.length > 0) {
-      drawNoteDynamics(ctx, layout, staveNotes, events, pedalY)
+      drawNoteDynamics(ctx, staveNotes, events, pedalY)
     }
   }
 
@@ -897,7 +907,6 @@ function drawDirectives(
 
 function drawNoteDynamics(
   ctx: RenderContext,
-  layout: MeasureLayout,
   staveNotes: StaveNote[],
   events: NoteEvent[],
   pedalY: number,
@@ -906,22 +915,9 @@ function drawNoteDynamics(
     typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
   if (!nativeCtx) return
 
-  const staveBottom = layout.staveTopY + STAVE_HEIGHT_PX
-
-  // Compute y from actual stem extents so downward stems don't cause overlap.
-  // VexFlow: topY = stem tip (largest Y for stem-down), baseY = notehead side.
-  let maxStemY = staveBottom
-  for (const sn of staveNotes) {
-    try {
-      const ext = sn.getStemExtents()
-      maxStemY = Math.max(maxStemY, Math.max(ext.topY, ext.baseY))
-    } catch { /* no stem (rest) */ }
-  }
-  const stemOverhang = Math.max(0, maxStemY - staveBottom)
-  const y = Math.min(
-    staveBottom + Math.max(14, stemOverhang + 10),
-    pedalY - 14,
-  )
+  // pedalY is already stem-aware (computed in the main loop using getStemExtents).
+  // Place dynamics 14px above the pedal baseline (which already clears stem tips).
+  const y = pedalY - 14
 
   nativeCtx.save()
   nativeCtx.font      = 'bold italic 13px Edwin, serif'
