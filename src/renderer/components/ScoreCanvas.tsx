@@ -2081,7 +2081,9 @@ export function ScoreCanvas(): JSX.Element {
 
     const layout  = findClickedLayout(canvasX, canvasY, layouts)
     if (!layout) {
-      // Clicked outside all measures — clear measure selection
+      // Clicked outside all measures — clear selection and context menu
+      clearSelection()
+      setSelectionMenuPos(null)
       setSelectedMeasure(null)
       return
     }
@@ -2556,6 +2558,7 @@ export function ScoreCanvas(): JSX.Element {
       setChordCycleState(null)
       if (!event.shiftKey) {
         clearSelection()
+        setSelectionMenuPos(null)
         setSelectedMeasure(layout.measureId)
       }
     }
