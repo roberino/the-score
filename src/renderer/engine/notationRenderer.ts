@@ -105,11 +105,14 @@ function noteEventToStaveNote(
   clef: string,
   stemDirection?: number,
   noteColor?: string,
+  selectedPitchIndex?: number,  // when set on a chord: only that notehead gets selection colour
 ): StaveNote {
   const stemOpts = stemDirection !== undefined ? { stem_direction: stemDirection } : {}
+  const SEL_STYLE     = { fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' }
+  const DEFAULT_STYLE = { fillStyle: noteColor ?? '#333333', strokeStyle: noteColor ?? '#333333' }
   const applyColor = (sn: StaveNote) => {
-    if (selected)        sn.setStyle({ fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' })
-    else if (noteColor)  sn.setStyle({ fillStyle: noteColor, strokeStyle: noteColor })
+    if (selected)        sn.setStyle(SEL_STYLE)
+    else if (noteColor)  sn.setStyle(DEFAULT_STYLE)
   }
   switch (event.type) {
     case 'note': {
@@ -155,7 +158,16 @@ function noteEventToStaveNote(
       })
       if (c.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
       if (c.articulations.length > 0) attachArticulations(staveNote, c.articulations)
-      applyColor(staveNote)
+      if (selected && selectedPitchIndex !== undefined) {
+        // Individual pitch selected: highlight only that notehead, others default
+        c.pitches.forEach((_, i) => {
+          staveNote.setKeyStyle(i, i === selectedPitchIndex ? SEL_STYLE : DEFAULT_STYLE)
+        })
+        // Also style stem/flag in selection colour
+        staveNote.setStyle(SEL_STYLE)
+      } else {
+        applyColor(staveNote)
+      }
       return staveNote
     }
   }
@@ -529,6 +541,11 @@ export interface RenderScoreResult {
   layouts:       MeasureLayout[]
 }
 
+export interface SelectedChordPitchInfo {
+  eventId: string
+  pitchIndex: number
+}
+
 export function renderScore(
   canvas: HTMLCanvasElement,
   score: Score,
@@ -536,7 +553,8 @@ export function renderScore(
   selectedNoteIds: ReadonlySet<string> = new Set(),
   cursor: RenderCursorOptions | null = null,
   selectedMeasureId: string | null = null,
-  lyricCursorNoteId: string | null = null
+  lyricCursorNoteId: string | null = null,
+  selectedChordPitchInfo: SelectedChordPitchInfo | null = null
 ): RenderScoreResult {
   const notePositions = new Map<string, number>()
   const noteStartX    = new Map<string, number>()
@@ -559,7 +577,7 @@ export function renderScore(
   const ctx = renderer.getContext()
   ctx.clear()
 
-  const lyricYMap = renderFromLayouts(ctx, score, layouts, selectedNoteIds, notePositions, noteStartX)
+  const lyricYMap = renderFromLayouts(ctx, score, layouts, selectedNoteIds, notePositions, noteStartX, selectedChordPitchInfo)
   drawHeadings(ctx, score, options)
 
   const nativeCtx = canvas.getContext('2d')
@@ -584,7 +602,8 @@ function renderFromLayouts(
   layouts: MeasureLayout[],
   selectedNoteIds: ReadonlySet<string>,
   notePositions: Map<string, number>,
-  noteStartX: Map<string, number>
+  noteStartX: Map<string, number>,
+  selectedChordPitchInfo: SelectedChordPitchInfo | null = null
 ): Map<string, number> {   // returns measureId → lyricY
   // Build fast lookup: staffId → staff / part
   type StaffEntry = { staff: Staff; part: Part }
@@ -658,7 +677,7 @@ function renderFromLayouts(
       layout.x, layout.staveY, layout.width,
       layout.measureIndex, layout.isLineStart, layout.showClef,
       selectedNoteIds, notePositions,
-      voltaOpts
+      voltaOpts, selectedChordPitchInfo
     )
 
     events.forEach((e, i) => {
@@ -1088,7 +1107,8 @@ function renderMeasure(
   showClef: boolean,
   selectedNoteIds: ReadonlySet<string>,
   notePositions: Map<string, number>,
-  voltaOpts?: VoltaOpts
+  voltaOpts?: VoltaOpts,
+  selectedChordPitchInfo?: SelectedChordPitchInfo | null
 ): MeasureRenderResult {
   const stave = new Stave(x, y, width)
 
@@ -1188,8 +1208,10 @@ function renderMeasure(
 
   // Two-voice rendering
   if (events0.length > 0 && events1.length > 0) {
-    const sns0 = events0.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, 1))
-    const sns1 = events1.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, -1, '#2d8f4e'))
+    const sns0 = events0.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, 1, undefined,
+      selectedChordPitchInfo?.eventId === e.id ? selectedChordPitchInfo.pitchIndex : undefined))
+    const sns1 = events1.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, -1, '#2d8f4e',
+      selectedChordPitchInfo?.eventId === e.id ? selectedChordPitchInfo.pitchIndex : undefined))
 
     const vv0 = new VexVoice(vexVoiceCfg).setStrict(false)
     const vv1 = new VexVoice(vexVoiceCfg).setStrict(false)
@@ -1222,7 +1244,8 @@ function renderMeasure(
   const stemDir    = isVoice1Only ? -1 : undefined
   const noteColor  = isVoice1Only ? '#2d8f4e' : undefined
 
-  const staveNotes = events.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, stemDir, noteColor))
+  const staveNotes = events.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, stemDir, noteColor,
+    selectedChordPitchInfo?.eventId === e.id ? selectedChordPitchInfo.pitchIndex : undefined))
   const vexVoice   = new VexVoice(vexVoiceCfg).setStrict(false)
   vexVoice.addTickables(staveNotes)
 

@@ -14,6 +14,7 @@ import {
   headingFieldBounds,
   type MeasureLayout,
   type HeadingFieldBound,
+  type SelectedChordPitchInfo,
 } from '../engine/notationRenderer'
 import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta, type Duration, type MidiScoreEvent, type PedalMark } from '@shared/score'
 import { v4 as uuid } from 'uuid'
@@ -518,6 +519,8 @@ export function ScoreCanvas(): JSX.Element {
   const shiftHeldRef = useRef(false)
   const [shiftHoverOnNote, setShiftHoverOnNote] = useState(false)
   const [hoverCursor, setHoverCursor] = useState<'default' | 'valid' | 'invalid' | 'hand'>('default')
+  // Chord pitch cycling: tracks which chord is being cycled and the next pitch index to select
+  const [chordCycleState, setChordCycleState] = useState<{ eventId: string; nextIndex: number } | null>(null)
   const [selectionMenuPos, setSelectionMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [pickerState, setPickerState] = useState<PickerState | null>(null)
   const [timeSigPickerState, setTimeSigPickerState] = useState<TimeSigPickerState | null>(null)
@@ -540,6 +543,7 @@ export function ScoreCanvas(): JSX.Element {
     setSelectedDuration, setIsDotted, toggleDot, setPrimedAccidental,
     setCursor, setLastEnteredPitch,
     setSelectedNote, setSelectedNotes, toggleSelectedNote, clearSelection,
+    selectedChordPitchIndex, setSelectedChordPitch,
     setSelectedBarline,
     selectedMeasureId, setSelectedMeasure,
     moveCursorToFirstAvailable,
@@ -611,6 +615,11 @@ export function ScoreCanvas(): JSX.Element {
     const options = getRenderOptions(zoom, score.showPartLabels)
     const timeSig = score.timeSignature
     const capacity = measureCapacityUnits(timeSig)
+    const chordPitchInfo: SelectedChordPitchInfo | null =
+      (inputMode === 'select' && selectedNoteId && selectedChordPitchIndex !== null)
+        ? { eventId: selectedNoteId, pitchIndex: selectedChordPitchIndex }
+        : null
+
     const result = renderScore(
       canvas,
       score,
@@ -621,12 +630,13 @@ export function ScoreCanvas(): JSX.Element {
         ? { cursorMeasureId, cursorBeatPosition, totalCapacityUnits: capacity }
         : null,
       selectedMeasureId,
-      lyricCursorNoteId
+      lyricCursorNoteId,
+      chordPitchInfo
     )
     notePositionsRef.current = result.notePositions
     noteStartXRef.current    = result.noteStartX
     layoutsRef.current       = result.layouts
-  }, [score, zoom, inputMode, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId, isPlaying])
+  }, [score, zoom, inputMode, selectedNoteIds, selectedNoteId, selectedChordPitchIndex, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId, isPlaying])
 
   // ── Playback cursor ──────────────────────────────────────────────────────────
 
@@ -1379,6 +1389,16 @@ export function ScoreCanvas(): JSX.Element {
       if (evIdx === -1) return
       const ev = voice.events[evIdx]
 
+      // Individual pitch selected within a chord — remove just that pitch
+      if (ev.type === 'chord' && selectedChordPitchIndex !== null) {
+        dispatch({ type: 'REMOVE_CHORD_PITCH', ...loc, noteId: id, pitchIndex: selectedChordPitchIndex })
+        setSelectedChordPitch(null)
+        setChordCycleState(null)
+        // Keep chord event selected (may now be a Note after collapse)
+        setSelectedNote(id)
+        return
+      }
+
       // Find next event ID to select after the operation
       let nextId: string | null = null
       if (evIdx + 1 < voice.events.length) {
@@ -1547,6 +1567,28 @@ export function ScoreCanvas(): JSX.Element {
 
   const moveSelectedNotes = useCallback((direction: 'up' | 'down') => {
     if (selectedNoteIds.length === 0) return
+    const delta = direction === 'up' ? 1 : -1
+
+    // Individual pitch selected within a chord — shift only that pitch via REPLACE_NOTE
+    if (selectedNoteIds.length === 1 && selectedChordPitchIndex !== null) {
+      const id  = selectedNoteIds[0]
+      const loc = findFullNoteLocation(id)
+      if (!loc) return
+      const voice = score.parts.find(p => p.id === loc.partId)
+        ?.staves.find(s => s.id === loc.staffId)
+        ?.measures.find(m => m.id === loc.measureId)
+        ?.voices.find(v => v.id === loc.voiceId)
+      const ev = voice?.events.find(e => e.id === id)
+      if (!ev || ev.type !== 'chord') return
+      const newPitches = ev.pitches.map((p, i) => {
+        if (i !== selectedChordPitchIndex) return p
+        return shiftPitchBySemitones(p.noteName, p.octave, p.accidental, delta)
+      })
+      const newChord = { ...ev, pitches: newPitches } as import('@shared/score').Chord
+      dispatch({ type: 'REPLACE_NOTE', ...loc, noteId: id, event: newChord })
+      return
+    }
+
     const moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] = []
     for (const noteId of selectedNoteIds) {
       const loc = findFullNoteLocation(noteId)
@@ -1576,7 +1618,7 @@ export function ScoreCanvas(): JSX.Element {
         }
       }
     }
-  }, [selectedNoteIds, findFullNoteLocation, dispatch, soundOnInput, score, audioMode])
+  }, [selectedNoteIds, selectedChordPitchIndex, findFullNoteLocation, dispatch, soundOnInput, score, audioMode])
 
   const transposeSelectedNotes = useCallback((semitones: number) => {
     if (selectedNoteIds.length === 0) return
@@ -1681,8 +1723,8 @@ export function ScoreCanvas(): JSX.Element {
 
       // Arrow keys in select mode: left/right navigate, up/down transpose
       if (!mod && inputMode === 'select' && selectedNoteIds.length > 0) {
-        if (e.key === 'ArrowLeft')  { e.preventDefault(); navigateSelection('prev'); return }
-        if (e.key === 'ArrowRight') { e.preventDefault(); navigateSelection('next'); return }
+        if (e.key === 'ArrowLeft')  { e.preventDefault(); setChordCycleState(null); setSelectedChordPitch(null); navigateSelection('prev'); return }
+        if (e.key === 'ArrowRight') { e.preventDefault(); setChordCycleState(null); setSelectedChordPitch(null); navigateSelection('next'); return }
         if (e.key === 'ArrowUp')    { e.preventDefault(); moveSelectedNotes('up');   return }
         if (e.key === 'ArrowDown')  { e.preventDefault(); moveSelectedNotes('down'); return }
       }
@@ -2425,7 +2467,9 @@ export function ScoreCanvas(): JSX.Element {
               const menuX = rect.left + closest.noteX
               const menuY = rect.top + layout.staveTopY + 4 * LINE_SPACING_PX + 12
               if (event.shiftKey) {
-                // Shift+click: range select from anchor to clicked, or toggle
+                // Shift+click: range select — reset chord cycle
+                setChordCycleState(null)
+                setSelectedChordPitch(null)
                 const anchorLoc = selectedAnchorId ? findNoteLocation(selectedAnchorId) : null
                 const clickedLoc = { partId: layout.partId, staffId: layout.staffId }
                 if (anchorLoc && anchorLoc.staffId === clickedLoc.staffId) {
@@ -2449,9 +2493,36 @@ export function ScoreCanvas(): JSX.Element {
                   toggleSelectedNote(closest.id)
                 }
               } else {
-                setSelectedNote(closest.id)
                 setSelectedMeasure(null)
                 const ev = selVoice.events.find(e => e.id === closest!.id)
+
+                // Chord pitch cycling: first click selects all; subsequent clicks cycle individual pitches
+                if (ev?.type === 'chord') {
+                  if (chordCycleState?.eventId === ev.id) {
+                    // Already cycling — advance to next pitch or wrap back to all-selected
+                    if (chordCycleState.nextIndex >= ev.pitches.length) {
+                      // Wrap: back to all selected
+                      setSelectedNote(ev.id)
+                      setSelectedChordPitch(null)
+                      setChordCycleState({ eventId: ev.id, nextIndex: 0 })
+                    } else {
+                      const pitchIdx = chordCycleState.nextIndex
+                      setSelectedNote(ev.id)
+                      setSelectedChordPitch(pitchIdx)
+                      setChordCycleState({ eventId: ev.id, nextIndex: pitchIdx + 1 })
+                    }
+                  } else {
+                    // First click on this chord: select all pitches, set up cycle
+                    setSelectedNote(ev.id)
+                    setSelectedChordPitch(null)
+                    setChordCycleState({ eventId: ev.id, nextIndex: 0 })
+                  }
+                } else {
+                  // Note or rest: plain selection, reset cycle
+                  setSelectedNote(closest.id)
+                  setChordCycleState(null)
+                }
+
                 if (ev) {
                   setSelectedDuration(ev.duration)
                   setIsDotted(ev.dots > 0)
@@ -2479,9 +2550,10 @@ export function ScoreCanvas(): JSX.Element {
         }
       }
 
-      // No note hit — select the measure (empty space click)
+      // No note hit — select the measure (empty space click); reset chord cycle
       setSelectedBarline(null)
       setPickerState(null)
+      setChordCycleState(null)
       if (!event.shiftKey) {
         clearSelection()
         setSelectedMeasure(layout.measureId)

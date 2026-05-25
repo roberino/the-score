@@ -49,6 +49,7 @@ export interface AppState {
   selectedNoteId: string | null       // last selected note (derived from selectedNoteIds)
   selectedNoteIds: string[]           // all selected note/chord event IDs
   selectedAnchorId: string | null     // pivot for shift+click range selection
+  selectedChordPitchIndex: number | null  // non-null = individual pitch within selectedNoteId's chord
   selectedMeasureId: string | null
   selectedBarlineId: string | null   // measure ID whose right barline is selected
   inputMode: InputMode
@@ -111,6 +112,7 @@ export interface AppState {
   addToSelection: (id: string) => void
   toggleSelectedNote: (id: string) => void
   clearSelection: () => void
+  setSelectedChordPitch: (pitchIndex: number | null) => void
   dispatchBatch: (commands: Command[]) => void
   setSelectedMeasure: (measureId: string | null) => void
   setSelectedBarline: (measureId: string | null) => void
@@ -156,6 +158,7 @@ export const useAppStore = create<AppState>()(
     selectedNoteId: null,
     selectedNoteIds: [],
     selectedAnchorId: null,
+    selectedChordPitchIndex: null,
     selectedMeasureId: null,
     selectedBarlineId: null,
     inputMode: 'note',
@@ -340,6 +343,7 @@ export const useAppStore = create<AppState>()(
       s.selectedNoteId  = id
       s.selectedNoteIds = id ? [id] : []
       s.selectedAnchorId = id
+      s.selectedChordPitchIndex = null
     }),
     setSelectedNotes: (ids, anchorId) => set(s => {
       s.selectedNoteIds = ids
@@ -370,7 +374,9 @@ export const useAppStore = create<AppState>()(
       s.selectedNoteIds = []
       s.selectedNoteId  = null
       s.selectedAnchorId = null
+      s.selectedChordPitchIndex = null
     }),
+    setSelectedChordPitch: (pitchIndex) => set(s => { s.selectedChordPitchIndex = pitchIndex }),
     dispatchBatch: (commands) => {
       if (commands.length === 0) return
       set(state => {

@@ -30,6 +30,35 @@ This mode is a bit redundant and it conflicts with the shortcut key for entering
 * When not in select mode, the selected note should not appear as selected but when back in select mode, the current selected note should be remembered.
 * Tie should only work when the next note is the same pitch.
 
+**Note Selection - multiple notes in the same position** 
+
+When selecting a chord, all notes in that position should be selected but clicking again should cycle through notes in that position so that individual notes can also be selected.
+
+Cycle wrap behaviour: 
+
+* After reaching the last individual pitch, wrap back to all selected.
+* Click anywhere else resets the cycle. Switching mode or left/right arrow navigation also resets.
+
+Individual note selection:
+
+* Once an individual note is selected, the same standard functionality should be available: deletion, change of pitch, change of duration, context menu
+* Deletion of an individual pitch removes that pitch from the chord. A 2-pitch chord that loses one pitch becomes a plain Note.
+* Pitch shift (ArrowUp/Down) moves only the selected pitch, not all pitches in the chord.
+* Duration change applies to the whole chord event (all pitches share duration — no change in behaviour).
+
+Visual indicator:
+
+* To distinguish the selected individual note, colour the other noteheads in the chord the same as non-selected notes (black/default). Only the selected notehead shows the selection colour.
+
+Implementation notes:
+
+* No changes to the Score data model. Pitch selection is purely UI state: `selectedChordPitchIndex: number | null` in the app store (null = whole chord selected).
+* New command `REMOVE_CHORD_PITCH { partId, staffId, measureId, voiceId, noteId, pitchIndex }` handles individual pitch deletion. Collapses to a Note when 2 pitches → 1.
+* Renderer uses VexFlow `setKeyStyle(index, style)` per-notehead on the chord StaveNote when an individual pitch is active.
+* Cycle position is local component state (`chordCycleState`), not persisted to the store.
+
+Two voice scores: out of scope. Don't change current behaviour
+
 **Measures and Completeness**
 
 * A measure should always be mathmatically complete.

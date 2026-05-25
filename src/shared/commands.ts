@@ -70,6 +70,7 @@ export type Command =
   | { type: 'REMOVE_MIDI_EVENT'; partId: string; staffId: string; measureId: string; eventId: string }
   | { type: 'ADD_PEDAL_MARK';    partId: string; staffId: string; measureId: string; mark: PedalMark }
   | { type: 'REMOVE_PEDAL_MARK'; partId: string; staffId: string; measureId: string; markId: string }
+  | { type: 'REMOVE_CHORD_PITCH'; partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; pitchIndex: number }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -942,6 +943,33 @@ export function applyCommand(score: Score, command: Command): Score {
         if (!measure?.pedalMarks) break
         const idx = measure.pedalMarks.findIndex((m: any) => m.id === command.markId)
         if (idx !== -1) measure.pedalMarks.splice(idx, 1)
+        break
+      }
+
+      case 'REMOVE_CHORD_PITCH': {
+        const part    = draft.parts.find(p => p.id === command.partId)
+        const staff   = part?.staves.find(s => s.id === command.staffId)
+        const measure = staff?.measures.find(m => m.id === command.measureId)
+        const voice   = measure?.voices.find(v => v.id === command.voiceId)
+        if (!voice) break
+        const evIdx = voice.events.findIndex(e => e.id === command.noteId)
+        if (evIdx === -1) break
+        const chord = voice.events[evIdx] as any
+        if (chord.type !== 'chord') break
+        const newPitches = [...chord.pitches]
+        newPitches.splice(command.pitchIndex, 1)
+        if (newPitches.length === 1) {
+          // Collapse to a plain Note
+          voice.events[evIdx] = {
+            id: chord.id, type: 'note', pitch: newPitches[0],
+            duration: chord.duration, dots: chord.dots,
+            articulations: chord.articulations,
+            ...(chord.tuplet  ? { tuplet:  chord.tuplet  } : {}),
+            ...(chord.dynamic ? { dynamic: chord.dynamic } : {}),
+          } as any
+        } else {
+          chord.pitches = newPitches
+        }
         break
       }
     }
