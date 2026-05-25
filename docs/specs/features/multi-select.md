@@ -56,18 +56,17 @@ Existing `Ctrl+↑` / `Ctrl+↓` for octave nudge is unchanged.
 
 ### 2.2 Transpose
 
-A transpose operation that shifts selected notes by a **specified interval** — as opposed to one-step-at-a-time arrow keys. Triggered by a small dialog or popover.
+A transpose operation that shifts selected notes by a **specified interval** — as opposed to one-step-at-a-time arrow keys.
 
-**Trigger:** `Shift+T` (or a toolbar button labelled "Transpose…") when notes are selected in select mode.
+**Trigger:** `Shift+T` when notes are selected in select mode switches to the Transpose tab of the selection context menu.
 
-**UI:** A compact popover with:
-- Direction: Up / Down radio
-- Amount: semitones (numeric input, 1–24) **OR** named interval dropdown (m2, M2, m3, M3, P4, tritone, P5, m6, M6, m7, M7, P8)
-- [Transpose] button
+**UI:** The **Transpose** tab of the selection context menu contains:
+- Direction: Up / Down toggle buttons
+- Named interval buttons (m2, M2, m3, M3, P4, Tritone, P5, m6, M6, m7, M7, P8)
+- Semitones numeric input (1–24, synced with interval selection)
+- [Apply] button (also triggered by Enter in the semitones field)
 
 **Command:** `TRANSPOSE_NOTES` — takes `partId`, `staffId`, and `{ noteId, measureId, voiceId }[]` array plus `semitones: number` (negative = down).
-
-> **⚠️ TBD — See Q3:** Is a dialog right, or should Transpose just mean "move by a semitone" with a single shortcut key, distinct from the diatonic arrow movement?
 
 ### 2.3 Triplets
 

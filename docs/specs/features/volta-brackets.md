@@ -7,7 +7,7 @@ Volta brackets (first/second endings) allow a repeated section to be played diff
 ## User workflow
 
 1. In **Select** mode, click a note then shift-click a note in a later measure to select a range spanning those measures.
-2. The selection context menu shows a **Volta** row: buttons **1 · 2 · 3**.
+2. The selection context menu's **Volta** tab shows buttons **1 · 2 · 3**.
 3. Clicking a number applies a volta bracket covering the selected measure range with that ending number.
 4. Clicking the same number again removes the volta.
 

@@ -141,7 +141,7 @@ A button is shown **highlighted** (blue background, white text) when **all** sel
 
 ### 4.4 Layout
 
-Articulation buttons form a second row (or a visually separated group) below the existing Tie / Slur / Transpose buttons to avoid crowding.
+Articulation buttons appear in the **Articulations** tab of the selection context menu, below the header row (Tie / Slur / hairpin / tuplet buttons). Dynamics appear as a sub-row within the same tab.
 
 ---
 

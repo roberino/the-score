@@ -49,7 +49,6 @@ import { DirectivePicker } from './DirectivePicker'
 import { MidiEventPicker } from './MidiEventPicker'
 import { PedalMarkPicker } from './PedalMarkPicker'
 import { VirtualKeyboard } from './VirtualKeyboard'
-import { TransposeDialog } from './TransposeDialog'
 import { useMidiInput } from '../hooks/useMidiInput'
 import type { NoteInput } from '../services/midiService'
 import { TextBoxLayer, makeTextBox } from './TextBoxLayer'
@@ -531,7 +530,9 @@ export function ScoreCanvas(): JSX.Element {
   const [pedalMarkPickerState, setPedalMarkPickerState] = useState<PedalMarkPickerState | null>(null)
   const [editingHeading, setEditingHeading] = useState<HeadingFieldBound | null>(null)
   const [slurPendingId, setSlurPendingId] = useState<string | null>(null)
-  const [transposeDialogOpen, setTransposeDialogOpen] = useState(false)
+  const [contextMenuTab, setContextMenuTab] = useState<'articulations' | 'volta' | 'transpose'>('articulations')
+  const [transposeDir, setTransposeDir]     = useState<'up' | 'down'>('up')
+  const [transposeAmt, setTransposeAmt]     = useState(1)
 
   const {
     score, zoom, inputMode,
@@ -1681,10 +1682,9 @@ export function ScoreCanvas(): JSX.Element {
 
       const mod = e.metaKey || e.ctrlKey
 
-      // Escape → select mode + cancel pending slur + close transpose dialog + deselect measure
+      // Escape → select mode + cancel pending slur + deselect measure
       if (e.key === 'Escape') {
         setSlurPendingId(null)
-        setTransposeDialogOpen(false)
         setInputMode('select')
         setSelectedMeasure(null)
         return
@@ -1716,9 +1716,9 @@ export function ScoreCanvas(): JSX.Element {
       if (!mod && inputMode === 'select' && selectedNoteId && (e.key === 'l' || e.key === 'L')) {
         handleSlurKey(); return
       }
-      // Transpose dialog: Shift+T in select mode with notes selected
+      // Shift+T → switch to transpose tab (select mode, notes selected)
       if (!mod && e.shiftKey && e.key === 'T' && inputMode === 'select' && selectedNoteIds.length > 0) {
-        setTransposeDialogOpen(true); return
+        setContextMenuTab('transpose'); return
       }
 
       // Arrow keys in select mode: left/right navigate, up/down transpose
@@ -2854,13 +2854,6 @@ export function ScoreCanvas(): JSX.Element {
           onClose={() => setPedalMarkPickerState(null)}
         />
       )}
-      {transposeDialogOpen && (
-        <TransposeDialog
-          onTranspose={transposeSelectedNotes}
-          onClose={() => setTransposeDialogOpen(false)}
-        />
-      )}
-
       {selectedNoteIds.length > 0 && inputMode === 'select' && selectionMenuPos && (() => {
         // Resolve current dynamic for single-note selection
         let currentDynamic: DynamicLevel | undefined
@@ -2912,16 +2905,28 @@ export function ScoreCanvas(): JSX.Element {
             )
           : undefined
 
-        const menuW = 360
+        const menuW = 380
         const left = Math.min(selectionMenuPos.x - menuW / 2, window.innerWidth - menuW - 8)
-        const top  = Math.min(selectionMenuPos.y, window.innerHeight - 180)
+        const top  = Math.min(selectionMenuPos.y, window.innerHeight - 260)
         const btnBase: React.CSSProperties = {
           padding: '3px 8px', borderRadius: 3, border: '1px solid #555',
           background: '#2d2d2d', color: '#ccc', cursor: 'pointer', fontSize: 11,
         }
         const btnActive: React.CSSProperties = { ...btnBase, background: '#0e639c', color: '#fff', border: '1px solid #0e639c' }
-        const divider: React.CSSProperties = { borderTop: '1px solid #333', paddingTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap' as const, alignItems: 'center' }
         const DYNAMICS: DynamicLevel[] = ['pp', 'p', 'mp', 'mf', 'f', 'ff']
+        const NAMED_INTERVALS = [
+          { label: 'm2', semitones: 1 }, { label: 'M2', semitones: 2 },
+          { label: 'm3', semitones: 3 }, { label: 'M3', semitones: 4 },
+          { label: 'P4', semitones: 5 }, { label: 'Tritone', semitones: 6 },
+          { label: 'P5', semitones: 7 }, { label: 'm6', semitones: 8 },
+          { label: 'M6', semitones: 9 }, { label: 'm7', semitones: 10 },
+          { label: 'M7', semitones: 11 }, { label: 'P8', semitones: 12 },
+        ]
+        const tabs: Array<{ key: typeof contextMenuTab; label: string }> = [
+          { key: 'articulations', label: 'Articulations' },
+          { key: 'volta',         label: 'Volta' },
+          { key: 'transpose',     label: 'Transpose' },
+        ]
         return (
           <div style={{
             position: 'fixed', left, top,
@@ -2930,7 +2935,7 @@ export function ScoreCanvas(): JSX.Element {
             zIndex: 1000, boxShadow: '0 4px 16px rgba(0,0,0,0.5)', fontSize: 12, color: '#d4d4d4',
             minWidth: menuW,
           }}>
-            {/* Row 1: note / multi-select operations */}
+            {/* Header row: note / multi-select operations */}
             <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
               {selectedNoteIds.length > 1 && (
                 <span style={{ color: '#888', fontSize: 11, marginRight: 4 }}>
@@ -2964,59 +2969,127 @@ export function ScoreCanvas(): JSX.Element {
                   <button onClick={() => addHairpin('decrescendo')} title="Add decrescendo" style={btnBase}>dim</button>
                 </>
               )}
-              {selectedNoteIds.length === 3 && <button onClick={() => applyTuplet(3, 2)} title="Make triplet"     style={btnBase}>3</button>}
-              {selectedNoteIds.length === 5 && <button onClick={() => applyTuplet(5, 4)} title="Make quintuplet"  style={btnBase}>5</button>}
-              {selectedNoteIds.length === 6 && <button onClick={() => applyTuplet(6, 4)} title="Make sextuplet"   style={btnBase}>6</button>}
-              <button onClick={() => setTransposeDialogOpen(true)} title="Transpose (Shift+T)" style={btnBase}>Transpose…</button>
+              {selectedNoteIds.length === 3 && <button onClick={() => applyTuplet(3, 2)} title="Make triplet"    style={btnBase}>3</button>}
+              {selectedNoteIds.length === 5 && <button onClick={() => applyTuplet(5, 4)} title="Make quintuplet" style={btnBase}>5</button>}
+              {selectedNoteIds.length === 6 && <button onClick={() => applyTuplet(6, 4)} title="Make sextuplet"  style={btnBase}>6</button>}
             </div>
-            {/* Row 2: articulations */}
-            {nonRestLocations.length > 0 && (
-              <div style={divider}>
-                {ARTICULATION_BUTTONS.map(({ art, label, title }) => (
-                  <button key={art} onClick={() => handleArticulationClick(art)} title={title}
-                    style={{ ...( artActive[art] ? btnActive : btnBase ), fontFamily: 'serif', fontSize: 13 }}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-            {/* Row 3: dynamics (single note only) */}
-            {selectedNoteId && (
-              <div style={divider}>
-                {DYNAMICS.map(d => (
-                  <button key={d}
-                    onClick={() => setNoteDynamic(selectedNoteId, currentDynamic === d ? undefined : d)}
-                    title={currentDynamic === d ? `Remove ${d}` : `Set dynamic: ${d}`}
-                    style={{ ...(currentDynamic === d ? btnActive : btnBase), fontFamily: 'Edwin, serif', fontStyle: 'italic', fontWeight: 'bold', fontSize: 13 }}
-                  >
-                    {d}
-                  </button>
-                ))}
-              </div>
-            )}
-            {/* Row 4: volta brackets */}
-            {selHasMeasure && (
-              <div style={{ ...divider, alignItems: 'center' }}>
-                <span style={{ color: '#888', fontSize: 10, marginRight: 2 }}>Volta</span>
-                {([1, 2, 3] as const).map(n => {
-                  const isActive = existingVolta?.number === n
-                  return (
-                    <button key={n}
-                      onClick={() => {
-                        if (isActive && existingVolta) {
-                          removeVolta(existingVolta.id)
-                        } else {
-                          if (existingVolta) removeVolta(existingVolta.id)
-                          addVolta({ number: n, startMeasureIndex: selMinMeasure, endMeasureIndex: selMaxMeasure })
-                        }
-                      }}
-                      title={isActive ? `Remove ending ${n}` : `Add ending ${n} (measures ${selMinMeasure + 1}–${selMaxMeasure + 1})`}
-                      style={isActive ? btnActive : btnBase}
-                    >
-                      {n}.
+
+            {/* Tab bar */}
+            <div style={{ display: 'flex', borderBottom: '1px solid #333', marginTop: 2 }}>
+              {tabs.map(({ key, label }) => (
+                <button key={key} onClick={() => setContextMenuTab(key)} style={{
+                  padding: '4px 12px', border: 'none', background: 'none', cursor: 'pointer',
+                  fontSize: 11, color: contextMenuTab === key ? '#d4d4d4' : '#666',
+                  borderBottom: contextMenuTab === key ? '2px solid #0e639c' : '2px solid transparent',
+                  marginBottom: -1,
+                }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* Articulations tab */}
+            {contextMenuTab === 'articulations' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 2 }}>
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' as const }}>
+                  {ARTICULATION_BUTTONS.map(({ art, label, title }) => (
+                    <button key={art} onClick={() => handleArticulationClick(art)} title={title}
+                      style={{ ...( artActive[art] ? btnActive : btnBase ), fontFamily: 'serif', fontSize: 13 }}>
+                      {label}
                     </button>
-                  )
-                })}
+                  ))}
+                  {ARTICULATION_BUTTONS.length === 0 && (
+                    <span style={{ color: '#555', fontSize: 11 }}>No notes selected</span>
+                  )}
+                </div>
+                {selectedNoteId && (
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' as const, paddingTop: 4, borderTop: '1px solid #2a2a2a' }}>
+                    {DYNAMICS.map(d => (
+                      <button key={d}
+                        onClick={() => setNoteDynamic(selectedNoteId, currentDynamic === d ? undefined : d)}
+                        title={currentDynamic === d ? `Remove ${d}` : `Set dynamic: ${d}`}
+                        style={{ ...(currentDynamic === d ? btnActive : btnBase), fontFamily: 'Edwin, serif', fontStyle: 'italic', fontWeight: 'bold', fontSize: 13 }}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Volta tab */}
+            {contextMenuTab === 'volta' && (
+              <div style={{ paddingTop: 2 }}>
+                {selHasMeasure ? (
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                    {([1, 2, 3] as const).map(n => {
+                      const isActive = existingVolta?.number === n
+                      return (
+                        <button key={n}
+                          onClick={() => {
+                            if (isActive && existingVolta) {
+                              removeVolta(existingVolta.id)
+                            } else {
+                              if (existingVolta) removeVolta(existingVolta.id)
+                              addVolta({ number: n, startMeasureIndex: selMinMeasure, endMeasureIndex: selMaxMeasure })
+                            }
+                          }}
+                          title={isActive ? `Remove ending ${n}` : `Add ending ${n} (measures ${selMinMeasure + 1}–${selMaxMeasure + 1})`}
+                          style={isActive ? btnActive : btnBase}
+                        >
+                          {n}.
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <span style={{ color: '#555', fontSize: 11 }}>Select a range of measures to apply a volta bracket</span>
+                )}
+              </div>
+            )}
+
+            {/* Transpose tab */}
+            {contextMenuTab === 'transpose' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 2 }}>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {(['up', 'down'] as const).map(d => (
+                    <button key={d} onClick={() => setTransposeDir(d)} style={{
+                      ...btnBase, flex: 1,
+                      ...(transposeDir === d ? { background: '#0e639c', color: '#fff', border: '1px solid #0e639c' } : {}),
+                    }}>
+                      {d === 'up' ? '↑ Up' : '↓ Down'}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 3 }}>
+                  {NAMED_INTERVALS.map(({ label, semitones }) => (
+                    <button key={label} onClick={() => setTransposeAmt(semitones)} style={{
+                      ...btnBase,
+                      ...(transposeAmt === semitones ? { background: '#0e639c', color: '#fff', border: '1px solid #0e639c' } : {}),
+                    }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ color: '#888', fontSize: 11 }}>Semitones:</span>
+                  <input
+                    type="number" min={1} max={24} value={transposeAmt}
+                    onChange={e => setTransposeAmt(Math.max(1, Math.min(24, Number(e.target.value))))}
+                    onKeyDown={e => { if (e.key === 'Enter') { transposeSelectedNotes(transposeDir === 'up' ? transposeAmt : -transposeAmt) } }}
+                    style={{
+                      width: 48, padding: '2px 4px', border: '1px solid #555', borderRadius: 3,
+                      background: '#2d2d2d', color: '#ccc', fontSize: 11, textAlign: 'center',
+                    }}
+                  />
+                  <button
+                    onClick={() => transposeSelectedNotes(transposeDir === 'up' ? transposeAmt : -transposeAmt)}
+                    style={{ ...btnActive, marginLeft: 'auto' }}
+                  >
+                    Apply
+                  </button>
+                </div>
               </div>
             )}
           </div>
