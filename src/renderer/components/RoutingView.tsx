@@ -55,6 +55,9 @@ export function RoutingView(): JSX.Element {
   const channelRowRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const [connectors, setConnectors] = useState<Map<string, ConnectorPos>>(new Map())
 
+  // Expandable instrument context menu
+  const [selectedPartId, setSelectedPartId] = useState<string | null>(null)
+
   // Manually added (empty) channels — ephemeral local state
   const [addedChannels, setAddedChannels] = useState<Set<number>>(new Set())
   const [addPickerOpen, setAddPickerOpen] = useState(false)
@@ -105,7 +108,7 @@ export function RoutingView(): JSX.Element {
 
   const depKey = `${deviceConnected ? midiOutputDeviceId : 'none'}|` +
     partsWithCh.map(p => `${p.part.id}:${p.effectiveChannel}`).join('|') + '|' +
-    [...addedChannels].sort().join(',')
+    [...addedChannels].sort().join(',') + '|' + (selectedPartId ?? '')
 
   useLayoutEffect(() => { measureRef.current() }, [depKey])
 
@@ -227,29 +230,87 @@ export function RoutingView(): JSX.Element {
           </div>
           {partsWithCh.map(({ part }) => {
             const isDragging = dragLine?.partId === part.id
+            const isExpanded = selectedPartId === part.id
+            const programOption = INSTRUMENTS.find(i => i.midiProgram === part.midiProgram)
             return (
-              <div
-                key={part.id}
-                ref={el => { if (el) partRowRefs.current.set(part.id, el); else partRowRefs.current.delete(part.id) }}
-                style={{ height: 52, display: 'flex', alignItems: 'center', padding: '0 14px 0 16px', gap: 10 }}
-              >
-                <span style={{ fontSize: 20, lineHeight: 1, flexShrink: 0 }}>
-                  {instrumentIcon(part.name, part.midiProgram)}
-                </span>
-                <span style={{ fontSize: 13, color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {part.name}
-                </span>
-                {/* Output connector — drag handle */}
+              <div key={part.id}>
+                {/* Main instrument row */}
                 <div
-                  title="Drag to reassign channel"
-                  onMouseDown={e => startDrag(e, part.id)}
-                  style={{
-                    width: 12, height: 12, borderRadius: '50%', flexShrink: 0,
-                    background: isDragging ? '#6ab8e8' : '#1a6fa0',
-                    border: `2px solid ${isDragging ? '#6ab8e8' : '#0e639c'}`,
-                    cursor: 'grab', boxSizing: 'border-box',
-                  }}
-                />
+                  ref={el => { if (el) partRowRefs.current.set(part.id, el); else partRowRefs.current.delete(part.id) }}
+                  onClick={() => setSelectedPartId(isExpanded ? null : part.id)}
+                  style={{ height: 52, display: 'flex', alignItems: 'center', padding: '0 14px 0 16px', gap: 10, cursor: 'pointer' }}
+                >
+                  <span style={{ fontSize: 20, lineHeight: 1, flexShrink: 0 }}>
+                    {instrumentIcon(part.name, part.midiProgram)}
+                  </span>
+                  <span style={{ fontSize: 13, color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {part.name}
+                  </span>
+                  {/* Expand chevron */}
+                  <span style={{ fontSize: 9, color: '#444', flexShrink: 0, marginRight: 4, transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
+                  {/* Output connector — drag handle */}
+                  <div
+                    title="Drag to reassign channel"
+                    onMouseDown={e => { e.stopPropagation(); startDrag(e, part.id) }}
+                    style={{
+                      width: 12, height: 12, borderRadius: '50%', flexShrink: 0,
+                      background: isDragging ? '#6ab8e8' : '#1a6fa0',
+                      border: `2px solid ${isDragging ? '#6ab8e8' : '#0e639c'}`,
+                      cursor: 'grab', boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+
+                {/* Expandable context panel */}
+                {isExpanded && (
+                  <div style={{ padding: '8px 16px 12px', background: '#252526', borderTop: '1px solid #2d2d2d', borderBottom: '1px solid #2d2d2d', display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+                    {/* Mute */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 11, color: '#666', width: 60 }}>Mute</span>
+                      <button
+                        onClick={() => dispatch({ type: 'SET_PART_METADATA', partId: part.id, muted: !part.muted })}
+                        style={{
+                          padding: '2px 10px', borderRadius: 3, fontSize: 11, cursor: 'pointer',
+                          border: '1px solid',
+                          borderColor: part.muted ? '#c06060' : '#3a3a3a',
+                          background:  part.muted ? 'rgba(192,96,96,0.15)' : 'none',
+                          color:       part.muted ? '#e07070' : '#666',
+                        }}
+                      >
+                        {part.muted ? 'Muted' : 'Mute'}
+                      </button>
+                    </div>
+
+                    {/* Volume */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 11, color: '#666', width: 60 }}>Volume</span>
+                      <input
+                        type="range" min={0} max={100} step={1}
+                        value={Math.round(part.volume * 100)}
+                        onChange={e => dispatch({ type: 'SET_PART_METADATA', partId: part.id, volume: Number(e.target.value) / 100 })}
+                        style={{ flex: 1, accentColor: '#0e639c', cursor: 'pointer' }}
+                      />
+                      <span style={{ fontSize: 11, color: '#555', width: 28, textAlign: 'right' }}>{Math.round(part.volume * 100)}</span>
+                    </div>
+
+                    {/* Program */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 11, color: '#666', width: 60 }}>Program</span>
+                      <select
+                        value={part.midiProgram}
+                        onChange={e => dispatch({ type: 'SET_PART_METADATA', partId: part.id, midiProgram: Number(e.target.value) })}
+                        style={{ flex: 1, background: '#1e1e1e', color: '#ccc', border: '1px solid #3a3a3a', borderRadius: 3, fontSize: 11, padding: '2px 4px', cursor: 'pointer' }}
+                      >
+                        {!programOption && <option value={part.midiProgram}>Program {part.midiProgram}</option>}
+                        {INSTRUMENTS.map(i => (
+                          <option key={i.id} value={i.midiProgram}>{i.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                  </div>
+                )}
               </div>
             )
           })}
