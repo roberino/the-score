@@ -28,9 +28,9 @@ The user should be able to configure channels from this view by moving a connect
 
 The midi device should also be configurable - this will be in addition to the simpler audio configuration in the menu (they should use the same implementation).
 
-Other things will be configurable in a future iteration but out of scope for now. Consider this in the design.
+**Instrument configuration**
 
-**Out of scope configuration for instruments**
+The follow controls should be presented in a expandable context menu when an instrument is selected:
 
 * Volume control
 * Mute button
