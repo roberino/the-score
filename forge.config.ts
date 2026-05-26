@@ -3,10 +3,10 @@ import type { ForgeConfig } from '@electron-forge/shared-types'
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    name: 'Notation App',
-    executableName: 'notation-app',
+    name: 'Volta',
+    executableName: 'volta',
     icon: './resources/icon',
-    appBundleId: 'com.yourname.notation-app',
+    appBundleId: 'com.yourname.volta',
     osxSign: {},
     osxNotarize: {
       tool: 'notarytool',
@@ -20,7 +20,7 @@ const config: ForgeConfig = {
     {
       // Windows installer
       name: '@electron-forge/maker-squirrel',
-      config: { name: 'notation_app' }
+      config: { name: 'volta' }
     },
     {
       // macOS .zip (for auto-update)

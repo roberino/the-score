@@ -7,7 +7,7 @@ export function buildAppMenu(win: BrowserWindow): Menu {
   const template: MenuItemConstructorOptions[] = [
     // macOS app menu
     ...(isMac ? [{
-      label: 'Notation App',
+      label: 'Volta',
       submenu: [
         { role: 'about' as const },
         { type: 'separator' as const },
@@ -111,7 +111,7 @@ export function buildAppMenu(win: BrowserWindow): Menu {
       submenu: [
         {
           label: 'Documentation',
-          click: () => shell.openExternal('https://github.com/yourname/notation-app#readme')
+          click: () => shell.openExternal('https://github.com/yourname/volta#readme')
         }
       ]
     }

@@ -1,4 +1,4 @@
-# Notation App
+# Volta
 
 Professional desktop music notation editor built with Electron, React, TypeScript, and VexFlow.
 

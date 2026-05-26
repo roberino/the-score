@@ -1132,7 +1132,7 @@ export function scoreToMusicXml(score: Score): string {
   if (m.arranger)  lines.push(`    <creator type="arranger">${esc(m.arranger)}</creator>`)
   if (m.copyright) lines.push(`    <rights>${esc(m.copyright)}</rights>`)
   lines.push('    <encoding>')
-  lines.push('      <software>Notation App</software>')
+  lines.push('      <software>Volta</software>')
   lines.push(`      <encoding-date>${new Date().toISOString().slice(0, 10)}</encoding-date>`)
   lines.push('    </encoding>')
   lines.push('  </identification>')

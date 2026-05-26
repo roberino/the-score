@@ -1,5 +1,5 @@
 {
-  "name": "notation-app",
+  "name": "volta",
   "version": "0.1.0",
   "description": "Professional desktop music notation editor",
   "main": "out/main/index.js",
