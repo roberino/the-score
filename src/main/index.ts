@@ -35,6 +35,11 @@ function createWindow(): BrowserWindow {
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  // Set dock icon in dev mode (production icon is handled by forge.config.ts)
+  if (process.platform === 'darwin' && process.env['ELECTRON_RENDERER_URL']) {
+    app.dock?.setIcon(join(app.getAppPath(), 'resources/icon.png'))
+  }
+
   const win = createWindow()
   Menu.setApplicationMenu(buildAppMenu(win))
 
