@@ -1354,29 +1354,34 @@ function drawSlursForStaff(
       ? Math.min(toStave.getYForLine(0) - 6, Math.min(...toYs) - 8)
       : Math.max(toStave.getYForLine(4) + 6, Math.max(...toYs) + 8)
 
-    const sameLine = fromStave === toStave
+    // Same visual row if stave Y positions match (each measure has its own Stave object,
+    // so fromStave === toStave only holds within a single measure; use Y to detect same row)
+    const sameRow = Math.abs(fromStave.getY() - toStave.getY()) < 2
 
     ctx2d.save()
     ctx2d.strokeStyle = '#111'
     ctx2d.lineWidth   = 1.5
 
-    if (sameLine) {
+    if (sameRow) {
+      // Single continuous arc across however many barlines on the same row.
+      // Cap arc height so long multi-bar slurs don't over-curve.
       const span = x2 - x1
-      const arc  = sign * Math.max(10, span * 0.12)
+      const arc  = sign * Math.min(30, Math.max(10, span * 0.08))
       const midX = (x1 + x2) / 2
+      const midY = (y1 + y2) / 2
       ctx2d.beginPath()
       ctx2d.moveTo(x1, y1)
-      ctx2d.quadraticCurveTo(midX, y1 + arc, x2, y2)
+      ctx2d.quadraticCurveTo(midX, midY + arc, x2, y2)
       ctx2d.stroke()
     } else {
-      // Split arc: source note → right edge of source stave
+      // Cross-row: arc from start note to right edge of its row, then
+      // arc from left edge of destination row to end note.
       const rightEdge = fromStave.getX() + fromStave.getWidth()
       const arc1 = sign * Math.max(10, (rightEdge - x1) * 0.15)
       ctx2d.beginPath()
       ctx2d.moveTo(x1, y1)
       ctx2d.quadraticCurveTo((x1 + rightEdge) / 2, y1 + arc1, rightEdge, y1)
       ctx2d.stroke()
-      // Left edge of dest stave → dest note
       const leftEdge = toStave.getX()
       const arc2 = sign * Math.max(10, (x2 - leftEdge) * 0.15)
       ctx2d.beginPath()
