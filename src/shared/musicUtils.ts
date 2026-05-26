@@ -502,8 +502,9 @@ export interface FlatScheduleEntry {
   event: NoteEvent
   mIdx: number
   startSec: number
-  playDurSec: number  // merged duration for tied notes; equals base duration otherwise
-  skip: boolean       // tied continuation — do not schedule sound for this event
+  playDurSec: number       // merged duration for tied notes; equals base duration otherwise
+  skip: boolean            // tied continuation — do not schedule sound for this event
+  legatoUntilSec: number | null  // non-null for slurred notes (not the last): release note here, not at startSec+playDurSec
 }
 
 // Builds a flat, time-ordered schedule of events for one staff voice,
@@ -537,7 +538,7 @@ export function buildFlatSchedule(
       let voiceT = measureStartT
       for (const event of voice.events) {
         const dur = eventToSeconds(event, bpm)
-        result.push({ event, mIdx, startSec: voiceT, playDurSec: dur, skip: false })
+        result.push({ event, mIdx, startSec: voiceT, playDurSec: dur, skip: false, legatoUntilSec: null })
         voiceT += dur
       }
     }
@@ -567,12 +568,12 @@ export function buildFlatSchedule(
     fe.playDurSec = merged
   }
 
-  // Legato pass: for each slur, extend notes within the span so they sustain
-  // until the next note begins rather than releasing early.
-  // Uses Math.max so we never shorten a note (e.g. a note already extended by a tie).
-  // Within each voice the schedule entries are sequential by time, so
-  // result[i+1].startSec > result[i].startSec for same-voice consecutive notes.
-  // Parallel-voice entries share the same startSec, so gap ≤ 0 → no change.
+  // Legato pass: for slurred notes (all except the endpoint), set legatoUntilSec so
+  // the engine can hold the note in sustain through the next note's attack rather
+  // than releasing early via triggerAttackRelease.
+  // 60 ms overlap ensures the release envelope overlaps the next note's attack phase.
+  // Parallel-voice entries share startSec, so gap ≤ 0 → skip (single-voice slurs only).
+  const LEGATO_OVERLAP_SEC = 0.06
   if (slurs?.length) {
     for (const slur of slurs) {
       const fromIdx = result.findIndex(fe => fe.event.id === slur.fromNoteId)
@@ -583,7 +584,7 @@ export function buildFlatSchedule(
       for (let i = lo; i < hi; i++) {
         if (result[i].skip) continue
         const gap = result[i + 1].startSec - result[i].startSec
-        if (gap > 0) result[i].playDurSec = Math.max(result[i].playDurSec, gap)
+        if (gap > 0) result[i].legatoUntilSec = result[i + 1].startSec + LEGATO_OVERLAP_SEC
       }
     }
   }

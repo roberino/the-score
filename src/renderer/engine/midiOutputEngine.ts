@@ -200,8 +200,11 @@ class MidiOutputEngine {
         }
 
         const { durFactor, velFactor } = articulationPlaybackMods(event)
-        const velocity  = Math.max(1, Math.min(127, Math.round(velocityFromDb(volDb) * velFactor * hairpinFactor)))
-        const noteOffMs = Math.max(50, playDurSec * durFactor * 1000 - 30)
+        const velocity       = Math.max(1, Math.min(127, Math.round(velocityFromDb(volDb) * velFactor * hairpinFactor)))
+        const { legatoUntilSec } = fe
+        // For legato notes: note-off at legatoUntilSec; otherwise shorten slightly for articulation gap
+        const noteOffSec     = legatoUntilSec ?? startSec + playDurSec * durFactor - 0.03
+        const noteOffRelMs   = Math.max(50, (noteOffSec - startSec) * 1000)
 
         if (event.type === 'note') {
           const n       = event as Note
@@ -209,7 +212,7 @@ class MidiOutputEngine {
           Tone.Transport.schedule((time) => {
             const ts = perfAudioOffset + time * 1000
             output.send([0x90 | channel, midiNum, velocity], ts)
-            output.send([0x80 | channel, midiNum, 0], ts + noteOffMs)
+            output.send([0x80 | channel, midiNum, 0], ts + noteOffRelMs)
           }, startSec)
         } else if (event.type === 'chord') {
           const midiNums = (event as Chord).pitches.map(
@@ -219,7 +222,7 @@ class MidiOutputEngine {
             const ts = perfAudioOffset + time * 1000
             midiNums.forEach(n => {
               output.send([0x90 | channel, n, velocity], ts)
-              output.send([0x80 | channel, n, 0], ts + noteOffMs)
+              output.send([0x80 | channel, n, 0], ts + noteOffRelMs)
             })
           }, startSec)
         }

@@ -116,33 +116,35 @@ export async function playScore(
       }
 
       const { durFactor, volDbBonus } = articulationPlaybackMods(event)
-      const effectiveDur = playDurSec * durFactor
-      const effectiveDb  = volDb + volDbBonus + hairpinDb
+      const effectiveDur  = playDurSec * durFactor
+      const effectiveDb   = volDb + volDbBonus + hairpinDb
+      const { legatoUntilSec } = fe
+      const envelope = isPizz
+        ? { attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.1 }
+        : { attack: 0.005, decay: 0.1, sustain: 0.7, release: 0.1 }
 
       if (event.type === 'note') {
-        const n   = event as Note
-        const hz  = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
-        const db  = effectiveDb
-        const plucked = isPizz
+        const n  = event as Note
+        const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
         Tone.Transport.schedule((time) => {
-          synth.set({ envelope: plucked
-            ? { attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.1 }
-            : { attack: 0.005, decay: 0.1, sustain: 0.7, release: 0.1 } })
-          synth.volume.value = db
-          synth.triggerAttackRelease(hz, effectiveDur, time)
+          synth.set({ envelope })
+          synth.volume.value = effectiveDb
+          synth.triggerAttack(hz, time)
         }, startSec)
+        Tone.Transport.schedule((time) => { synth.triggerRelease(hz, time) },
+          legatoUntilSec ?? startSec + effectiveDur)
       } else if (event.type === 'chord') {
         const c     = event as Chord
         const freqs = c.pitches.map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
-        const db    = effectiveDb
-        const plucked = isPizz
         Tone.Transport.schedule((time) => {
-          synth.set({ envelope: plucked
-            ? { attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.1 }
-            : { attack: 0.005, decay: 0.1, sustain: 0.7, release: 0.1 } })
-          synth.volume.value = db
-          freqs.forEach(hz => synth.triggerAttackRelease(hz, effectiveDur, time))
+          synth.set({ envelope })
+          synth.volume.value = effectiveDb
+          freqs.forEach(hz => synth.triggerAttack(hz, time))
         }, startSec)
+        const relTime = legatoUntilSec ?? startSec + effectiveDur
+        freqs.forEach(hz =>
+          Tone.Transport.schedule((time) => { synth.triggerRelease(hz, time) }, relTime)
+        )
       }
     }
 

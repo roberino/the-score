@@ -103,23 +103,30 @@ export async function playScoreWithSampler(
       }
 
       const { durFactor, volDbBonus } = articulationPlaybackMods(event)
-      const effectiveDur = isPizz ? Math.min(playDurSec * durFactor, 0.3) : playDurSec * durFactor
-      const effectiveDb  = volDb + volDbBonus
+      const effectiveDur  = isPizz ? Math.min(playDurSec * durFactor, 0.3) : playDurSec * durFactor
+      const effectiveDb   = volDb + volDbBonus
+      const { legatoUntilSec } = fe
 
       if (event.type === 'note') {
         const n  = event as Note
         const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
         Tone.Transport.schedule((time) => {
           sampler.volume.value = effectiveDb
-          sampler.triggerAttackRelease(hz, effectiveDur, time)
+          sampler.triggerAttack(hz, time)
         }, startSec)
+        Tone.Transport.schedule((time) => { sampler.triggerRelease(hz, time) },
+          legatoUntilSec ?? startSec + effectiveDur)
       } else if (event.type === 'chord') {
         const freqs = (event as unknown as Chord).pitches
           .map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
         Tone.Transport.schedule((time) => {
           sampler.volume.value = effectiveDb
-          freqs.forEach(hz => sampler.triggerAttackRelease(hz, effectiveDur, time))
+          freqs.forEach(hz => sampler.triggerAttack(hz, time))
         }, startSec)
+        const relTime = legatoUntilSec ?? startSec + effectiveDur
+        freqs.forEach(hz =>
+          Tone.Transport.schedule((time) => { sampler.triggerRelease(hz, time) }, relTime)
+        )
       }
     }
 
