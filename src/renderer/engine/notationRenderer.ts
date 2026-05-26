@@ -753,7 +753,7 @@ function renderFromLayouts(
 
   for (const part of score.parts) {
     for (const staff of part.staves) {
-      drawTiesForStaff(ctx, staff, staveNoteMap)
+      drawTiesForStaff(ctx, staff, staveNoteMap, eventStaveMap)
       if (nativeCtx) {
         drawSlursForStaff(nativeCtx, staff, staveNoteMap, eventStaveMap)
         drawHairpinsForStaff(nativeCtx, staff, staveNoteMap, eventStaveMap)
@@ -1263,13 +1263,16 @@ function renderMeasure(
 }
 
 // ── Tie rendering ─────────────────────────────────────────────────────────────
-// Uses VexFlow StaveTie; null firstNote/lastNote produces partial arcs at
-// measure boundaries for cross-measure ties.
+// Uses VexFlow StaveTie. When source and destination notes sit on the same
+// visual row (matching stave Y), a single StaveTie spans the barline so the
+// arc is continuous. Split partial arcs are only used when the tie crosses
+// onto a different row.
 
 function drawTiesForStaff(
   ctx: RenderContext,
   staff: Staff,
   staveNoteMap: Map<string, StaveNote>,
+  eventStaveMap: Map<string, Stave>,
 ): void {
   for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
     const measure = staff.measures[mIdx]
@@ -1288,13 +1291,8 @@ function drawTiesForStaff(
 
         // Find the next note in the same voice: rest of this measure, then next measure
         let destNote: Note | null = null
-        let inSameMeasure = false
         for (let j = eIdx + 1; j < events.length; j++) {
-          if (events[j].type === 'note') {
-            destNote = events[j] as Note
-            inSameMeasure = true
-            break
-          }
+          if (events[j].type === 'note') { destNote = events[j] as Note; break }
         }
         if (!destNote && mIdx + 1 < staff.measures.length) {
           for (const e of staff.measures[mIdx + 1].voices[vIdx]?.events ?? []) {
@@ -1304,7 +1302,11 @@ function drawTiesForStaff(
 
         const dstSN = destNote ? staveNoteMap.get(destNote.id) ?? null : null
 
-        if (inSameMeasure && dstSN) {
+        const srcStave = eventStaveMap.get(note.id)
+        const dstStave = destNote ? eventStaveMap.get(destNote.id) : undefined
+        const sameRow  = srcStave && dstStave && Math.abs(srcStave.getY() - dstStave.getY()) < 2
+
+        if (sameRow && dstSN) {
           new StaveTie({ firstNote: srcSN, lastNote: dstSN, firstIndexes: [0], lastIndexes: [0] })
             .setContext(ctx).draw()
         } else if (dstSN) {
