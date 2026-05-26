@@ -407,15 +407,22 @@ export const useAppStore = create<AppState>()(
         if (tempoStaff) {
           const sequence = buildPlaybackSequence(tempoStaff.measures, score.voltas ?? [])
           const timeline = buildMeasureTimeline(tempoStaff, sequence, tempoStaff, score.tempo ?? 120, score.timeSignature)
-          for (let mIdx = 0; mIdx < tempoStaff.measures.length; mIdx++) {
-            if (tempoStaff.measures[mIdx].id !== cursorMeasureId) continue
+          // Cursor can be on any part's staff, so search all staves for the measure index
+          let mIdx = -1
+          outer: for (const part of score.parts) {
+            for (const staff of part.staves) {
+              const idx = staff.measures.findIndex(m => m.id === cursorMeasureId)
+              if (idx !== -1) { mIdx = idx; break outer }
+            }
+          }
+          if (mIdx !== -1) {
             const entry = timeline.find(e => e.mIdx === mIdx)
-            if (!entry) break
-            const timeSig = resolveTimeSig(tempoStaff.measures, mIdx, score.timeSignature)
-            const capacity = measureCapacityUnits(timeSig)
-            const fraction = capacity > 0 ? cursorBeatPosition / capacity : 0
-            resumeFrom = entry.startSec + fraction * entry.durationSec
-            break
+            if (entry) {
+              const timeSig = resolveTimeSig(tempoStaff.measures, mIdx, score.timeSignature)
+              const capacity = measureCapacityUnits(timeSig)
+              const fraction = capacity > 0 ? cursorBeatPosition / capacity : 0
+              resumeFrom = entry.startSec + fraction * entry.durationSec
+            }
           }
         }
       } else if (playbackMode === 'beginning') {
