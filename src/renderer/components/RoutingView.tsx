@@ -55,6 +55,10 @@ export function RoutingView(): JSX.Element {
   const channelRowRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const [connectors, setConnectors] = useState<Map<string, ConnectorPos>>(new Map())
 
+  // Manually added (empty) channels — ephemeral local state
+  const [addedChannels, setAddedChannels] = useState<Set<number>>(new Set())
+  const [addPickerOpen, setAddPickerOpen] = useState(false)
+
   // Drag state
   const [dragLine, setDragLine]         = useState<DragLine | null>(null)
   const [hoveredChannel, setHoveredCh] = useState<number | null>(null)
@@ -73,7 +77,7 @@ export function RoutingView(): JSX.Element {
     part,
     effectiveChannel: part.midiChannel ?? (i + 1),
   }))
-  const channelsInUse = [...new Set(partsWithCh.map(p => p.effectiveChannel))].sort((a, b) => a - b)
+  const channelsInUse = [...new Set([...partsWithCh.map(p => p.effectiveChannel), ...addedChannels])].sort((a, b) => a - b)
   const deviceConnected = !!midiOutputDeviceId && audioMode === 'midi-out'
 
   // ── Position measurement ───────────────────────────────────────────────────
@@ -100,7 +104,8 @@ export function RoutingView(): JSX.Element {
   }
 
   const depKey = `${deviceConnected ? midiOutputDeviceId : 'none'}|` +
-    partsWithCh.map(p => `${p.part.id}:${p.effectiveChannel}`).join('|')
+    partsWithCh.map(p => `${p.part.id}:${p.effectiveChannel}`).join('|') + '|' +
+    [...addedChannels].sort().join(',')
 
   useLayoutEffect(() => { measureRef.current() }, [depKey])
 
@@ -127,6 +132,8 @@ export function RoutingView(): JSX.Element {
       const channel = hoveredChRef.current
       if (partId && channel !== null) {
         dispatch({ type: 'SET_PART_METADATA', partId, midiChannel: channel })
+        // Channel now has a part assigned — remove from manually-added set
+        setAddedChannels(prev => { const next = new Set(prev); next.delete(channel); return next })
       }
       draggingPartRef.current = null
       setDragLine(null)
@@ -287,11 +294,57 @@ export function RoutingView(): JSX.Element {
         <div style={{ width: 180, marginLeft: 'auto', borderLeft: '1px solid #2d2d2d', flexShrink: 0, paddingTop: 20 }}>
           {deviceConnected ? (
             <>
-              <div style={{ padding: '0 16px 10px', fontSize: 10, color: '#4a4a4a', textTransform: 'uppercase', letterSpacing: 0.8 }}>
-                Channels
+              {/* Header row: label + add button */}
+              <div style={{ padding: '0 16px 10px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 10, color: '#4a4a4a', textTransform: 'uppercase', letterSpacing: 0.8, flex: 1 }}>
+                  Channels
+                </span>
+                <div style={{ position: 'relative' }}>
+                  <button
+                    title={channelsInUse.length >= 16 ? 'All 16 channels in use' : 'Add channel'}
+                    disabled={channelsInUse.length >= 16}
+                    onClick={() => setAddPickerOpen(o => !o)}
+                    style={{
+                      padding: '1px 6px', borderRadius: 3, fontSize: 14, lineHeight: 1, cursor: channelsInUse.length >= 16 ? 'default' : 'pointer',
+                      border: '1px solid #3a3a3a', background: 'none',
+                      color: channelsInUse.length >= 16 ? '#333' : '#666',
+                    }}
+                  >
+                    +
+                  </button>
+                  {addPickerOpen && (
+                    <select
+                      size={1}
+                      autoFocus
+                      onBlur={() => setAddPickerOpen(false)}
+                      onChange={e => {
+                        const ch = Number(e.target.value)
+                        if (ch) {
+                          setAddedChannels(prev => new Set([...prev, ch]))
+                          setAddPickerOpen(false)
+                        }
+                      }}
+                      style={{
+                        position: 'absolute', right: 0, top: '100%', marginTop: 2, zIndex: 10,
+                        background: '#252526', color: '#ccc', border: '1px solid #444',
+                        borderRadius: 3, fontSize: 12, padding: '2px 0', minWidth: 80,
+                      }}
+                      defaultValue=""
+                    >
+                      <option value="" disabled>Ch…</option>
+                      {Array.from({ length: 16 }, (_, i) => i + 1)
+                        .filter(n => !channelsInUse.includes(n))
+                        .map(n => (
+                          <option key={n} value={n}>Ch {n}</option>
+                        ))}
+                    </select>
+                  )}
+                </div>
               </div>
               {channelsInUse.map(ch => {
-                const isTarget = hoveredChannel === ch && !!dragLine
+                const isTarget  = hoveredChannel === ch && !!dragLine
+                const hasPartsAssigned = partsWithCh.some(p => p.effectiveChannel === ch)
+                const dimmed = !hasPartsAssigned
                 return (
                   <div
                     key={ch}
@@ -302,6 +355,7 @@ export function RoutingView(): JSX.Element {
                       height: 52, display: 'flex', alignItems: 'center', padding: '0 16px', gap: 10,
                       background: isTarget ? 'rgba(106,184,232,0.1)' : 'transparent',
                       transition: 'background 0.1s',
+                      opacity: dimmed && !isTarget ? 0.35 : 1,
                     }}
                   >
                     {/* Input connector dot */}

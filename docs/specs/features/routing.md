@@ -35,3 +35,17 @@ Other things will be configurable in a future iteration but out of scope for now
 * Volume control
 * Mute button
 * Program name
+
+## 4. Adding a channel
+
+The channels panel contains an "Add channel" button so the user can introduce a new channel row before dragging a part to it.
+
+**Behaviour**
+
+* The button appears in the channels panel header, alongside the "Channels" label.
+* Clicking the button opens a small inline picker (a `<select>` or equivalent) listing all MIDI channel numbers (1–16) that are not already displayed in the panel.
+* Selecting a number from the picker immediately adds that channel as a new row in the channel list.
+* The button is disabled when all 16 channels are already displayed (either because parts are using them or because they were manually added).
+* A channel added this way that has no parts assigned to it is **ephemeral** — it exists only in local component state and is not persisted. Navigating away from the routing view discards any unassigned added channels.
+* An empty (unassigned) channel row is visually distinguished from connected channels: the connector dot and label are rendered at reduced opacity to signal that nothing is routed to it yet.
+* Parts can be dragged to an added empty channel exactly as they can to any existing channel.

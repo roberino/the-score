@@ -1,4 +1,4 @@
-# Notation App — Agent Instructions
+# Volta — Agent Instructions
 
 ## Documentation conventions
 
