@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { Toolbar } from './Toolbar'
 import { ScoreCanvas } from './ScoreCanvas'
+import { RoutingView } from './RoutingView'
 import { StatusBar } from './StatusBar'
 import { PartsPanel } from './PartsPanel'
 import type { Score } from '@shared/score'
@@ -10,10 +11,18 @@ import { loadSampler } from '../engine/samplerEngine'
 import { exportScorePdf } from '../engine/pdfExporter'
 import { scoreToMusicXml, musicxmlToScore } from '../engine/musicxmlEngine'
 
+type AppView = 'score' | 'routing'
+
+const TAB_LABELS: Record<AppView, string> = {
+  score:   'Score',
+  routing: 'Routing',
+}
+
 export function App(): JSX.Element {
   const { undo, redo, newScore, loadScore, saveScore, saveScoreAs, setZoom, zoom,
           isPlaying, startPlayback, stopPlayback, inputMode } = useAppStore()
   const [partsPanelOpen, setPartsPanelOpen] = useState(false)
+  const [activeView, setActiveView] = useState<AppView>('score')
 
   // Prefetch Salamander Grand Piano samples in the background
   useEffect(() => { loadSampler() }, [])
@@ -119,10 +128,32 @@ export function App(): JSX.Element {
       overflow: 'hidden'
     }}>
       <Toolbar onTogglePartsPanel={() => setPartsPanelOpen(x => !x)} partsPanelOpen={partsPanelOpen} />
+
+      {/* View tabs */}
+      <div style={{ display: 'flex', background: '#252526', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
+        {(Object.keys(TAB_LABELS) as AppView[]).map(view => (
+          <button
+            key={view}
+            onClick={() => setActiveView(view)}
+            style={{
+              padding: '6px 18px',
+              background: 'none',
+              border: 'none',
+              borderBottom: activeView === view ? '2px solid #0e639c' : '2px solid transparent',
+              color: activeView === view ? '#d4d4d4' : '#666',
+              fontSize: 12,
+              cursor: 'pointer',
+            }}
+          >
+            {TAB_LABELS[view]}
+          </button>
+        ))}
+      </div>
+
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {partsPanelOpen && <PartsPanel onClose={() => setPartsPanelOpen(false)} />}
-        <main style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
-          <ScoreCanvas />
+        {activeView === 'score' && partsPanelOpen && <PartsPanel onClose={() => setPartsPanelOpen(false)} />}
+        <main style={{ flex: 1, overflow: 'auto', padding: activeView === 'score' ? '24px' : '0' }}>
+          {activeView === 'score'   ? <ScoreCanvas /> : <RoutingView />}
         </main>
       </div>
       <StatusBar />
