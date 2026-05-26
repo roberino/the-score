@@ -4,10 +4,12 @@ import { midiOutputEngine, type MidiOutputInfo } from '../engine/midiOutputEngin
 import { INSTRUMENTS, type InstrumentFamily } from '@shared/instruments'
 
 // ── Instrument icons ──────────────────────────────────────────────────────────
-// Emoji placeholders — replace with per-instrument SVGs from
-// src/renderer/assets/instruments/ (sourced from Wikimedia Commons)
+// SVG assets sourced from Wikimedia Commons, stored in assets/instruments/.
+// Instruments without a matching SVG file fall back to family emoji.
 
-const FAMILY_ICONS: Record<InstrumentFamily, string> = {
+const svgAssets = import.meta.glob('../assets/instruments/*.svg', { eager: true, query: '?url', import: 'default' }) as Record<string, string>
+
+const FAMILY_EMOJI: Record<InstrumentFamily, string> = {
   strings:    '🎻',
   woodwinds:  '🎷',
   brass:      '🎺',
@@ -16,19 +18,27 @@ const FAMILY_ICONS: Record<InstrumentFamily, string> = {
   voices:     '🎤',
 }
 
-function instrumentIcon(partName: string, midiProgram: number): string {
+/** Returns { type: 'svg', url } or { type: 'emoji', char }. */
+function resolveIcon(partName: string, midiProgram: number): { type: 'svg'; url: string } | { type: 'emoji'; char: string } {
   const lower = partName.toLowerCase()
   const inst  = INSTRUMENTS.find(i =>
     lower.includes(i.name.toLowerCase()) || i.name.toLowerCase().includes(lower)
   )
-  if (inst) return FAMILY_ICONS[inst.family]
-  if (midiProgram <=  7) return '🎹'
-  if (midiProgram <= 15) return '🎹'
-  if (midiProgram <= 31) return '🎸'
-  if (midiProgram <= 47) return '🎻'
-  if (midiProgram <= 63) return '🎺'
-  if (midiProgram <= 79) return '🎷'
-  return '🎵'
+  if (inst) {
+    const key = `../assets/instruments/${inst.icon}`
+    const url = svgAssets[key]
+    if (url) return { type: 'svg', url }
+    return { type: 'emoji', char: FAMILY_EMOJI[inst.family] }
+  }
+  // MIDI program fallback when instrument not in catalogue
+  const emoji =
+    midiProgram <=  7 ? '🎹' :
+    midiProgram <= 15 ? '🎹' :
+    midiProgram <= 31 ? '🎸' :
+    midiProgram <= 47 ? '🎻' :
+    midiProgram <= 63 ? '🎺' :
+    midiProgram <= 79 ? '🎷' : '🎵'
+  return { type: 'emoji', char: emoji }
 }
 
 // ── Connector geometry ────────────────────────────────────────────────────────
@@ -232,6 +242,7 @@ export function RoutingView(): JSX.Element {
             const isDragging = dragLine?.partId === part.id
             const isExpanded = selectedPartId === part.id
             const programOption = INSTRUMENTS.find(i => i.midiProgram === part.midiProgram)
+            const icon = resolveIcon(part.name, part.midiProgram)
             return (
               <div key={part.id}>
                 {/* Main instrument row */}
@@ -240,9 +251,10 @@ export function RoutingView(): JSX.Element {
                   onClick={() => setSelectedPartId(isExpanded ? null : part.id)}
                   style={{ height: 52, display: 'flex', alignItems: 'center', padding: '0 14px 0 16px', gap: 10, cursor: 'pointer' }}
                 >
-                  <span style={{ fontSize: 20, lineHeight: 1, flexShrink: 0 }}>
-                    {instrumentIcon(part.name, part.midiProgram)}
-                  </span>
+                  {icon.type === 'svg'
+                    ? <img src={icon.url} alt={part.name} style={{ width: 24, height: 24, objectFit: 'contain', flexShrink: 0, filter: 'invert(0.85)' }} />
+                    : <span style={{ fontSize: 20, lineHeight: 1, flexShrink: 0 }}>{icon.char}</span>
+                  }
                   <span style={{ fontSize: 13, color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {part.name}
                   </span>

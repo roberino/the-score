@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 // Extends the Window interface so TypeScript knows about the API
 // exposed by the preload script via contextBridge.exposeInMainWorld.
 
