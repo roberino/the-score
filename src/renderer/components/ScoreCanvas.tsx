@@ -3,8 +3,10 @@ import { useAppStore } from '../store/appStore'
 import type { Command } from '@shared/commands'
 import * as Tone from 'tone'
 import {
-  renderScore,
   computeLayout,
+  computeSliceOffsets,
+  renderScoreMulti,
+  type CanvasSlice,
   DEFAULT_RENDER_OPTIONS,
   LABEL_MARGIN_X,
   HEADING_MARGIN_Y,
@@ -281,13 +283,11 @@ function getRenderOptions(zoom: number, showLabels: boolean) {
 }
 
 function canvasCoords(
-  event: React.MouseEvent<HTMLCanvasElement>,
-  canvas: HTMLCanvasElement
+  event: React.MouseEvent,
+  element: HTMLElement
 ): { x: number; y: number } {
-  // VexFlow calls ctx.scale(dpr, dpr) internally, so all its drawing coordinates
-  // are in CSS (logical) pixels. Click coordinates must stay in the same space.
-  // Do NOT multiply by canvas.width/rect.width — that converts to physical pixels.
-  const rect = canvas.getBoundingClientRect()
+  // VexFlow draws in CSS (logical) pixels. Keep click coordinates in the same space.
+  const rect = element.getBoundingClientRect()
   return {
     x: event.clientX - rect.left,
     y: event.clientY - rect.top,
@@ -509,7 +509,10 @@ const ARTICULATION_BUTTONS: { art: Articulation; label: string; title: string }[
 ]
 
 export function ScoreCanvas(): JSX.Element {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  // Container div that holds all canvas slices for multi-canvas rendering
+  const canvasAreaRef = useRef<HTMLDivElement>(null)
+  // Current slice metadata — kept in sync with the canvas elements in canvasAreaRef
+  const canvasSlicesRef = useRef<CanvasSlice[]>([])
   const notePositionsRef   = useRef(new Map<string, number>())
   const noteStartXRef      = useRef(new Map<string, number>())
   const layoutsRef         = useRef<MeasureLayout[]>([])
@@ -611,8 +614,8 @@ export function ScoreCanvas(): JSX.Element {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const canvasArea = canvasAreaRef.current
+    if (!canvasArea) return
     const options = getRenderOptions(zoom, score.showPartLabels)
     const timeSig = score.timeSignature
     const capacity = measureCapacityUnits(timeSig)
@@ -621,8 +624,38 @@ export function ScoreCanvas(): JSX.Element {
         ? { eventId: selectedNoteId, pitchIndex: selectedChordPitchIndex }
         : null
 
-    const result = renderScore(
+    const layouts = computeLayout(score, options)
+    const sliceOffsets = computeSliceOffsets(layouts, options)
+    const lastLayout = layouts[layouts.length - 1]
+    const totalHeight = lastLayout
+      ? lastLayout.staveY + options.staveHeight + options.marginY
+      : options.marginY + options.staveHeight
+
+    // Sync canvas element count to slice count
+    const existingCanvases = Array.from(canvasArea.childNodes)
+      .filter((n): n is HTMLCanvasElement => n instanceof HTMLCanvasElement)
+    while (existingCanvases.length > sliceOffsets.length) {
+      canvasArea.removeChild(existingCanvases.pop()!)
+    }
+    while (existingCanvases.length < sliceOffsets.length) {
+      const c = document.createElement('canvas')
+      c.style.display = 'block'
+      const firstNonCanvas = Array.from(canvasArea.childNodes)
+        .find((n): n is ChildNode => !(n instanceof HTMLCanvasElement))
+      if (firstNonCanvas) canvasArea.insertBefore(c, firstNonCanvas)
+      else canvasArea.appendChild(c)
+      existingCanvases.push(c)
+    }
+
+    const slices: CanvasSlice[] = existingCanvases.map((canvas, i) => ({
       canvas,
+      yOffset: sliceOffsets[i],
+      height: (sliceOffsets[i + 1] ?? totalHeight) - sliceOffsets[i],
+    }))
+    canvasSlicesRef.current = slices
+
+    const result = renderScoreMulti(
+      slices,
       score,
       options,
       inputMode === 'select' ? new Set(selectedNoteIds) : new Set(),
@@ -632,7 +665,8 @@ export function ScoreCanvas(): JSX.Element {
         : null,
       selectedMeasureId,
       lyricCursorNoteId,
-      chordPitchInfo
+      chordPitchInfo,
+      layouts,
     )
     notePositionsRef.current = result.notePositions
     noteStartXRef.current    = result.noteStartX
@@ -698,11 +732,12 @@ export function ScoreCanvas(): JSX.Element {
       cursor.style.display = 'block'
 
       // Auto-scroll: keep cursor in view vertically
-      const canvas = canvasRef.current
-      const scrollContainer = canvas?.parentElement?.parentElement
-      if (scrollContainer) {
-        const canvasOffsetTop = canvas!.parentElement!.offsetTop
-        const cursorAbsTop = canvasOffsetTop + topY
+      const canvasArea = canvasAreaRef.current
+      const scrollContainer = canvasArea?.closest<HTMLElement>('main')
+      if (scrollContainer && canvasArea) {
+        const areaRect = canvasArea.getBoundingClientRect()
+        const containerRect = scrollContainer.getBoundingClientRect()
+        const cursorAbsTop = areaRect.top - containerRect.top + scrollContainer.scrollTop + topY
         const { scrollTop, clientHeight } = scrollContainer
         const margin = 80
         if (cursorAbsTop < scrollTop + margin) {
@@ -747,8 +782,8 @@ export function ScoreCanvas(): JSX.Element {
           const noteWithDot = { ...note, dots } as Note
           const result = buildRestReplaceCommands(voiceEvents, atCursor.index, units, noteWithDot, part.id, staff.id, measure.id, existingVoice.id)
           if (!result) {
-            canvasRef.current?.classList.add('cursor-reject')
-            setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+            canvasAreaRef.current?.classList.add('cursor-reject')
+            setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
             return
           }
           dispatchBatch(result.cmds)
@@ -806,8 +841,8 @@ export function ScoreCanvas(): JSX.Element {
 
           const result = buildNoteInsertCommands(voiceEvents, atCursor.index, units, newEvent, part.id, staff.id, measure.id, existingVoice.id)
           if (!result) {
-            canvasRef.current?.classList.add('cursor-reject')
-            setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+            canvasAreaRef.current?.classList.add('cursor-reject')
+            setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
             return
           }
           dispatchBatch(result.cmds)
@@ -842,8 +877,8 @@ export function ScoreCanvas(): JSX.Element {
         }
 
         if (remainingUnits(voiceEvents, timeSig) < units) {
-          canvasRef.current?.classList.add('cursor-reject')
-          setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+          canvasAreaRef.current?.classList.add('cursor-reject')
+          setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
           return
         }
 
@@ -929,8 +964,8 @@ export function ScoreCanvas(): JSX.Element {
           const noteWithDot = { ...note, dots } as Note
           const result = buildRestReplaceCommands(voiceEvents, atCursor.index, units, noteWithDot, part.id, staff.id, measure.id, existingVoice.id)
           if (!result) {
-            canvasRef.current?.classList.add('cursor-reject')
-            setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+            canvasAreaRef.current?.classList.add('cursor-reject')
+            setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
             return
           }
           dispatchBatch(result.cmds)
@@ -987,8 +1022,8 @@ export function ScoreCanvas(): JSX.Element {
 
           const result = buildNoteInsertCommands(voiceEvents, atCursor.index, units, newEvent, part.id, staff.id, measure.id, existingVoice.id)
           if (!result) {
-            canvasRef.current?.classList.add('cursor-reject')
-            setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+            canvasAreaRef.current?.classList.add('cursor-reject')
+            setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
             return
           }
           dispatchBatch(result.cmds)
@@ -1022,8 +1057,8 @@ export function ScoreCanvas(): JSX.Element {
         }
 
         if (remainingUnits(voiceEvents, timeSig) < units) {
-          canvasRef.current?.classList.add('cursor-reject')
-          setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+          canvasAreaRef.current?.classList.add('cursor-reject')
+          setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
           return
         }
         const note        = createNote(noteName, octave, selectedDuration, accidental ?? null)
@@ -1087,8 +1122,8 @@ export function ScoreCanvas(): JSX.Element {
         const dots    = isDotted ? 1 : 0 as 0 | 1
         const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
         if (remainingUnits(voice.events, timeSig) < units) {
-          canvasRef.current?.classList.add('cursor-reject')
-          setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+          canvasAreaRef.current?.classList.add('cursor-reject')
+          setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
           return
         }
         const pitches: Pitch[] = inputs
@@ -1184,8 +1219,8 @@ export function ScoreCanvas(): JSX.Element {
           const restWithDot = { ...rest, dots } as typeof rest
           const result = buildRestReplaceCommands(voiceEvents, atCursor.index, units, restWithDot, part.id, staff.id, measure.id, existingVoice.id)
           if (!result) {
-            canvasRef.current?.classList.add('cursor-reject')
-            setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+            canvasAreaRef.current?.classList.add('cursor-reject')
+            setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
             return
           }
           dispatchBatch(result.cmds)
@@ -1203,8 +1238,8 @@ export function ScoreCanvas(): JSX.Element {
 
         // Append path (fallback when cursor is not on a rest)
         if (remainingUnits(voiceEvents, timeSig) < units) {
-          canvasRef.current?.classList.add('cursor-reject')
-          setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+          canvasAreaRef.current?.classList.add('cursor-reject')
+          setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
           return
         }
 
@@ -1259,8 +1294,8 @@ export function ScoreCanvas(): JSX.Element {
         // Total units the tuplet group occupies = normal * base duration units
         const totalUnits = normal * DURATION_UNITS[selectedDuration]
         if (remainingUnits(voice.events, timeSig) < totalUnits) {
-          canvasRef.current?.classList.add('cursor-reject')
-          setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+          canvasAreaRef.current?.classList.add('cursor-reject')
+          setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
           return
         }
         dispatch({ type: 'ADD_TUPLET', partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id, actual, normal, duration: selectedDuration })
@@ -1842,8 +1877,8 @@ export function ScoreCanvas(): JSX.Element {
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up) }
   }, [])
 
-  const handleCanvasMouseMove = (event: React.MouseEvent<HTMLCanvasElement>): void => {
-    const canvas = canvasRef.current
+  const handleCanvasMouseMove = (event: React.MouseEvent<HTMLDivElement>): void => {
+    const canvas = canvasAreaRef.current
     if (!canvas) return
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
 
@@ -1935,8 +1970,8 @@ export function ScoreCanvas(): JSX.Element {
 
   // ── Mouse click handler ─────────────────────────────────────────────────────
 
-  const handleCanvasClick = (event: React.MouseEvent<HTMLCanvasElement>): void => {
-    const canvas = canvasRef.current
+  const handleCanvasClick = (event: React.MouseEvent<HTMLDivElement>): void => {
+    const canvas = canvasAreaRef.current
     if (!canvas) return
 
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
@@ -2141,8 +2176,8 @@ export function ScoreCanvas(): JSX.Element {
                 }
                 const result = buildNoteInsertCommands(voiceEvents, i, units, newEvent, layout.partId, layout.staffId, layout.measureId, existingVoice.id)
                 if (!result) {
-                  canvasRef.current?.classList.add('cursor-reject')
-                  setTimeout(() => canvasRef.current?.classList.remove('cursor-reject'), 200)
+                  canvasAreaRef.current?.classList.add('cursor-reject')
+                  setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
                   return
                 }
                 dispatchBatch(result.cmds)
@@ -2568,9 +2603,9 @@ export function ScoreCanvas(): JSX.Element {
 
   // ── Double-click: create text box on empty space (select mode) ───────────────
 
-  const handleCanvasDblClick = useCallback((event: React.MouseEvent<HTMLCanvasElement>): void => {
+  const handleCanvasDblClick = useCallback((event: React.MouseEvent<HTMLDivElement>): void => {
     if (inputMode !== 'select') return
-    const canvas = canvasRef.current
+    const canvas = canvasAreaRef.current
     if (!canvas) return
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
     // Don't create a text box if we're in the heading area or on notation
@@ -2727,8 +2762,8 @@ export function ScoreCanvas(): JSX.Element {
         minWidth: '100%',
         position: 'relative',
       }}>
-        <canvas
-          ref={canvasRef}
+        <div
+          ref={canvasAreaRef}
           onClick={handleCanvasClick}
           onDoubleClick={handleCanvasDblClick}
           onMouseMove={handleCanvasMouseMove}

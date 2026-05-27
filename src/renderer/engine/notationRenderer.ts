@@ -545,6 +545,121 @@ export interface SelectedChordPitchInfo {
   pitchIndex: number
 }
 
+// ── Multi-canvas rendering ─────────────────────────────────────────────────────
+// VexFlow's canvas backend is hard-limited to 32767 physical pixels per dimension.
+// For tall scores this limit is hit even at DPR=1.  The solution is to split the
+// score across multiple stacked <canvas> elements — one per group of system rows.
+
+export interface CanvasSlice {
+  canvas: HTMLCanvasElement
+  yOffset: number   // absolute score Y where this canvas starts
+  height: number    // CSS pixel height of this canvas
+}
+
+/**
+ * Given a pre-computed layout, return the Y offsets at which new canvas slices
+ * should start so that no single slice exceeds the browser's canvas height limit.
+ * Returns [0] when the whole score fits in one canvas.
+ */
+export function computeSliceOffsets(
+  layouts: MeasureLayout[],
+  options: RenderOptions,
+): number[] {
+  if (!layouts.length) return [0]
+
+  const last = layouts[layouts.length - 1]
+  const totalHeight = last.staveY + options.staveHeight + options.marginY
+
+  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1
+  const maxSliceH = Math.floor(32767 / Math.max(1, dpr))
+  if (totalHeight <= maxSliceH) return [0]
+
+  // Identify where each system row starts.  Within a row, consecutive staveY
+  // values are spaced by exactly options.staveHeight; between rows the gap is
+  // larger (staveHeight + 40).  We use strict-greater to distinguish them.
+  const sortedYs = [...new Set(layouts.map(l => l.staveY))].sort((a, b) => a - b)
+  const rowStartYs: number[] = []
+  let prevY = -Infinity
+  for (const y of sortedYs) {
+    if (y - prevY > options.staveHeight) rowStartYs.push(y)
+    prevY = y
+  }
+
+  const offsets: number[] = [0]
+  let sliceStartY = 0
+  for (let i = 0; i < rowStartYs.length; i++) {
+    const rowEnd = i + 1 < rowStartYs.length ? rowStartYs[i + 1] : totalHeight
+    if (rowEnd - sliceStartY > maxSliceH) {
+      offsets.push(rowStartYs[i])
+      sliceStartY = rowStartYs[i]
+    }
+  }
+  return offsets
+}
+
+/**
+ * Render a score across one or more canvas slices.
+ * Each slice receives a Y-shifted subset of the layout so that no single canvas
+ * exceeds the browser's physical-pixel height limit.
+ *
+ * Pass `precomputedLayouts` (from a prior `computeLayout` call) to avoid
+ * recomputing the layout a second time.
+ */
+export function renderScoreMulti(
+  slices: readonly CanvasSlice[],
+  score: Score,
+  options: RenderOptions = DEFAULT_RENDER_OPTIONS,
+  selectedNoteIds: ReadonlySet<string> = new Set(),
+  cursor: RenderCursorOptions | null = null,
+  selectedMeasureId: string | null = null,
+  lyricCursorNoteId: string | null = null,
+  selectedChordPitchInfo: SelectedChordPitchInfo | null = null,
+  precomputedLayouts?: MeasureLayout[],
+): RenderScoreResult {
+  const notePositions = new Map<string, number>()
+  const noteStartX    = new Map<string, number>()
+
+  if (!score.parts[0] || !slices.length) return { notePositions, noteStartX, layouts: [] }
+
+  const layouts = precomputedLayouts ?? computeLayout(score, options)
+  const lastLayout   = layouts[layouts.length - 1]
+  const totalHeight  = lastLayout
+    ? lastLayout.staveY + options.staveHeight + options.marginY
+    : options.marginY + options.staveHeight
+
+  for (let si = 0; si < slices.length; si++) {
+    const slice      = slices[si]
+    const nextOffset = si + 1 < slices.length ? slices[si + 1].yOffset : totalHeight
+
+    // Shift layout Y coordinates to canvas-local space for this slice
+    const sliceLayouts = layouts
+      .filter(l => l.staveY >= slice.yOffset && l.staveY < nextOffset)
+      .map(l => ({ ...l, staveY: l.staveY - slice.yOffset, staveTopY: l.staveTopY - slice.yOffset }))
+
+    const renderer = new VexRenderer(slice.canvas, VexRenderer.Backends.CANVAS)
+    const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1
+    const effectiveDpr = Math.max(1, Math.min(dpr, Math.floor(32767 / slice.height)))
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(renderer as any).ctx.resize(options.canvasWidth, slice.height, effectiveDpr)
+    const ctx = renderer.getContext()
+    ctx.clear()
+
+    const lyricYMap = renderFromLayouts(
+      ctx, score, sliceLayouts, selectedNoteIds, notePositions, noteStartX, selectedChordPitchInfo,
+    )
+    if (si === 0) drawHeadings(ctx, score, options)
+
+    const nativeCtx = slice.canvas.getContext('2d')
+    if (nativeCtx) drawAllLyrics(nativeCtx, score, notePositions, sliceLayouts, lyricCursorNoteId, lyricYMap)
+    if (selectedMeasureId)    drawMeasureHighlight(slice.canvas, selectedMeasureId, sliceLayouts)
+    if (cursor?.cursorMeasureId) drawCursor(slice.canvas, cursor, sliceLayouts, score, notePositions, noteStartX)
+  }
+
+  return { notePositions, noteStartX, layouts }
+}
+
+// ── Single-canvas entry point (kept for backward compatibility) ────────────────
+
 export function renderScore(
   canvas: HTMLCanvasElement,
   score: Score,
@@ -555,42 +670,16 @@ export function renderScore(
   lyricCursorNoteId: string | null = null,
   selectedChordPitchInfo: SelectedChordPitchInfo | null = null
 ): RenderScoreResult {
-  const notePositions = new Map<string, number>()
-  const noteStartX    = new Map<string, number>()
-  const renderer = new VexRenderer(canvas, VexRenderer.Backends.CANVAS)
-
-  const firstPart = score.parts[0]
-  if (!firstPart) return { notePositions, noteStartX, layouts: [] }
-  const firstStaff = firstPart.staves[0]
-  if (!firstStaff) return { notePositions, noteStartX, layouts: [] }
-
   const layouts = computeLayout(score, options)
-
-  // Canvas height: bottom of last stave row + margin
   const lastLayout   = layouts[layouts.length - 1]
-  const canvasHeight = lastLayout
+  const totalHeight  = lastLayout
     ? lastLayout.staveY + options.staveHeight + options.marginY
     : options.marginY + options.staveHeight
-
-  renderer.resize(options.canvasWidth, canvasHeight)
-  const ctx = renderer.getContext()
-  ctx.clear()
-
-  const lyricYMap = renderFromLayouts(ctx, score, layouts, selectedNoteIds, notePositions, noteStartX, selectedChordPitchInfo)
-  drawHeadings(ctx, score, options)
-
-  const nativeCtx = canvas.getContext('2d')
-  if (nativeCtx) drawAllLyrics(nativeCtx, score, notePositions, layouts, lyricCursorNoteId, lyricYMap)
-
-  if (selectedMeasureId) {
-    drawMeasureHighlight(canvas, selectedMeasureId, layouts)
-  }
-
-  if (cursor?.cursorMeasureId) {
-    drawCursor(canvas, cursor, layouts, score, notePositions, noteStartX)
-  }
-
-  return { notePositions, noteStartX, layouts }
+  const slice: CanvasSlice = { canvas, yOffset: 0, height: totalHeight }
+  return renderScoreMulti(
+    [slice], score, options, selectedNoteIds, cursor,
+    selectedMeasureId, lyricCursorNoteId, selectedChordPitchInfo, layouts,
+  )
 }
 
 // ── Render all measures from precomputed layouts ──────────────────────────────

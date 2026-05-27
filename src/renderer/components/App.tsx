@@ -152,8 +152,10 @@ export function App(): JSX.Element {
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {activeView === 'score' && partsPanelOpen && <PartsPanel onClose={() => setPartsPanelOpen(false)} />}
-        <main style={{ flex: 1, overflow: 'auto', padding: activeView === 'score' ? '24px' : '0' }}>
-          {activeView === 'score'   ? <ScoreCanvas /> : <RoutingView />}
+        <main style={{ flex: 1, overflow: 'auto' }}>
+          <div style={{ padding: activeView === 'score' ? '24px' : '0' }}>
+            {activeView === 'score'   ? <ScoreCanvas /> : <RoutingView />}
+          </div>
         </main>
       </div>
       <StatusBar />
