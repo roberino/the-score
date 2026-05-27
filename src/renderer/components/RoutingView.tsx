@@ -188,6 +188,8 @@ export function RoutingView(): JSX.Element {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  const SEL_COLOUR = '#e0944a'   // amber — complementary to the blue connector accent
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#1e1e1e', color: '#d4d4d4', userSelect: 'none' }}>
 
@@ -249,26 +251,31 @@ export function RoutingView(): JSX.Element {
                 <div
                   ref={el => { if (el) partRowRefs.current.set(part.id, el); else partRowRefs.current.delete(part.id) }}
                   onClick={() => setSelectedPartId(isExpanded ? null : part.id)}
-                  style={{ height: 52, display: 'flex', alignItems: 'center', padding: '0 14px 0 16px', gap: 10, cursor: 'pointer' }}
+                  style={{
+                    height: 52, display: 'flex', alignItems: 'center', padding: '0 14px 0 14px', gap: 10, cursor: 'pointer',
+                    background: isExpanded ? `rgba(224,148,74,0.10)` : 'transparent',
+                    borderLeft: `2px solid ${isExpanded ? SEL_COLOUR : 'transparent'}`,
+                    transition: 'background 0.15s, border-color 0.15s',
+                  }}
                 >
                   {icon.type === 'svg'
-                    ? <img src={icon.url} alt={part.name} style={{ width: 24, height: 24, objectFit: 'contain', flexShrink: 0, filter: 'invert(0.85)' }} />
+                    ? <img src={icon.url} alt={part.name} style={{ width: 24, height: 24, objectFit: 'contain', flexShrink: 0, filter: isExpanded ? 'invert(0.85) sepia(0.4) saturate(2) hue-rotate(-20deg)' : 'invert(0.85)' }} />
                     : <span style={{ fontSize: 20, lineHeight: 1, flexShrink: 0 }}>{icon.char}</span>
                   }
-                  <span style={{ fontSize: 13, color: '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: 13, color: isExpanded ? '#e8c89a' : '#ccc', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 0.15s' }}>
                     {part.name}
                   </span>
                   {/* Expand chevron */}
-                  <span style={{ fontSize: 9, color: '#444', flexShrink: 0, marginRight: 4, transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
+                  <span style={{ fontSize: 9, color: isExpanded ? SEL_COLOUR : '#444', flexShrink: 0, marginRight: 4, transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s, color 0.15s' }}>▶</span>
                   {/* Output connector — drag handle */}
                   <div
                     title="Drag to reassign channel"
                     onMouseDown={e => { e.stopPropagation(); startDrag(e, part.id) }}
                     style={{
                       width: 12, height: 12, borderRadius: '50%', flexShrink: 0,
-                      background: isDragging ? '#6ab8e8' : '#1a6fa0',
-                      border: `2px solid ${isDragging ? '#6ab8e8' : '#0e639c'}`,
-                      cursor: 'grab', boxSizing: 'border-box',
+                      background: isDragging ? '#6ab8e8' : isExpanded ? SEL_COLOUR : '#1a6fa0',
+                      border: `2px solid ${isDragging ? '#6ab8e8' : isExpanded ? SEL_COLOUR : '#0e639c'}`,
+                      cursor: 'grab', boxSizing: 'border-box', transition: 'background 0.15s, border-color 0.15s',
                     }}
                   />
                 </div>
@@ -333,19 +340,21 @@ export function RoutingView(): JSX.Element {
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', overflow: 'visible' }}
         >
           {deviceConnected && Array.from(connectors.entries()).map(([partId, pos]) => {
-            const faded = dragLine?.partId === partId
+            const faded      = dragLine?.partId === partId
+            const isSelected = selectedPartId === partId
+            const colour     = isSelected ? SEL_COLOUR : '#0e639c'
             return (
               <g key={partId}>
                 <path
                   d={bezier(pos)}
                   fill="none"
-                  stroke="#0e639c"
-                  strokeWidth={2.5}
+                  stroke={colour}
+                  strokeWidth={isSelected ? 3 : 2.5}
                   strokeLinecap="round"
-                  opacity={faded ? 0.25 : 0.8}
+                  opacity={faded ? 0.25 : 0.85}
                 />
-                <circle cx={pos.x1} cy={pos.y1} r={4} fill="#0e639c" opacity={faded ? 0.25 : 0.9} />
-                <circle cx={pos.x2} cy={pos.y2} r={4} fill="#0e639c" opacity={faded ? 0.25 : 0.9} />
+                <circle cx={pos.x1} cy={pos.y1} r={4} fill={colour} opacity={faded ? 0.25 : 0.9} />
+                <circle cx={pos.x2} cy={pos.y2} r={4} fill={colour} opacity={faded ? 0.25 : 0.9} />
               </g>
             )
           })}
@@ -415,9 +424,12 @@ export function RoutingView(): JSX.Element {
                 </div>
               </div>
               {channelsInUse.map(ch => {
-                const isTarget  = hoveredChannel === ch && !!dragLine
+                const isTarget   = hoveredChannel === ch && !!dragLine
+                const isSelected = selectedPartId !== null && partsWithCh.some(p => p.part.id === selectedPartId && p.effectiveChannel === ch)
                 const hasPartsAssigned = partsWithCh.some(p => p.effectiveChannel === ch)
                 const dimmed = !hasPartsAssigned
+                const dotColour = isTarget ? '#6ab8e8' : isSelected ? SEL_COLOUR : '#1a6fa0'
+                const borderColour = isTarget ? '#6ab8e8' : isSelected ? SEL_COLOUR : '#0e639c'
                 return (
                   <div
                     key={ch}
@@ -425,21 +437,22 @@ export function RoutingView(): JSX.Element {
                     onMouseEnter={() => onChannelEnter(ch)}
                     onMouseLeave={onChannelLeave}
                     style={{
-                      height: 52, display: 'flex', alignItems: 'center', padding: '0 16px', gap: 10,
-                      background: isTarget ? 'rgba(106,184,232,0.1)' : 'transparent',
-                      transition: 'background 0.1s',
-                      opacity: dimmed && !isTarget ? 0.35 : 1,
+                      height: 52, display: 'flex', alignItems: 'center', padding: '0 14px 0 16px', gap: 10,
+                      background: isTarget ? 'rgba(106,184,232,0.1)' : isSelected ? 'rgba(224,148,74,0.10)' : 'transparent',
+                      borderRight: `2px solid ${isSelected ? SEL_COLOUR : 'transparent'}`,
+                      transition: 'background 0.15s, border-color 0.15s',
+                      opacity: dimmed && !isTarget && !isSelected ? 0.35 : 1,
                     }}
                   >
                     {/* Input connector dot */}
                     <div style={{
                       width: 12, height: 12, borderRadius: '50%', flexShrink: 0, boxSizing: 'border-box',
-                      background: isTarget ? '#6ab8e8' : '#1a6fa0',
-                      border: `2px solid ${isTarget ? '#6ab8e8' : '#0e639c'}`,
-                      boxShadow: isTarget ? '0 0 8px rgba(106,184,232,0.6)' : 'none',
-                      transition: 'background 0.1s, box-shadow 0.1s',
+                      background: dotColour,
+                      border: `2px solid ${borderColour}`,
+                      boxShadow: isTarget ? '0 0 8px rgba(106,184,232,0.6)' : isSelected ? `0 0 8px rgba(224,148,74,0.5)` : 'none',
+                      transition: 'background 0.15s, box-shadow 0.15s',
                     }} />
-                    <span style={{ fontSize: 13, color: isTarget ? '#d4d4d4' : '#888' }}>Ch {ch}</span>
+                    <span style={{ fontSize: 13, color: isTarget ? '#d4d4d4' : isSelected ? '#e8c89a' : '#888', transition: 'color 0.15s' }}>Ch {ch}</span>
                   </div>
                 )
               })}
