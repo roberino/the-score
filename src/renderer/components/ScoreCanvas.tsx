@@ -5,7 +5,9 @@ import * as Tone from 'tone'
 import {
   computeLayout,
   computeSliceOffsets,
+  computeSliceLayouts,
   renderScoreMulti,
+  drawOverlay,
   type CanvasSlice,
   DEFAULT_RENDER_OPTIONS,
   LABEL_MARGIN_X,
@@ -511,11 +513,15 @@ const ARTICULATION_BUTTONS: { art: Articulation; label: string; title: string }[
 export function ScoreCanvas(): JSX.Element {
   // Container div that holds all canvas slices for multi-canvas rendering
   const canvasAreaRef = useRef<HTMLDivElement>(null)
+  // Overlay div — same stacking geometry as canvasAreaRef; holds transparent canvases
+  // for selection/cursor highlights drawn independently of the VexFlow base render.
+  const overlayCanvasAreaRef = useRef<HTMLDivElement>(null)
   // Current slice metadata — kept in sync with the canvas elements in canvasAreaRef
   const canvasSlicesRef = useRef<CanvasSlice[]>([])
-  const notePositionsRef   = useRef(new Map<string, number>())
-  const noteStartXRef      = useRef(new Map<string, number>())
-  const layoutsRef         = useRef<MeasureLayout[]>([])
+  const notePositionsRef    = useRef(new Map<string, number>())
+  const noteStartXRef       = useRef(new Map<string, number>())
+  const noteToMeasureKeyRef = useRef(new Map<string, string>())
+  const layoutsRef          = useRef<MeasureLayout[]>([])
   const playbackTimelineRef = useRef<MeasureTimeEntry[]>([])
   const playbackCursorElRef = useRef<HTMLDivElement>(null)
   const shiftHeldRef = useRef(false)
@@ -616,14 +622,16 @@ export function ScoreCanvas(): JSX.Element {
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
+  // ── Base render effect: full VexFlow re-render ────────────────────────────────
+  // Only fires when score content or zoom changes (and chord-pitch cycling, which
+  // needs VexFlow to colour a specific note head).  Selection, cursor, and bar
+  // selection highlights are drawn by the separate overlay effect below.
   useEffect(() => {
     const canvasArea = canvasAreaRef.current
     if (!canvasArea) return
     const options = getRenderOptions(zoom, score.showPartLabels)
-    const timeSig = score.timeSignature
-    const capacity = measureCapacityUnits(timeSig)
     const chordPitchInfo: SelectedChordPitchInfo | null =
-      (inputMode === 'select' && selectedNoteId && selectedChordPitchIndex !== null)
+      (selectedNoteId && selectedChordPitchIndex !== null)
         ? { eventId: selectedNoteId, pitchIndex: selectedChordPitchIndex }
         : null
 
@@ -657,25 +665,71 @@ export function ScoreCanvas(): JSX.Element {
     }))
     canvasSlicesRef.current = slices
 
-    const result = renderScoreMulti(
-      slices,
-      score,
-      options,
-      inputMode === 'select' ? new Set(selectedNoteIds) : new Set(),
-      // Hide canvas cursor during playback — DOM div handles it then
-      (!isPlaying && cursorMeasureId)
-        ? { cursorMeasureId, cursorBeatPosition, totalCapacityUnits: capacity }
-        : null,
-      selectedMeasureId,
-      lyricCursorNoteId,
-      chordPitchInfo,
-      barSelection,
-      layouts,
-    )
-    notePositionsRef.current = result.notePositions
-    noteStartXRef.current    = result.noteStartX
-    layoutsRef.current       = result.layouts
-  }, [score, zoom, inputMode, selectedNoteIds, selectedNoteId, selectedChordPitchIndex, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId, isPlaying, barSelection])
+    const result = renderScoreMulti(slices, score, options, chordPitchInfo, layouts)
+    notePositionsRef.current    = result.notePositions
+    noteStartXRef.current       = result.noteStartX
+    noteToMeasureKeyRef.current = result.noteToMeasureKey
+    layoutsRef.current          = result.layouts
+  }, [score, zoom, selectedNoteId, selectedChordPitchIndex])
+
+  // ── Overlay effect: selection/cursor highlights ───────────────────────────────
+  // Redraws only the cheap Canvas2D overlay; VexFlow base render is untouched.
+  // Also runs after the base effect (both score and zoom are in deps) so overlay
+  // canvases are always re-synced when base canvases are recreated.
+  useEffect(() => {
+    const canvasArea = canvasAreaRef.current
+    const overlayArea = overlayCanvasAreaRef.current
+    if (!canvasArea || !overlayArea) return
+
+    const baseCanvases = Array.from(canvasArea.childNodes)
+      .filter((n): n is HTMLCanvasElement => n instanceof HTMLCanvasElement)
+    if (!baseCanvases.length) return
+
+    // Sync overlay canvas count with base
+    const overlayCanvases = Array.from(overlayArea.childNodes)
+      .filter((n): n is HTMLCanvasElement => n instanceof HTMLCanvasElement)
+    while (overlayCanvases.length > baseCanvases.length) overlayArea.removeChild(overlayCanvases.pop()!)
+    while (overlayCanvases.length < baseCanvases.length) {
+      const c = document.createElement('canvas')
+      c.style.display = 'block'
+      overlayArea.appendChild(c)
+      overlayCanvases.push(c)
+    }
+
+    const slices = canvasSlicesRef.current
+    if (!slices.length) return
+    const layouts = layoutsRef.current
+    const totalHeight = slices[slices.length - 1].yOffset + slices[slices.length - 1].height
+
+    const capacity = measureCapacityUnits(score.timeSignature)
+    const cursor = (!isPlaying && cursorMeasureId)
+      ? { cursorMeasureId, cursorBeatPosition, totalCapacityUnits: capacity }
+      : null
+
+    for (let i = 0; i < baseCanvases.length; i++) {
+      const base = baseCanvases[i]
+      const overlay = overlayCanvases[i]
+
+      // Sync overlay canvas physical + CSS dimensions to match base
+      if (overlay.width !== base.width || overlay.height !== base.height) {
+        overlay.width  = base.width
+        overlay.height = base.height
+      }
+      if (overlay.style.width  !== base.style.width)  overlay.style.width  = base.style.width
+      if (overlay.style.height !== base.style.height) overlay.style.height = base.style.height
+
+      const yOffset    = slices[i]?.yOffset ?? 0
+      const nextOffset = slices[i + 1]?.yOffset ?? totalHeight
+      const sliceLocalLayouts = computeSliceLayouts(layouts, yOffset, nextOffset)
+
+      drawOverlay(
+        overlay, sliceLocalLayouts, score,
+        notePositionsRef.current, noteToMeasureKeyRef.current, noteStartXRef.current,
+        inputMode === 'select' ? new Set(selectedNoteIds) : new Set(),
+        cursor, selectedMeasureId, lyricCursorNoteId, barSelection,
+      )
+    }
+  }, [score, zoom, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId, barSelection, inputMode, isPlaying])
 
   // ── Playback cursor ──────────────────────────────────────────────────────────
 
@@ -2811,6 +2865,11 @@ export function ScoreCanvas(): JSX.Element {
           onMouseMove={handleCanvasMouseMove}
           onMouseLeave={() => { setShiftHoverOnNote(false); setHoverCursor('default') }}
           style={{ cursor: cursorStyle, display: 'block' }}
+        />
+        {/* Overlay canvas layer: selection/cursor highlights drawn without VexFlow */}
+        <div
+          ref={overlayCanvasAreaRef}
+          style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', display: 'block' }}
         />
         <TextBoxLayer zoom={zoom} />
         <div

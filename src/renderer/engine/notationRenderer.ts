@@ -567,9 +567,10 @@ export interface RenderCursorOptions {
 }
 
 export interface RenderScoreResult {
-  notePositions: Map<string, number>
-  noteStartX:    Map<string, number>   // key: `${partId}:${staffId}:${measureId}`
-  layouts:       MeasureLayout[]
+  notePositions:    Map<string, number>
+  noteStartX:       Map<string, number>   // key: `${partId}:${staffId}:${measureId}`
+  layouts:          MeasureLayout[]
+  noteToMeasureKey: Map<string, string>   // noteId → `${partId}:${staffId}:${measureId}`
 }
 
 export interface SelectedChordPitchInfo {
@@ -640,6 +641,9 @@ export function computeSliceOffsets(
  * Each slice receives a Y-shifted subset of the layout so that no single canvas
  * exceeds the browser's physical-pixel height limit.
  *
+ * Selection state (highlights, cursor, bar selection) is NOT drawn here — use
+ * drawOverlay() on a separate overlay canvas after this call.
+ *
  * Pass `precomputedLayouts` (from a prior `computeLayout` call) to avoid
  * recomputing the layout a second time.
  */
@@ -647,18 +651,14 @@ export function renderScoreMulti(
   slices: readonly CanvasSlice[],
   score: Score,
   options: RenderOptions = DEFAULT_RENDER_OPTIONS,
-  selectedNoteIds: ReadonlySet<string> = new Set(),
-  cursor: RenderCursorOptions | null = null,
-  selectedMeasureId: string | null = null,
-  lyricCursorNoteId: string | null = null,
   selectedChordPitchInfo: SelectedChordPitchInfo | null = null,
-  barSelection: BarSelection | null = null,
   precomputedLayouts?: MeasureLayout[],
 ): RenderScoreResult {
-  const notePositions = new Map<string, number>()
-  const noteStartX    = new Map<string, number>()
+  const notePositions    = new Map<string, number>()
+  const noteStartX       = new Map<string, number>()
+  const noteToMeasureKey = new Map<string, string>()
 
-  if (!score.parts[0] || !slices.length) return { notePositions, noteStartX, layouts: [] }
+  if (!score.parts[0] || !slices.length) return { notePositions, noteStartX, layouts: [], noteToMeasureKey }
 
   const layouts = precomputedLayouts ?? computeLayout(score, options)
   const lastLayout   = layouts[layouts.length - 1]
@@ -671,9 +671,7 @@ export function renderScoreMulti(
     const nextOffset = si + 1 < slices.length ? slices[si + 1].yOffset : totalHeight
 
     // Shift layout Y coordinates to canvas-local space for this slice
-    const sliceLayouts = layouts
-      .filter(l => l.staveY >= slice.yOffset && l.staveY < nextOffset)
-      .map(l => ({ ...l, staveY: l.staveY - slice.yOffset, staveTopY: l.staveTopY - slice.yOffset }))
+    const sliceLayouts = computeSliceLayouts(layouts, slice.yOffset, nextOffset)
 
     const renderer = new VexRenderer(slice.canvas, VexRenderer.Backends.CANVAS)
     const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1
@@ -684,21 +682,119 @@ export function renderScoreMulti(
     ctx.clear()
 
     const lyricYMap = renderFromLayouts(
-      ctx, score, sliceLayouts, selectedNoteIds, notePositions, noteStartX, selectedChordPitchInfo,
+      ctx, score, sliceLayouts, new Set(), notePositions, noteStartX, noteToMeasureKey, selectedChordPitchInfo,
     )
     if (si === 0) drawHeadings(ctx, score, options)
 
     const nativeCtx = slice.canvas.getContext('2d')
-    if (nativeCtx) drawAllLyrics(nativeCtx, score, notePositions, sliceLayouts, lyricCursorNoteId, lyricYMap)
-    if (barSelection)          drawBarSelection(slice.canvas, barSelection, sliceLayouts)
-    if (selectedMeasureId)    drawMeasureHighlight(slice.canvas, selectedMeasureId, sliceLayouts)
-    if (cursor?.cursorMeasureId) drawCursor(slice.canvas, cursor, sliceLayouts, score, notePositions, noteStartX)
+    // Draw lyric text with no cursor (cursor highlight goes to the overlay canvas)
+    if (nativeCtx) drawAllLyrics(nativeCtx, score, notePositions, sliceLayouts, null, lyricYMap)
   }
 
-  return { notePositions, noteStartX, layouts }
+  return { notePositions, noteStartX, layouts, noteToMeasureKey }
 }
 
-// ── Single-canvas entry point (kept for backward compatibility) ────────────────
+/**
+ * Filter and Y-shift layouts to the local coordinate space of one canvas slice.
+ */
+export function computeSliceLayouts(
+  allLayouts: MeasureLayout[],
+  yOffset: number,
+  nextOffset: number,
+): MeasureLayout[] {
+  return allLayouts
+    .filter(l => l.staveY >= yOffset && l.staveY < nextOffset)
+    .map(l => ({ ...l, staveY: l.staveY - yOffset, staveTopY: l.staveTopY - yOffset }))
+}
+
+/**
+ * Draw selection/cursor overlays onto an overlay canvas that is stacked on top
+ * of the corresponding base canvas slice.  The overlay canvas must have the
+ * same physical dimensions as the base canvas.
+ *
+ * All coordinates in `sliceLayouts` must already be in slice-local space
+ * (i.e. passed through computeSliceLayouts first).
+ */
+export function drawOverlay(
+  canvas: HTMLCanvasElement,
+  sliceLayouts: MeasureLayout[],
+  score: Score,
+  notePositions: Map<string, number>,
+  noteToMeasureKey: Map<string, string>,
+  noteStartX: Map<string, number>,
+  selectedNoteIds: ReadonlySet<string>,
+  cursor: RenderCursorOptions | null,
+  selectedMeasureId: string | null,
+  lyricCursorNoteId: string | null,
+  barSelection: BarSelection | null,
+): void {
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr)
+
+  if (barSelection)       drawBarSelection(canvas, barSelection, sliceLayouts)
+  if (selectedMeasureId)  drawMeasureHighlight(canvas, selectedMeasureId, sliceLayouts)
+
+  // Note column highlights (replaces VexFlow note-head coloring in the base render)
+  if (selectedNoteIds.size > 0) {
+    ctx.save()
+    for (const noteId of selectedNoteIds) {
+      const noteX = notePositions.get(noteId)
+      if (noteX === undefined) continue
+      const measureKey = noteToMeasureKey.get(noteId)
+      if (!measureKey) continue
+      const colonA = measureKey.indexOf(':')
+      const colonB = measureKey.indexOf(':', colonA + 1)
+      const partId   = measureKey.slice(0, colonA)
+      const staffId  = measureKey.slice(colonA + 1, colonB)
+      const measureId = measureKey.slice(colonB + 1)
+      const layout = sliceLayouts.find(l => l.partId === partId && l.staffId === staffId && l.measureId === measureId)
+      if (!layout) continue  // note is not in this canvas slice
+      ctx.fillStyle   = 'rgba(59, 157, 221, 0.20)'
+      ctx.strokeStyle = 'rgba(59, 157, 221, 0.50)'
+      ctx.lineWidth   = 1
+      const rx = noteX - 8, ry = layout.staveTopY - 8, rw = 16, rh = STAVE_HEIGHT_PX + 16
+      ctx.fillRect(rx, ry, rw, rh)
+      ctx.strokeRect(rx, ry, rw, rh)
+    }
+    ctx.restore()
+  }
+
+  if (cursor?.cursorMeasureId) drawCursor(canvas, cursor, sliceLayouts, score, notePositions, noteStartX)
+
+  // Lyric cursor underline (the rest of lyric text is drawn in the base render)
+  if (lyricCursorNoteId) {
+    const x = notePositions.get(lyricCursorNoteId)
+    if (x !== undefined) {
+      const mKey = noteToMeasureKey.get(lyricCursorNoteId)
+      if (mKey) {
+        const colonA   = mKey.indexOf(':')
+        const colonB   = mKey.indexOf(':', colonA + 1)
+        const layout   = sliceLayouts.find(l =>
+          l.partId === mKey.slice(0, colonA) &&
+          l.staffId === mKey.slice(colonA + 1, colonB) &&
+          l.measureId === mKey.slice(colonB + 1)
+        )
+        if (layout) {
+          const lyricY = layout.staveTopY + LYRIC_Y_OFFSET
+          ctx.save()
+          ctx.strokeStyle = '#0e639c'
+          ctx.lineWidth   = 1.5
+          ctx.beginPath()
+          ctx.moveTo(x - 12, lyricY + 3)
+          ctx.lineTo(x + 12, lyricY + 3)
+          ctx.stroke()
+          ctx.restore()
+        }
+      }
+    }
+  }
+}
+
+// ── Single-canvas entry point (kept for backward compatibility / export use) ───
 
 export function renderScore(
   canvas: HTMLCanvasElement,
@@ -711,15 +807,17 @@ export function renderScore(
   selectedChordPitchInfo: SelectedChordPitchInfo | null = null
 ): RenderScoreResult {
   const layouts = computeLayout(score, options)
-  const lastLayout   = layouts[layouts.length - 1]
-  const totalHeight  = lastLayout
+  const lastLayout  = layouts[layouts.length - 1]
+  const totalHeight = lastLayout
     ? lastLayout.staveY + options.staveHeight + options.marginY
     : options.marginY + options.staveHeight
   const slice: CanvasSlice = { canvas, yOffset: 0, height: totalHeight }
-  return renderScoreMulti(
-    [slice], score, options, selectedNoteIds, cursor,
-    selectedMeasureId, lyricCursorNoteId, selectedChordPitchInfo, null, layouts,
-  )
+  const result = renderScoreMulti([slice], score, options, selectedChordPitchInfo, layouts)
+  // For single-canvas use, draw overlays directly onto the same canvas
+  const sliceLocalLayouts = computeSliceLayouts(layouts, 0, totalHeight)
+  drawOverlay(canvas, sliceLocalLayouts, score, result.notePositions, result.noteToMeasureKey,
+    result.noteStartX, selectedNoteIds, cursor, selectedMeasureId, lyricCursorNoteId, null)
+  return result
 }
 
 // ── Render all measures from precomputed layouts ──────────────────────────────
@@ -731,6 +829,7 @@ function renderFromLayouts(
   selectedNoteIds: ReadonlySet<string>,
   notePositions: Map<string, number>,
   noteStartX: Map<string, number>,
+  noteToMeasureKey: Map<string, string>,
   selectedChordPitchInfo: SelectedChordPitchInfo | null = null
 ): Map<string, number> {   // returns measureId → lyricY
   // Build fast lookup: staffId → staff / part
@@ -828,12 +927,14 @@ function renderFromLayouts(
       voltaOpts, selectedChordPitchInfo
     )
 
+    const measureKey = `${layout.partId}:${layout.staffId}:${layout.measureId}`
     events.forEach((e, i) => {
       staveNoteMap.set(e.id, staveNotes[i])
       eventStaveMap.set(e.id, stave)
+      noteToMeasureKey.set(e.id, measureKey)
     })
 
-    noteStartX.set(`${layout.partId}:${layout.staffId}:${layout.measureId}`, stave.getNoteStartX())
+    noteStartX.set(measureKey, stave.getNoteStartX())
 
     // Collect stave references for group connector drawing
     const pKey = `${layout.partId}:${mIdx}`
