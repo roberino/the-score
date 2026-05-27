@@ -475,10 +475,12 @@ export const useAppStore = create<AppState>()(
         _playback = null
         set(s => { s.isPlaying = false; s.playbackManualStop = false; s.playbackResumePositionSec = 0 })
       }
+      const getPartVolume = (partId: string) => get().score.parts.find(p => p.id === partId)?.volume ?? 1
+      const isPartMuted   = (partId: string) => get().score.parts.find(p => p.id === partId)?.muted ?? false
       if (audioMode === 'midi-out') {
-        _playback = await midiOutputEngine.playScore(score, 120, onDone, resumeFrom)
+        _playback = await midiOutputEngine.playScore(score, 120, onDone, resumeFrom, getPartVolume, isPartMuted)
       } else {
-        _playback = await playScoreWithSampler(score, 120, onDone, resumeFrom)
+        _playback = await playScoreWithSampler(score, 120, onDone, resumeFrom, getPartVolume, isPartMuted)
       }
       set(s => { s.isPlaying = true; s.playbackManualStop = false; s.playbackResumePositionSec = resumeFrom })
     },

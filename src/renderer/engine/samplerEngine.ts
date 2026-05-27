@@ -50,12 +50,14 @@ export async function playScoreWithSampler(
   bpm = 120,
   onStop?: () => void,
   resumeFrom = 0,
+  getPartVolume?: (partId: string) => number,
+  isPartMuted?: (partId: string) => boolean,
 ): Promise<PlaybackController> {
   loadSampler()
 
   if (!_samplerReady) {
     const { playScore } = await import('./audioEngine')
-    return playScore(score, bpm, onStop, resumeFrom)
+    return playScore(score, bpm, onStop, resumeFrom, getPartVolume, isPartMuted)
   }
 
   await Tone.start()
@@ -75,6 +77,7 @@ export async function playScoreWithSampler(
     const staff = part.staves[0]
     if (!staff || !tempoStaff) continue
 
+    const partId   = part.id
     const schedule = buildFlatSchedule(staff, sequence, tempoStaff, bpm, score.timeSignature, staff.slurs)
 
     for (const fe of schedule) {
@@ -82,8 +85,6 @@ export async function playScoreWithSampler(
       const { event, mIdx, startSec, playDurSec } = fe
 
       const dynMultiplier = resolveDirectiveDynamic(staff.measures, mIdx)
-      const volumeScale   = dynMultiplier ?? part.volume
-      const volDb         = 20 * Math.log10(Math.max(0.001, volumeScale))
       const effectiveMidi = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
       const isPizz        = effectiveMidi === 45
 
@@ -93,9 +94,10 @@ export async function playScoreWithSampler(
       if (ornNotes) {
         for (const on of ornNotes) {
           const hz = pitchToHz(on.noteName, on.octave, on.accidental, part.transposeSemitones)
-          const db = volDb
           Tone.Transport.schedule((time) => {
-            sampler.volume.value = db
+            if (isPartMuted?.(partId)) return
+            const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+            sampler.volume.value = 20 * Math.log10(Math.max(0.001, liveVolume))
             sampler.triggerAttackRelease(hz, on.durSec, time)
           }, on.startSec)
         }
@@ -104,14 +106,15 @@ export async function playScoreWithSampler(
 
       const { durFactor, volDbBonus } = articulationPlaybackMods(event)
       const effectiveDur  = isPizz ? Math.min(playDurSec * durFactor, 0.3) : playDurSec * durFactor
-      const effectiveDb   = volDb + volDbBonus
       const { legatoUntilSec } = fe
 
       if (event.type === 'note') {
         const n  = event as Note
         const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
         Tone.Transport.schedule((time) => {
-          sampler.volume.value = effectiveDb
+          if (isPartMuted?.(partId)) return
+          const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+          sampler.volume.value = 20 * Math.log10(Math.max(0.001, liveVolume)) + volDbBonus
           sampler.triggerAttack(hz, time)
         }, startSec)
         Tone.Transport.schedule((time) => { sampler.triggerRelease(hz, time) },
@@ -120,7 +123,9 @@ export async function playScoreWithSampler(
         const freqs = (event as unknown as Chord).pitches
           .map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
         Tone.Transport.schedule((time) => {
-          sampler.volume.value = effectiveDb
+          if (isPartMuted?.(partId)) return
+          const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+          sampler.volume.value = 20 * Math.log10(Math.max(0.001, liveVolume)) + volDbBonus
           freqs.forEach(hz => sampler.triggerAttack(hz, time))
         }, startSec)
         const relTime = legatoUntilSec ?? startSec + effectiveDur

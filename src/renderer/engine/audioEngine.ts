@@ -40,6 +40,8 @@ export async function playScore(
   bpm = 120,
   onStop?: () => void,
   resumeFrom = 0,
+  getPartVolume?: (partId: string) => number,
+  isPartMuted?: (partId: string) => boolean,
 ): Promise<PlaybackController> {
   await Tone.start()
 
@@ -85,6 +87,7 @@ export async function playScore(
     const staff = part.staves[0]
     if (!staff || !tempoStaff) continue
 
+    const partId      = part.id
     const schedule    = buildFlatSchedule(staff, sequence, tempoStaff, bpm, score.timeSignature, staff.slurs)
     const hairpinDbs  = buildHairpinDbMap(staff.hairpins, schedule)
 
@@ -92,9 +95,8 @@ export async function playScore(
       if (fe.skip) continue
       const { event, mIdx, startSec, playDurSec } = fe
 
+      // Static: directive-based dynamics and articulation (don't change mid-playback)
       const dynMultiplier = resolveDirectiveDynamic(staff.measures, mIdx)
-      const volumeScale   = dynMultiplier ?? part.volume
-      const volDb         = 20 * Math.log10(Math.max(0.001, volumeScale))
       const hairpinDb     = hairpinDbs.get(event.id) ?? 0
       const effectiveMidi = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
       const isPizz        = effectiveMidi === 45
@@ -105,8 +107,10 @@ export async function playScore(
       if (ornNotes) {
         for (const on of ornNotes) {
           const hz = pitchToHz(on.noteName, on.octave, on.accidental, part.transposeSemitones)
-          const db = volDb + hairpinDb
           Tone.Transport.schedule((time) => {
+            if (isPartMuted?.(partId)) return
+            const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+            const db = 20 * Math.log10(Math.max(0.001, liveVolume)) + hairpinDb
             synth.set({ envelope: { attack: 0.005, decay: 0.1, sustain: 0.7, release: 0.1 } })
             synth.volume.value = db
             synth.triggerAttackRelease(hz, on.durSec, time)
@@ -117,7 +121,6 @@ export async function playScore(
 
       const { durFactor, volDbBonus } = articulationPlaybackMods(event)
       const effectiveDur  = playDurSec * durFactor
-      const effectiveDb   = volDb + volDbBonus + hairpinDb
       const { legatoUntilSec } = fe
       const envelope = isPizz
         ? { attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.1 }
@@ -127,8 +130,11 @@ export async function playScore(
         const n  = event as Note
         const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
         Tone.Transport.schedule((time) => {
+          if (isPartMuted?.(partId)) return
+          const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+          const liveDb = 20 * Math.log10(Math.max(0.001, liveVolume)) + volDbBonus + hairpinDb
           synth.set({ envelope })
-          synth.volume.value = effectiveDb
+          synth.volume.value = liveDb
           synth.triggerAttack(hz, time)
         }, startSec)
         Tone.Transport.schedule((time) => { synth.triggerRelease(hz, time) },
@@ -137,8 +143,11 @@ export async function playScore(
         const c     = event as Chord
         const freqs = c.pitches.map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
         Tone.Transport.schedule((time) => {
+          if (isPartMuted?.(partId)) return
+          const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+          const liveDb = 20 * Math.log10(Math.max(0.001, liveVolume)) + volDbBonus + hairpinDb
           synth.set({ envelope })
-          synth.volume.value = effectiveDb
+          synth.volume.value = liveDb
           freqs.forEach(hz => synth.triggerAttack(hz, time))
         }, startSec)
         const relTime = legatoUntilSec ?? startSec + effectiveDur

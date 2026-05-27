@@ -622,18 +622,23 @@ export function ScoreCanvas(): JSX.Element {
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
+  // Stable identity: null when no chord-pitch cycling is active, so normal note
+  // selection does not cause chordPitchInfo to change and avoids triggering the
+  // expensive base VexFlow render.
+  const chordPitchInfo = useMemo<SelectedChordPitchInfo | null>(() =>
+    selectedNoteId && selectedChordPitchIndex !== null
+      ? { eventId: selectedNoteId, pitchIndex: selectedChordPitchIndex }
+      : null,
+    [selectedNoteId, selectedChordPitchIndex]
+  )
+
   // ── Base render effect: full VexFlow re-render ────────────────────────────────
-  // Only fires when score content or zoom changes (and chord-pitch cycling, which
-  // needs VexFlow to colour a specific note head).  Selection, cursor, and bar
-  // selection highlights are drawn by the separate overlay effect below.
+  // Only fires when score content, zoom, or chord-pitch cycling changes.
+  // Selection, cursor, and bar-selection highlights are drawn by the overlay effect.
   useEffect(() => {
     const canvasArea = canvasAreaRef.current
     if (!canvasArea) return
     const options = getRenderOptions(zoom, score.showPartLabels)
-    const chordPitchInfo: SelectedChordPitchInfo | null =
-      (selectedNoteId && selectedChordPitchIndex !== null)
-        ? { eventId: selectedNoteId, pitchIndex: selectedChordPitchIndex }
-        : null
 
     const layouts = computeLayout(score, options)
     const sliceOffsets = computeSliceOffsets(layouts, options)
@@ -670,7 +675,7 @@ export function ScoreCanvas(): JSX.Element {
     noteStartXRef.current       = result.noteStartX
     noteToMeasureKeyRef.current = result.noteToMeasureKey
     layoutsRef.current          = result.layouts
-  }, [score, zoom, selectedNoteId, selectedChordPitchIndex])
+  }, [score, zoom, chordPitchInfo])
 
   // ── Overlay effect: selection/cursor highlights ───────────────────────────────
   // Redraws only the cheap Canvas2D overlay; VexFlow base render is untouched.
@@ -702,7 +707,7 @@ export function ScoreCanvas(): JSX.Element {
     const totalHeight = slices[slices.length - 1].yOffset + slices[slices.length - 1].height
 
     const capacity = measureCapacityUnits(score.timeSignature)
-    const cursor = (!isPlaying && cursorMeasureId)
+    const cursor = (!isPlaying && cursorMeasureId && inputMode !== 'select')
       ? { cursorMeasureId, cursorBeatPosition, totalCapacityUnits: capacity }
       : null
 
@@ -1926,6 +1931,11 @@ export function ScoreCanvas(): JSX.Element {
     if ((inputMode === 'note' || inputMode === 'rest') && !cursorMeasureId) {
       moveCursorToFirstAvailable()
     }
+  }, [inputMode])
+
+  // Hide selection context menu when leaving select mode
+  useEffect(() => {
+    if (inputMode !== 'select') setSelectionMenuPos(null)
   }, [inputMode])
 
   // ── Shift-key cursor indicator ──────────────────────────────────────────────

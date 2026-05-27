@@ -137,6 +137,8 @@ class MidiOutputEngine {
     bpm = 120,
     onStop?: () => void,
     resumeFrom = 0,
+    getPartVolume?: (partId: string) => number,
+    isPartMuted?: (partId: string) => boolean,
   ): Promise<PlaybackController> {
     const output = this._output
     if (!output) {
@@ -161,6 +163,7 @@ class MidiOutputEngine {
       const staff = part.staves[0]
       if (!staff || !tempoStaff) return
 
+      const partId = part.id
       // midiChannel is 1-based (1–16); fall back to partIndex+1 for old scores
       const channel = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
 
@@ -178,21 +181,21 @@ class MidiOutputEngine {
         const { event, mIdx, startSec, playDurSec } = fe
 
         const dynMultiplier  = resolveDirectiveDynamic(staff.measures, mIdx)
-        const volumeScale    = dynMultiplier ?? part.volume
-        const volDb          = 20 * Math.log10(Math.max(0.001, volumeScale))
         const hairpinFactor  = hairpinFactors.get(event.id) ?? 1.0
 
         const keySig     = resolveKeySig(staff.measures, mIdx, score.keySignature)
         const bpmAtEvent = resolveDirectiveTempo(tempoStaff.measures, mIdx, bpm)
         const ornNotes   = expandOrnamentNotes(event, startSec, playDurSec, bpmAtEvent, keySig)
         if (ornNotes) {
-          const baseVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(volDb) * hairpinFactor)))
           for (const on of ornNotes) {
             const midiNum   = pitchToMidi(on.noteName, on.octave, on.accidental, part.transposeSemitones)
             const noteOffMs = Math.max(20, on.durSec * 1000 - 20)
             Tone.Transport.schedule((time) => {
+              if (isPartMuted?.(partId)) return
+              const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+              const liveVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(20 * Math.log10(Math.max(0.001, liveVolume))) * hairpinFactor)))
               const ts = perfAudioOffset + time * 1000
-              output.send([0x90 | channel, midiNum, baseVel], ts)
+              output.send([0x90 | channel, midiNum, liveVel], ts)
               output.send([0x80 | channel, midiNum, 0], ts + noteOffMs)
             }, on.startSec)
           }
@@ -200,7 +203,6 @@ class MidiOutputEngine {
         }
 
         const { durFactor, velFactor } = articulationPlaybackMods(event)
-        const velocity       = Math.max(1, Math.min(127, Math.round(velocityFromDb(volDb) * velFactor * hairpinFactor)))
         const { legatoUntilSec } = fe
         // For legato notes: note-off at legatoUntilSec; otherwise shorten slightly for articulation gap
         const noteOffSec     = legatoUntilSec ?? startSec + playDurSec * durFactor - 0.03
@@ -210,8 +212,11 @@ class MidiOutputEngine {
           const n       = event as Note
           const midiNum = pitchToMidi(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
           Tone.Transport.schedule((time) => {
+            if (isPartMuted?.(partId)) return
+            const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+            const liveVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(20 * Math.log10(Math.max(0.001, liveVolume))) * velFactor * hairpinFactor)))
             const ts = perfAudioOffset + time * 1000
-            output.send([0x90 | channel, midiNum, velocity], ts)
+            output.send([0x90 | channel, midiNum, liveVel], ts)
             output.send([0x80 | channel, midiNum, 0], ts + noteOffRelMs)
           }, startSec)
         } else if (event.type === 'chord') {
@@ -219,9 +224,12 @@ class MidiOutputEngine {
             p => pitchToMidi(p.noteName, p.octave, p.accidental, part.transposeSemitones)
           )
           Tone.Transport.schedule((time) => {
+            if (isPartMuted?.(partId)) return
+            const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+            const liveVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(20 * Math.log10(Math.max(0.001, liveVolume))) * velFactor * hairpinFactor)))
             const ts = perfAudioOffset + time * 1000
             midiNums.forEach(n => {
-              output.send([0x90 | channel, n, velocity], ts)
+              output.send([0x90 | channel, n, liveVel], ts)
               output.send([0x80 | channel, n, 0], ts + noteOffRelMs)
             })
           }, startSec)
