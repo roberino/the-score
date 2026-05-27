@@ -1390,14 +1390,12 @@ export function ScoreCanvas(): JSX.Element {
     if (!lyricCursorNoteId || inputMode !== 'lyric') return null
     const noteX = notePositionsRef.current.get(lyricCursorNoteId)
     if (noteX === undefined) return null
-    const options = getRenderOptions(zoom, score.showPartLabels)
-    const layouts = computeLayout(score, options)
     for (const part of score.parts) {
       for (const staff of part.staves) {
         for (const measure of staff.measures) {
           for (const voice of measure.voices) {
             if (voice.events.some(e => e.id === lyricCursorNoteId)) {
-              const layout = layouts.find(l => l.measureId === measure.id && l.staffId === staff.id)
+              const layout = layoutsRef.current.find(l => l.measureId === measure.id && l.staffId === staff.id)
               if (layout) return { x: noteX, y: layout.staveTopY + LYRIC_Y_OFFSET }
             }
           }
@@ -1405,7 +1403,7 @@ export function ScoreCanvas(): JSX.Element {
       }
     }
     return null
-  }, [lyricCursorNoteId, inputMode, score, zoom])
+  }, [lyricCursorNoteId, inputMode, score])
 
   useEffect(() => {
     if (!resizeError) return
@@ -1999,7 +1997,7 @@ export function ScoreCanvas(): JSX.Element {
       return
     }
 
-    const layouts = computeLayout(score, options)
+    const layouts = layoutsRef.current
 
     // ── Directive zone: headroom above each stave (Text mode only) ──────────
     if (inputMode === 'text') for (const l of layouts) {
@@ -2656,9 +2654,7 @@ export function ScoreCanvas(): JSX.Element {
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
     // Don't create a text box if we're in the heading area or on notation
     if (canvasY < HEADING_MARGIN_Y) return
-    const options = getRenderOptions(zoom, score.showPartLabels)
-    const layouts = computeLayout(score, options)
-    const layout  = findClickedLayout(canvasX, canvasY, layouts)
+    const layout  = findClickedLayout(canvasX, canvasY, layoutsRef.current)
     if (layout) return  // clicked on a stave — not empty space
     const box = makeTextBox(canvasX / zoom, canvasY / zoom)
     dispatch({ type: 'ADD_TEXT_BOX', box })

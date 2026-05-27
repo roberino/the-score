@@ -26,7 +26,7 @@ import {
 } from 'vexflow'
 
 import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent } from '@shared/score'
-import { resolveTimeSig, timeSigsEqual, resolveKeySig, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo, eventDurationUnits } from '@shared/musicUtils'
+import { resolveTimeSig, timeSigsEqual, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo, eventDurationUnits } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
 
@@ -389,18 +389,50 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
     showClefMap:  Map<string, boolean>   // staffId → showClef
   }
 
+  // Pre-compute resolved sig/key/clef at every measure index — single forward pass,
+  // O(n) total instead of O(n²) repeated backward scans.
+  const resolvedTimeSigs: TimeSignature[] = []
+  const resolvedKeySigs: KeySignature[]   = []
+  const resolvedClefs: ClefType[]         = []
+  {
+    let ts: TimeSignature = score.timeSignature
+    let ks: KeySignature  = score.keySignature
+    let cl: ClefType      = firstStaff.clef as ClefType
+    for (const m of firstStaff.measures) {
+      if (m.timeSignature) ts = m.timeSignature
+      if (m.keySignature)  ks = m.keySignature
+      if (m.clef)          cl = m.clef.type
+      resolvedTimeSigs.push(ts)
+      resolvedKeySigs.push(ks)
+      resolvedClefs.push(cl)
+    }
+  }
+  // Per-part staff clefs (each staff may have its own clef history)
+  const partStaffClefs = new Map<string, ClefType[]>()
+  for (const part of score.parts) {
+    const staff = part.staves[0]
+    if (!staff) continue
+    const clefs: ClefType[] = []
+    let cl: ClefType = staff.clef as ClefType
+    for (const m of staff.measures) {
+      if (m.clef) cl = m.clef.type
+      clefs.push(cl)
+    }
+    partStaffClefs.set(staff.id, clefs)
+  }
+
   const infos: MeasureInfo[] = []
   let lineIndex      = 0
   let lineUsed       = 0
   let measuresInLine = 0
 
   for (let mIdx = 0; mIdx < measureCount; mIdx++) {
-    const effectiveSig  = resolveTimeSig(firstStaff.measures, mIdx, score.timeSignature)
-    const effectiveKey  = resolveKeySig(firstStaff.measures, mIdx, score.keySignature)
-    const effectiveClef = resolveClef(firstStaff.measures, mIdx, firstStaff.clef)
-    const prevKey       = mIdx > 0 ? resolveKeySig(firstStaff.measures, mIdx - 1, score.keySignature) : null
-    const prevSig       = mIdx > 0 ? resolveTimeSig(firstStaff.measures, mIdx - 1, score.timeSignature) : null
-    const prevClef      = mIdx > 0 ? resolveClef(firstStaff.measures, mIdx - 1, firstStaff.clef) : null
+    const effectiveSig  = resolvedTimeSigs[mIdx]
+    const effectiveKey  = resolvedKeySigs[mIdx]
+    const effectiveClef = resolvedClefs[mIdx]
+    const prevKey       = mIdx > 0 ? resolvedKeySigs[mIdx - 1]  : null
+    const prevSig       = mIdx > 0 ? resolvedTimeSigs[mIdx - 1] : null
+    const prevClef      = mIdx > 0 ? resolvedClefs[mIdx - 1]    : null
     const keyChanged  = prevKey  !== null && prevKey.fifths !== effectiveKey.fifths
     const sigChanged  = prevSig  !== null && !timeSigsEqual(effectiveSig, prevSig)
     const clefChanged = prevClef !== null && prevClef !== effectiveClef
@@ -446,9 +478,9 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
     for (const part of score.parts) {
       const staff = part.staves[0]
       if (!staff) continue
-      const staffClef        = resolveClef(staff.measures, mIdx, staff.clef)
-      const prevStaffClef    = mIdx > 0 ? resolveClef(staff.measures, mIdx - 1, staff.clef) : null
-      const staffClefChanged = prevStaffClef !== null && prevStaffClef !== staffClef
+      const staffClefs       = partStaffClefs.get(staff.id)!
+      const staffClef        = staffClefs[mIdx]
+      const staffClefChanged = mIdx > 0 && staffClefs[mIdx - 1] !== staffClef
       showClefMap.set(staff.id, isLineStart || staffClefChanged)
     }
 
@@ -710,14 +742,32 @@ function renderFromLayouts(
     }
   }
 
+  // Pre-compute per-staff resolved time/key sigs — single forward pass per staff,
+  // O(n) total instead of O(n²) repeated backward scans in the main loop.
+  const staffTimeSigsMap = new Map<string, TimeSignature[]>()
+  const staffKeySigsMap  = new Map<string, KeySignature[]>()
+  for (const [staffId, { staff }] of staffMap.entries()) {
+    const timeSigs: TimeSignature[] = []
+    const keySigs: KeySignature[]   = []
+    let ts: TimeSignature = score.timeSignature
+    let ks: KeySignature  = score.keySignature
+    for (const m of staff.measures) {
+      if (m.timeSignature) ts = m.timeSignature
+      if (m.keySignature)  ks = m.keySignature
+      timeSigs.push(ts)
+      keySigs.push(ks)
+    }
+    staffTimeSigsMap.set(staffId, timeSigs)
+    staffKeySigsMap.set(staffId, keySigs)
+  }
+
   // ── Pre-pass: row max note overhang for row-consistent below-stave positioning
   // Keyed by staveY so all measures in the same row use the same pedal/MIDI baseline.
   const rowOverhangMap = new Map<number, number>()
   for (const layout of layouts) {
     const entry = staffMap.get(layout.staffId)
     if (!entry) continue
-    const mIdx = entry.staff.measures.findIndex(m => m.id === layout.measureId)
-    if (mIdx === -1) continue
+    const mIdx = layout.measureIndex
     const overhang = lowestNoteOverhangPx(entry.staff.measures[mIdx], layout.clef)
     rowOverhangMap.set(layout.staveY, Math.max(rowOverhangMap.get(layout.staveY) ?? 0, overhang))
   }
@@ -750,15 +800,17 @@ function renderFromLayouts(
     if (!entry) continue
     const { staff, part } = entry
 
-    const mIdx   = staff.measures.findIndex(m => m.id === layout.measureId)
-    if (mIdx === -1) continue
-    const measure     = staff.measures[mIdx]
+    const mIdx    = layout.measureIndex
+    const measure = staff.measures[mIdx]
+    if (!measure) continue
     const prevMeasure = staff.measures[mIdx - 1]
 
-    const effectiveKey = resolveKeySig(staff.measures, mIdx, score.keySignature)
-    const prevKey      = mIdx > 0 ? resolveKeySig(staff.measures, mIdx - 1, score.keySignature) : null
-    const effectiveSig = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
-    const prevSig      = mIdx > 0 ? resolveTimeSig(staff.measures, mIdx - 1, score.timeSignature) : null
+    const keySigs      = staffKeySigsMap.get(layout.staffId)!
+    const timeSigs     = staffTimeSigsMap.get(layout.staffId)!
+    const effectiveKey = keySigs[mIdx]
+    const prevKey      = mIdx > 0 ? keySigs[mIdx - 1]  : null
+    const effectiveSig = timeSigs[mIdx]
+    const prevSig      = mIdx > 0 ? timeSigs[mIdx - 1] : null
 
     // Volta bracket for this measure (first part only — one bracket per system)
     const voltaOpts = (part === score.parts[0])
@@ -976,7 +1028,7 @@ function drawDirectives(
     typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
   if (!nativeCtx) return
 
-  const mIdx = staff.measures.findIndex(m => m.id === measure.id)
+  const mIdx = layout.measureIndex
   const directives = measure.directives ?? []
 
   nativeCtx.save()
