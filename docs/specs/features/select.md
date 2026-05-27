@@ -37,3 +37,20 @@ Hit positions are derived from the actual VexFlow-rendered coordinates returned 
 | Change duration | 1–7 (same as note input duration keys) |
 | Nudge octave up | Cmd/Ctrl + ↑ |
 | Nudge octave down | Cmd/Ctrl + ↓ |
+
+## Bar selection
+
+Bar selection allows the user to select one or more bars in order to apply bulk operations.
+
+**Bar Selection Behaviour**
+
+The user should be able to select a single bar that spans across parts. Additionally, they should be able to use this selection as a starting bar and then select a continuous set of bars using the shift key and selecting a subsequent bar.
+
+When the user clicks a second time on a part within the original selection range (i.e. after initial selection), then the selection should be narrowed to bars within that part only. This allows the user to select bars within a specific part.
+
+**Bulk Operations on Bars**
+
+The following bulk operations should be allowed on selected bars:
+
+* Bulk deletion (replace selected bars with full bar rests)
+* Transpose (should be applied to all notes within selection)
