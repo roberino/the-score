@@ -536,6 +536,8 @@ export function ScoreCanvas(): JSX.Element {
   const [contextMenuTab, setContextMenuTab] = useState<'articulations' | 'volta' | 'transpose'>('articulations')
   const [transposeDir, setTransposeDir]     = useState<'up' | 'down'>('up')
   const [transposeAmt, setTransposeAmt]     = useState(1)
+  const [barSelectionMenuPos, setBarSelectionMenuPos] = useState<{ x: number; y: number } | null>(null)
+  const [barMenuTab, setBarMenuTab] = useState<'transpose' | 'volta'>('transpose')
 
   const {
     score, zoom, inputMode,
@@ -563,6 +565,7 @@ export function ScoreCanvas(): JSX.Element {
     removeVolta,
     lyricCursorNoteId, setLyricCursor,
     isPlaying,
+    barSelection, setBarSelection, deleteSelectedBars,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -666,12 +669,13 @@ export function ScoreCanvas(): JSX.Element {
       selectedMeasureId,
       lyricCursorNoteId,
       chordPitchInfo,
+      barSelection,
       layouts,
     )
     notePositionsRef.current = result.notePositions
     noteStartXRef.current    = result.noteStartX
     layoutsRef.current       = result.layouts
-  }, [score, zoom, inputMode, selectedNoteIds, selectedNoteId, selectedChordPitchIndex, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId, isPlaying])
+  }, [score, zoom, inputMode, selectedNoteIds, selectedNoteId, selectedChordPitchIndex, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId, isPlaying, barSelection])
 
   // ── Playback cursor ──────────────────────────────────────────────────────────
 
@@ -1717,11 +1721,13 @@ export function ScoreCanvas(): JSX.Element {
 
       const mod = e.metaKey || e.ctrlKey
 
-      // Escape → select mode + cancel pending slur + deselect measure
+      // Escape → select mode + cancel pending slur + deselect everything
       if (e.key === 'Escape') {
         setSlurPendingId(null)
         setInputMode('select')
         setSelectedMeasure(null)
+        setBarSelection(null)
+        setBarSelectionMenuPos(null)
         return
       }
 
@@ -1836,8 +1842,12 @@ export function ScoreCanvas(): JSX.Element {
         return
       }
 
-      // Delete / Backspace — measure takes priority over notes when a bar is selected
+      // Delete / Backspace — bar selection takes priority, then measure, then notes
       if (!mod && (e.key === 'Delete' || e.key === 'Backspace')) {
+        if (barSelection) {
+          deleteSelectedBars()
+          return
+        }
         if (selectedMeasureId) {
           deleteMeasure(selectedMeasureId)
         } else {
@@ -1856,6 +1866,7 @@ export function ScoreCanvas(): JSX.Element {
     toggleTie, handleSlurKey,
     setInputMode, setSelectedDuration, toggleDot, resizeNote, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
     insertMeasure, deleteMeasure, selectedMeasureId, insertTuplet,
+    barSelection, deleteSelectedBars, setBarSelection,
   ])
 
   // Set cursor when first entering note/rest mode
@@ -2116,9 +2127,10 @@ export function ScoreCanvas(): JSX.Element {
 
     const layout  = findClickedLayout(canvasX, canvasY, layouts)
     if (!layout) {
-      // Clicked outside all measures — clear selection and context menu
+      // Clicked outside all measures — clear all selections and context menus
       clearSelection()
       setSelectionMenuPos(null)
+      setBarSelectionMenuPos(null)
       setSelectedMeasure(null)
       return
     }
@@ -2587,14 +2599,48 @@ export function ScoreCanvas(): JSX.Element {
         }
       }
 
-      // No note hit — select the measure (empty space click); reset chord cycle
+      // No note hit — empty space within a stave: bar selection
       setSelectedBarline(null)
       setPickerState(null)
       setChordCycleState(null)
-      if (!event.shiftKey) {
+      setSelectionMenuPos(null)
+
+      const clickedMeasureIndex = layout.measureIndex
+      const clickedPartId = layout.partId
+
+      if (barSelection) {
+        const inRange = clickedMeasureIndex >= barSelection.startMeasureIndex &&
+                        clickedMeasureIndex <= barSelection.endMeasureIndex
+
+        if (inRange && event.shiftKey) {
+          // Phase 2 additive: add this part to a narrowed selection
+          const currentParts = barSelection.partIds ?? score.parts.map(p => p.id)
+          if (!currentParts.includes(clickedPartId)) {
+            setBarSelection({ ...barSelection, partIds: [...currentParts, clickedPartId] })
+          }
+        } else if (inRange && !event.shiftKey) {
+          // Phase 2 narrow: narrow to this part only
+          setBarSelection({ ...barSelection, partIds: [clickedPartId] })
+          setBarSelectionMenuPos({ x: event.clientX, y: event.clientY })
+        } else if (!inRange && event.shiftKey && clickedMeasureIndex > barSelection.endMeasureIndex) {
+          // Phase 1 extend forward: widen range, reset part filter to all
+          setBarSelection({
+            startMeasureIndex: barSelection.startMeasureIndex,
+            endMeasureIndex: clickedMeasureIndex,
+            partIds: null,
+          })
+          setBarSelectionMenuPos({ x: event.clientX, y: event.clientY })
+        } else {
+          // Start a new bar selection
+          clearSelection()
+          setBarSelection({ startMeasureIndex: clickedMeasureIndex, endMeasureIndex: clickedMeasureIndex, partIds: null })
+          setBarSelectionMenuPos({ x: event.clientX, y: event.clientY })
+        }
+      } else {
+        // No existing bar selection: start one
         clearSelection()
-        setSelectionMenuPos(null)
-        setSelectedMeasure(layout.measureId)
+        setBarSelection({ startMeasureIndex: clickedMeasureIndex, endMeasureIndex: clickedMeasureIndex, partIds: null })
+        setBarSelectionMenuPos({ x: event.clientX, y: event.clientY })
       }
     }
   }
@@ -3121,6 +3167,159 @@ export function ScoreCanvas(): JSX.Element {
                   <button
                     onClick={() => transposeSelectedNotes(transposeDir === 'up' ? transposeAmt : -transposeAmt)}
                     style={{ ...btnActive, marginLeft: 'auto' }}
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      {barSelection && barSelectionMenuPos && (() => {
+        const { startMeasureIndex, endMeasureIndex } = barSelection
+        const existingVolta = (score.voltas ?? []).find(v =>
+          v.startMeasureIndex === startMeasureIndex && v.endMeasureIndex === endMeasureIndex
+        )
+        const menuW = 380
+        const left  = Math.min(barSelectionMenuPos.x - menuW / 2, window.innerWidth - menuW - 8)
+        const top   = Math.min(barSelectionMenuPos.y + 8, window.innerHeight - 260)
+        const btnBase: React.CSSProperties = {
+          padding: '3px 8px', borderRadius: 3, border: '1px solid #555',
+          background: '#2d2d2d', color: '#ccc', cursor: 'pointer', fontSize: 11,
+        }
+        const btnActive: React.CSSProperties = { ...btnBase, background: '#0e639c', color: '#fff', border: '1px solid #0e639c' }
+        const NAMED_INTERVALS = [
+          { label: 'm2', semitones: 1 }, { label: 'M2', semitones: 2 },
+          { label: 'm3', semitones: 3 }, { label: 'M3', semitones: 4 },
+          { label: 'P4', semitones: 5 }, { label: 'Tritone', semitones: 6 },
+          { label: 'P5', semitones: 7 }, { label: 'm6', semitones: 8 },
+          { label: 'M6', semitones: 9 }, { label: 'm7', semitones: 10 },
+          { label: 'M7', semitones: 11 }, { label: 'P8', semitones: 12 },
+        ]
+        const barRange = startMeasureIndex === endMeasureIndex
+          ? `Bar ${startMeasureIndex + 1}`
+          : `Bars ${startMeasureIndex + 1}–${endMeasureIndex + 1}`
+        const partLabel = barSelection.partIds
+          ? barSelection.partIds.length === 1
+            ? score.parts.find(p => p.id === barSelection.partIds![0])?.name ?? '1 part'
+            : `${barSelection.partIds.length} parts`
+          : 'All parts'
+
+        return (
+          <div
+            style={{
+              position: 'fixed', left, top,
+              background: '#1e1e1e', border: '1px solid #444', borderRadius: 6,
+              padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6,
+              zIndex: 1000, boxShadow: '0 4px 16px rgba(0,0,0,0.5)', fontSize: 12, color: '#d4d4d4',
+              minWidth: menuW,
+            }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: '#888', fontSize: 11 }}>
+                {barRange} · {partLabel}
+              </span>
+              <button
+                onClick={() => { setBarSelection(null); setBarSelectionMenuPos(null) }}
+                style={{ ...btnBase, padding: '1px 6px', fontSize: 10 }}
+              >✕</button>
+            </div>
+
+            {/* Tabs */}
+            <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid #333', paddingBottom: 4 }}>
+              {(['transpose', 'volta'] as const).map(tab => (
+                <button key={tab} onClick={() => setBarMenuTab(tab)} style={{
+                  ...btnBase,
+                  ...(barMenuTab === tab ? { background: '#333', borderColor: '#555' } : {}),
+                  textTransform: 'capitalize',
+                }}>{tab}</button>
+              ))}
+            </div>
+
+            {barMenuTab === 'volta' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ color: '#888', fontSize: 11 }}>Apply volta bracket to selection</div>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {([1, 2, 3] as const).map(n => {
+                    const active = existingVolta?.number === n
+                    return (
+                      <button key={n} style={active ? btnActive : btnBase} onClick={() => {
+                        if (active && existingVolta) { removeVolta(existingVolta.id) }
+                        else {
+                          if (existingVolta) removeVolta(existingVolta.id)
+                          addVolta({ number: n, startMeasureIndex, endMeasureIndex })
+                        }
+                      }}>
+                        {n}
+                      </button>
+                    )
+                  })}
+                  {existingVolta && (
+                    <button style={{ ...btnBase, marginLeft: 8 }} onClick={() => removeVolta(existingVolta.id)}>
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {barMenuTab === 'transpose' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {(['up', 'down'] as const).map(d => (
+                    <button key={d} onClick={() => setTransposeDir(d)} style={{
+                      ...btnBase, flex: 1,
+                      ...(transposeDir === d ? { background: '#0e639c', color: '#fff', border: '1px solid #0e639c' } : {}),
+                    }}>
+                      {d === 'up' ? '↑ Up' : '↓ Down'}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 3 }}>
+                  {NAMED_INTERVALS.map(({ label, semitones }) => (
+                    <button key={label} onClick={() => setTransposeAmt(semitones)} style={{
+                      ...btnBase,
+                      ...(transposeAmt === semitones ? { background: '#0e639c', color: '#fff', border: '1px solid #0e639c' } : {}),
+                    }}>{label}</button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ color: '#888', fontSize: 11 }}>Semitones:</span>
+                  <input
+                    type="number" min={1} max={24} value={transposeAmt}
+                    onChange={e => setTransposeAmt(Math.max(1, Math.min(24, Number(e.target.value))))}
+                    style={{
+                      width: 48, padding: '2px 4px', border: '1px solid #555', borderRadius: 3,
+                      background: '#2d2d2d', color: '#ccc', fontSize: 11, textAlign: 'center',
+                    }}
+                  />
+                  <button
+                    style={{ ...btnActive, marginLeft: 'auto' }}
+                    onClick={() => {
+                      const semitones = transposeDir === 'up' ? transposeAmt : -transposeAmt
+                      const partSet = barSelection.partIds ? new Set(barSelection.partIds) : null
+                      const moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] = []
+                      for (const part of score.parts) {
+                        if (partSet && !partSet.has(part.id)) continue
+                        for (const staff of part.staves) {
+                          for (let i = startMeasureIndex; i <= endMeasureIndex; i++) {
+                            const measure = (staff.measures as any[])[i]
+                            if (!measure) continue
+                            for (const voice of measure.voices) {
+                              for (const ev of voice.events) {
+                                if (ev.type === 'note' || ev.type === 'chord') {
+                                  moves.push({ partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id, noteId: ev.id })
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                      if (moves.length > 0) dispatch({ type: 'TRANSPOSE_NOTES', moves, semitones })
+                    }}
                   >
                     Apply
                   </button>

@@ -556,6 +556,12 @@ export interface CanvasSlice {
   height: number    // CSS pixel height of this canvas
 }
 
+export interface BarSelection {
+  startMeasureIndex: number
+  endMeasureIndex: number
+  partIds: string[] | null  // null = all parts
+}
+
 /**
  * Given a pre-computed layout, return the Y offsets at which new canvas slices
  * should start so that no single slice exceeds the browser's canvas height limit.
@@ -614,6 +620,7 @@ export function renderScoreMulti(
   selectedMeasureId: string | null = null,
   lyricCursorNoteId: string | null = null,
   selectedChordPitchInfo: SelectedChordPitchInfo | null = null,
+  barSelection: BarSelection | null = null,
   precomputedLayouts?: MeasureLayout[],
 ): RenderScoreResult {
   const notePositions = new Map<string, number>()
@@ -651,6 +658,7 @@ export function renderScoreMulti(
 
     const nativeCtx = slice.canvas.getContext('2d')
     if (nativeCtx) drawAllLyrics(nativeCtx, score, notePositions, sliceLayouts, lyricCursorNoteId, lyricYMap)
+    if (barSelection)          drawBarSelection(slice.canvas, barSelection, sliceLayouts)
     if (selectedMeasureId)    drawMeasureHighlight(slice.canvas, selectedMeasureId, sliceLayouts)
     if (cursor?.cursorMeasureId) drawCursor(slice.canvas, cursor, sliceLayouts, score, notePositions, noteStartX)
   }
@@ -678,7 +686,7 @@ export function renderScore(
   const slice: CanvasSlice = { canvas, yOffset: 0, height: totalHeight }
   return renderScoreMulti(
     [slice], score, options, selectedNoteIds, cursor,
-    selectedMeasureId, lyricCursorNoteId, selectedChordPitchInfo, layouts,
+    selectedMeasureId, lyricCursorNoteId, selectedChordPitchInfo, null, layouts,
   )
 }
 
@@ -1689,6 +1697,44 @@ function drawAllLyrics(
         }
       }
     }
+  }
+
+  ctx2d.restore()
+}
+
+function drawBarSelection(
+  canvas: HTMLCanvasElement,
+  barSelection: BarSelection,
+  layouts: MeasureLayout[]
+): void {
+  const { startMeasureIndex, endMeasureIndex, partIds } = barSelection
+  const ctx2d = canvas.getContext('2d')
+  if (!ctx2d) return
+
+  const partSet = partIds ? new Set(partIds) : null
+  const grouped = new Map<number, MeasureLayout[]>()
+
+  for (const l of layouts) {
+    if (l.measureIndex < startMeasureIndex || l.measureIndex > endMeasureIndex) continue
+    if (partSet && !partSet.has(l.partId)) continue
+    const col = grouped.get(l.measureIndex) ?? []
+    col.push(l)
+    grouped.set(l.measureIndex, col)
+  }
+
+  ctx2d.save()
+  ctx2d.fillStyle   = 'rgba(33, 150, 243, 0.10)'
+  ctx2d.strokeStyle = 'rgba(33, 150, 243, 0.45)'
+  ctx2d.lineWidth   = 1.5
+
+  for (const colLayouts of grouped.values()) {
+    if (!colLayouts.length) continue
+    const top    = Math.min(...colLayouts.map(l => l.staveTopY)) - 8
+    const bottom = Math.max(...colLayouts.map(l => l.staveTopY)) + STAVE_HEIGHT_PX + 8
+    const left   = colLayouts[0].x
+    const width  = colLayouts[0].width
+    ctx2d.fillRect(left, top, width, bottom - top)
+    ctx2d.strokeRect(left, top, width, bottom - top)
   }
 
   ctx2d.restore()

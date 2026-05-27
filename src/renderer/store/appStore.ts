@@ -35,6 +35,12 @@ function normalizeMeasureRests(score: Score): Score {
 
 export type InputMode = 'select' | 'note' | 'rest' | 'text' | 'lyric' | 'midi'
 
+export interface BarSelection {
+  startMeasureIndex: number
+  endMeasureIndex: number
+  partIds: string[] | null  // null = all parts
+}
+
 export interface AppState {
   // Score data
   score: Score
@@ -52,6 +58,7 @@ export interface AppState {
   selectedChordPitchIndex: number | null  // non-null = individual pitch within selectedNoteId's chord
   selectedMeasureId: string | null
   selectedBarlineId: string | null   // measure ID whose right barline is selected
+  barSelection: BarSelection | null
   inputMode: InputMode
   zoom: number
 
@@ -113,6 +120,8 @@ export interface AppState {
   toggleSelectedNote: (id: string) => void
   clearSelection: () => void
   setSelectedChordPitch: (pitchIndex: number | null) => void
+  setBarSelection: (sel: BarSelection | null) => void
+  deleteSelectedBars: () => void
   dispatchBatch: (commands: Command[]) => void
   setSelectedMeasure: (measureId: string | null) => void
   setSelectedBarline: (measureId: string | null) => void
@@ -161,6 +170,7 @@ export const useAppStore = create<AppState>()(
     selectedChordPitchIndex: null,
     selectedMeasureId: null,
     selectedBarlineId: null,
+    barSelection: null,
     inputMode: 'note',
     zoom: 1.0,
 
@@ -242,6 +252,7 @@ export const useAppStore = create<AppState>()(
         state.selectedNoteIds = []
         state.selectedAnchorId = null
         state.selectedBarlineId = null
+        state.barSelection = null
         state.isPlaying = false
       })
     },
@@ -263,6 +274,7 @@ export const useAppStore = create<AppState>()(
         state.selectedNoteIds = []
         state.selectedAnchorId = null
         state.selectedBarlineId = null
+        state.barSelection = null
         state.isPlaying = false
       })
     },
@@ -375,8 +387,35 @@ export const useAppStore = create<AppState>()(
       s.selectedNoteId  = null
       s.selectedAnchorId = null
       s.selectedChordPitchIndex = null
+      s.barSelection = null
     }),
     setSelectedChordPitch: (pitchIndex) => set(s => { s.selectedChordPitchIndex = pitchIndex }),
+    setBarSelection: (sel) => set(s => {
+      s.barSelection = sel as any
+      if (sel) {
+        s.selectedNoteIds = []
+        s.selectedNoteId  = null
+        s.selectedAnchorId = null
+        s.selectedChordPitchIndex = null
+      }
+    }),
+    deleteSelectedBars: () => {
+      const { score, barSelection } = get()
+      if (!barSelection) return
+      const { startMeasureIndex, endMeasureIndex, partIds } = barSelection
+      const partSet = partIds ? new Set(partIds) : null
+      const targets: { partId: string; staffId: string; measureId: string }[] = []
+      for (const part of score.parts) {
+        if (partSet && !partSet.has(part.id)) continue
+        for (const staff of part.staves) {
+          for (let i = startMeasureIndex; i <= endMeasureIndex; i++) {
+            const measure = (staff.measures as any[])[i]
+            if (measure) targets.push({ partId: part.id, staffId: staff.id, measureId: measure.id })
+          }
+        }
+      }
+      if (targets.length > 0) get().dispatch({ type: 'CLEAR_MEASURES', targets })
+    },
     dispatchBatch: (commands) => {
       if (commands.length === 0) return
       set(state => {

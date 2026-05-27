@@ -71,6 +71,7 @@ export type Command =
   | { type: 'ADD_PEDAL_MARK';    partId: string; staffId: string; measureId: string; mark: PedalMark }
   | { type: 'REMOVE_PEDAL_MARK'; partId: string; staffId: string; measureId: string; markId: string }
   | { type: 'REMOVE_CHORD_PITCH'; partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; pitchIndex: number }
+  | { type: 'CLEAR_MEASURES'; targets: { partId: string; staffId: string; measureId: string }[] }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -945,6 +946,22 @@ export function applyCommand(score: Score, command: Command): Score {
         if (!measure?.pedalMarks) break
         const idx = measure.pedalMarks.findIndex((m: any) => m.id === command.markId)
         if (idx !== -1) measure.pedalMarks.splice(idx, 1)
+        break
+      }
+
+      case 'CLEAR_MEASURES': {
+        for (const { partId, staffId, measureId } of command.targets) {
+          const part  = draft.parts.find(p => p.id === partId)
+          const staff = part?.staves.find(s => s.id === staffId)
+          if (!staff) continue
+          const mIdx = (staff.measures as any[]).findIndex((m: any) => m.id === measureId)
+          if (mIdx === -1) continue
+          const timeSig = resolveTimeSig(staff.measures as any[], mIdx, draft.timeSignature)
+          const capacity = measureCapacityUnits(timeSig)
+          for (const voice of (staff.measures[mIdx] as any).voices) {
+            voice.events = fillWithRests(capacity)
+          }
+        }
         break
       }
 
