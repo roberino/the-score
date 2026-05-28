@@ -738,9 +738,12 @@ export function drawOverlay(
   if (barSelection)       drawBarSelection(canvas, barSelection, sliceLayouts)
   if (selectedMeasureId)  drawMeasureHighlight(canvas, selectedMeasureId, sliceLayouts)
 
-  // Note column highlights (replaces VexFlow note-head coloring in the base render)
+  // Note selection: single spanning rectangle per visual row
   if (selectedNoteIds.size > 0) {
     ctx.save()
+    // Group by (partId, staffId, staveTopY) — each unique staveTopY is one visual row
+    type RowGroup = { minX: number; maxX: number; layout: MeasureLayout }
+    const rowGroups = new Map<string, RowGroup>()
     for (const noteId of selectedNoteIds) {
       const noteX = notePositions.get(noteId)
       if (noteX === undefined) continue
@@ -752,11 +755,24 @@ export function drawOverlay(
       const staffId  = measureKey.slice(colonA + 1, colonB)
       const measureId = measureKey.slice(colonB + 1)
       const layout = sliceLayouts.find(l => l.partId === partId && l.staffId === staffId && l.measureId === measureId)
-      if (!layout) continue  // note is not in this canvas slice
-      ctx.fillStyle   = 'rgba(59, 157, 221, 0.20)'
-      ctx.strokeStyle = 'rgba(59, 157, 221, 0.50)'
-      ctx.lineWidth   = 1
-      const rx = noteX - 8, ry = layout.staveTopY - 8, rw = 16, rh = STAVE_HEIGHT_PX + 16
+      if (!layout) continue
+      const key = `${partId}:${staffId}:${layout.staveTopY}`
+      const existing = rowGroups.get(key)
+      if (existing) {
+        existing.minX = Math.min(existing.minX, noteX)
+        existing.maxX = Math.max(existing.maxX, noteX)
+      } else {
+        rowGroups.set(key, { minX: noteX, maxX: noteX, layout })
+      }
+    }
+    ctx.fillStyle   = 'rgba(59, 157, 221, 0.20)'
+    ctx.strokeStyle = 'rgba(59, 157, 221, 0.50)'
+    ctx.lineWidth   = 1
+    for (const { minX, maxX, layout } of rowGroups.values()) {
+      const rx = minX - 8
+      const ry = layout.staveTopY - 8
+      const rw = (maxX + 8) - (minX - 8)
+      const rh = STAVE_HEIGHT_PX + 16
       ctx.fillRect(rx, ry, rw, rh)
       ctx.strokeRect(rx, ry, rw, rh)
     }

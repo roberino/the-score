@@ -2,7 +2,7 @@
 
 ## Overview
 
-Select mode lets the user click on a note or rest to highlight it, enabling follow-up actions (delete, change duration, nudge octave) via keyboard shortcuts or toolbar controls.
+Select mode lets the user click on a note or rest to highlight it, enabling follow-up actions (delete, change duration, nudge octave) via keyboard shortcuts or a context menu.
 
 ## Activation
 
@@ -17,9 +17,12 @@ Clicks in select mode are prioritised in this order:
 1. **Key signature** — click within the preamble x-range of a measure that displays a key sig → opens the Circle of Fifths picker.
 2. **Time signature** — click within the preamble x-range of a measure that displays a time sig → opens the TimeSignaturePicker.
 3. **Barline** — click within `±8 px` of any measure's right barline → opens the BarlinePicker.
-4. **Note / rest** — click anywhere in the measure body and within `20 px` of the nearest note head (using actual VexFlow-rendered x positions) → selects that event; highlights it in blue.
-5. **Empty space outside of staves** — no priority match → deselects everything and closes any open picker.
-6. **Escape key** - deselects everything
+4. **Note / rest** — click anywhere in the measure body and within `20 px` of the nearest note head → selects that event and opens the selection context menu.
+5. **Empty space in a measure** — no note hit → starts or extends a bar selection.
+6. **Empty space outside of staves** — deselects everything and closes any open picker/menu.
+7. **Escape key** — deselects everything and closes any open picker/menu.
+
+Pickers (key sig, time sig, barline) do not open while a selection context menu is visible — the context menu must be closed first. When a picker is opened, any active selection menu closes.
 
 ## Note Head Hit Detection
 
@@ -27,19 +30,79 @@ Hit positions are derived from the actual VexFlow-rendered coordinates returned 
 
 ## Visual Feedback
 
-- Selected note/rest is drawn in blue (`#3b9ddd`) by the renderer.
-- Deselecting (clicking empty space or switching mode) clears the blue highlight.
+All selection types use the same blue overlay rectangle drawn on the overlay canvas, ensuring visual consistency.
 
-## Follow-up Actions (while a note is selected)
+### Single note / multi-note selection
+- A single spanning blue rectangle covers from the leftmost to rightmost selected note's position. Width is `(rightmostNoteX + 8) − (leftmostNoteX − 8)`.
+- If the selection spans multiple lines (canvas slices), one rectangle is drawn per line.
+- Fill: `rgba(59, 157, 221, 0.20)`, stroke: `rgba(59, 157, 221, 0.50)`.
+- VexFlow also colours selected note heads blue.
 
-| Action | Shortcut |
-|---|---|
-| Delete note | Delete / Backspace |
-| Change duration | 1–7 (same as note input duration keys) |
-| Nudge octave up | Cmd/Ctrl + ↑ |
-| Nudge octave down | Cmd/Ctrl + ↓ |
+### Bar selection
+- A full-width rectangle spanning the complete measure(s) width from left edge to right edge.
+- Covers all selected parts; spans multiple lines if the selection crosses a line break.
+- Fill: `rgba(33, 150, 243, 0.10)`, stroke: `rgba(33, 150, 243, 0.45)`.
 
-## Bar selection
+## Mutual Exclusivity
+
+Note selection and bar selection are mutually exclusive:
+- Selecting a note/rest always clears any active bar selection.
+- Making a bar selection always clears any active note selection.
+- The store enforces this — `setSelectedNote`, `setSelectedNotes`, `addToSelection`, and `toggleSelectedNote` all clear `barSelection`; `setBarSelection(non-null)` clears `selectedNoteIds`.
+
+## Selection Context Menu
+
+A single unified context menu appears for all selection types (single note, multi-note, bar selection). It is positioned below the selected note(s) or at the click location for bar selection.
+
+### Menu structure
+
+```
+┌─────────────────────────────────────────────┐
+│  [drag handle] <summary>          [✕ close] │
+│  [Tie] [Slur] [cresc] [dim] [3] [5] [6]    │  ← operation row
+├─────────────────────────────────────────────┤
+│  Articulations │ Volta │ Transpose           │  ← tabs
+├─────────────────────────────────────────────┤
+│  <tab content>                               │
+└─────────────────────────────────────────────┘
+```
+
+### Operation availability by selection type
+
+| Operation | Single note | Multi-note | Bar selection |
+|---|---|---|---|
+| Tie | ✓ enabled | ✗ disabled | ✗ disabled |
+| Slur | ✓ enabled | ✓ enabled | ✗ disabled |
+| Hairpin (cresc / dim) | ✗ disabled | ✓ enabled (≥ 2 notes) | ✗ disabled |
+| Tuplet (3 / 5 / 6) | ✗ disabled | ✓ enabled (exact counts) | ✗ disabled |
+| **Articulations tab** | ✓ full | ✓ full | ✗ tab disabled |
+| Dynamics (within Articulations) | ✓ enabled | ✗ disabled | ✗ disabled |
+| **Volta tab** | ✓ enabled | ✓ enabled | ✓ enabled |
+| **Transpose tab** | ✓ enabled | ✓ enabled | ✓ enabled |
+
+Disabled items are rendered greyed out (`color: #555`, `cursor: not-allowed`) and do not respond to clicks.
+
+### Close behaviour
+
+- The menu has a **✕** button in the top-right corner.
+- Clicking ✕ clears the entire selection (note or bar) and closes the menu.
+- This is equivalent to pressing Escape.
+
+### Draggability
+
+- The menu header row acts as a **drag handle** (cursor: `grab` on hover, `grabbing` while dragging).
+- The user can drag the menu to any position on screen. This is particularly useful when the menu would otherwise obscure the stave during bar selection narrowing (Phase 2).
+- Drag offset resets to zero whenever a new selection is made (menu repositions to its default location).
+
+### No-overlap rule
+
+Only one popup can be visible at a time. The selection context menu, barline picker, key sig picker, time sig picker, clef picker, directive picker, pedal mark picker, and MIDI event picker are all mutually exclusive:
+- Opening any picker closes the selection context menu.
+- Opening the selection context menu closes any open picker.
+
+---
+
+## Bar Selection
 
 Bar selection allows the user to select one or more bars in order to apply bulk operations.
 
@@ -61,29 +124,31 @@ Once a bar range is active, the user can narrow it to specific parts:
 
 *Example: to select bars 3–7 for piano left and right hand — click bar 3 (all parts), shift+click bar 7 (extends range), click the piano right-hand stave (narrows to that part), shift+click the piano left-hand stave (adds left hand).*
 
+*If the context menu obscures the stave during Phase 2, drag it out of the way using the drag handle.*
+
 **Clearing**
 
-- Escape or click empty space outside all staves → clears the entire selection.
+- Click ✕ on the context menu, press Escape, or click empty space outside all staves → clears the entire selection and closes the menu.
 
 Full bar selection will clear any existing note selection.
 
 **Bulk Operations on Bars**
 
-The standard context menu should be presented upon bar selection but with limitted operations as per below.
+The unified selection context menu is shown, with operation availability as described in the table above.
 
-**Bulk deletion** 
+**Bulk deletion**
 
-* Replace selected bars with full bar rests
-* This will not be a context menu item but rather will be applied when the delete key as pressed (same as note selection deletion)
+- Replace selected bars with full bar rests.
+- Applied when the Delete key is pressed (not a context menu item).
 
-**Transpose** 
+**Transpose**
 
-* This should be applied to all notes within selection
-* Transpose will use the context menu
-* Should behave exactly as the [multi-select](./multi-select.md#22-transpose)
+- Applied to all notes within the selection.
+- Uses the Transpose tab of the context menu.
+- Behaves as per [multi-select transpose](./multi-select.md#22-transpose).
 
 **Volta**
 
-* Should apply across the selected bars
-* Will use the context menu
-* Should behave as per the [volta spec](./volta-brackets.md)
+- Applies across the selected bars.
+- Uses the Volta tab of the context menu.
+- Behaves as per the [volta spec](./volta-brackets.md).

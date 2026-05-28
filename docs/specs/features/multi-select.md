@@ -29,7 +29,7 @@ Extend the selection model from single-note to multi-note, and add bulk edit ope
 All selections are constrained to a **single staff** of a **single part**. Cross-part selection is out of scope (ambiguous for most operations and raises transpose-harmony questions).
 
 ### 1.4 Rendering
-Notes in `selectedNoteIds` are drawn in the selection colour (existing `#3b9ddd`). The last-selected note may optionally use a slightly different shade to indicate the "anchor" — **TBD based on answer to Q1**.
+All selected notes are drawn in blue (`#3b9ddd`) by VexFlow. A single spanning overlay rectangle is drawn from the leftmost to rightmost selected note position (see [select.md visual feedback](./select.md#visual-feedback)). No separate anchor highlight — all selected notes use the same colour.
 
 ---
 

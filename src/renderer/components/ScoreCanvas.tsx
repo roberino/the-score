@@ -542,8 +542,9 @@ export function ScoreCanvas(): JSX.Element {
   const [contextMenuTab, setContextMenuTab] = useState<'articulations' | 'volta' | 'transpose'>('articulations')
   const [transposeDir, setTransposeDir]     = useState<'up' | 'down'>('up')
   const [transposeAmt, setTransposeAmt]     = useState(1)
-  const [barSelectionMenuPos, setBarSelectionMenuPos] = useState<{ x: number; y: number } | null>(null)
-  const [barMenuTab, setBarMenuTab] = useState<'transpose' | 'volta'>('transpose')
+  const [menuDragOffset, setMenuDragOffset] = useState({ x: 0, y: 0 })
+  const [isDraggingMenu, setIsDraggingMenu] = useState(false)
+  const menuDragRef = useRef<{ startX: number; startY: number; startOffX: number; startOffY: number } | null>(null)
 
   const {
     score, zoom, inputMode,
@@ -1767,6 +1768,29 @@ export function ScoreCanvas(): JSX.Element {
     if (ids.length > 0) setSelectedNotes(ids, ids[ids.length - 1])
   }, [score, selectedNoteId, cursorMeasureId, setSelectedNotes])
 
+  // ── Context menu drag ──────────────────────────────────────────────────────
+
+  const handleMenuDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    menuDragRef.current = { startX: e.clientX, startY: e.clientY, startOffX: menuDragOffset.x, startOffY: menuDragOffset.y }
+    setIsDraggingMenu(true)
+    const onMove = (ev: MouseEvent) => {
+      if (!menuDragRef.current) return
+      setMenuDragOffset({
+        x: menuDragRef.current.startOffX + ev.clientX - menuDragRef.current.startX,
+        y: menuDragRef.current.startOffY + ev.clientY - menuDragRef.current.startY,
+      })
+    }
+    const onUp = () => {
+      menuDragRef.current = null
+      setIsDraggingMenu(false)
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [menuDragOffset])
+
   // ── Keyboard handler ────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -1780,7 +1804,7 @@ export function ScoreCanvas(): JSX.Element {
 
       // During playback: allow escape/select-mode switch and navigation; block mutations
       if (isPlaying) {
-        if (e.key === 'Escape') { setInputMode('select'); setSlurPendingId(null); setSelectedMeasure(null); setBarSelection(null); setBarSelectionMenuPos(null); return }
+        if (e.key === 'Escape') { setInputMode('select'); setSlurPendingId(null); setSelectedMeasure(null); setBarSelection(null); setSelectionMenuPos(null); return }
         if (!mod && (e.key === 's' || e.key === 'S')) { setInputMode('select'); return }
         if (!mod && (e.key === 'k' || e.key === 'K')) { toggleKeyboard(); return }
         if (!mod && inputMode === 'select' && selectedNoteIds.length > 0) {
@@ -1796,7 +1820,7 @@ export function ScoreCanvas(): JSX.Element {
         setInputMode('select')
         setSelectedMeasure(null)
         setBarSelection(null)
-        setBarSelectionMenuPos(null)
+        setSelectionMenuPos(null)
         return
       }
 
@@ -2205,7 +2229,6 @@ export function ScoreCanvas(): JSX.Element {
       // Clicked outside all measures — clear all selections and context menus
       clearSelection()
       setSelectionMenuPos(null)
-      setBarSelectionMenuPos(null)
       setSelectedMeasure(null)
       return
     }
@@ -2673,6 +2696,10 @@ export function ScoreCanvas(): JSX.Element {
                   }
                 }
               }
+              setPickerState(null)
+              setKeySigPickerState(null)
+              setTimeSigPickerState(null)
+              setClefPickerState(null)
               setSelectionMenuPos({ x: menuX, y: menuY })
               return
             }
@@ -2702,7 +2729,8 @@ export function ScoreCanvas(): JSX.Element {
         } else if (inRange && !event.shiftKey) {
           // Phase 2 narrow: narrow to this part only
           setBarSelection({ ...barSelection, partIds: [clickedPartId] })
-          setBarSelectionMenuPos({ x: event.clientX, y: event.clientY })
+          setContextMenuTab('volta')
+          setSelectionMenuPos({ x: event.clientX, y: event.clientY })
         } else if (!inRange && event.shiftKey && clickedMeasureIndex > barSelection.endMeasureIndex) {
           // Phase 1 extend forward: widen range, reset part filter to all
           setBarSelection({
@@ -2710,18 +2738,21 @@ export function ScoreCanvas(): JSX.Element {
             endMeasureIndex: clickedMeasureIndex,
             partIds: null,
           })
-          setBarSelectionMenuPos({ x: event.clientX, y: event.clientY })
+          setContextMenuTab('volta')
+          setSelectionMenuPos({ x: event.clientX, y: event.clientY })
         } else {
           // Start a new bar selection
           clearSelection()
           setBarSelection({ startMeasureIndex: clickedMeasureIndex, endMeasureIndex: clickedMeasureIndex, partIds: null })
-          setBarSelectionMenuPos({ x: event.clientX, y: event.clientY })
+          setContextMenuTab('volta')
+          setSelectionMenuPos({ x: event.clientX, y: event.clientY })
         }
       } else {
         // No existing bar selection: start one
         clearSelection()
         setBarSelection({ startMeasureIndex: clickedMeasureIndex, endMeasureIndex: clickedMeasureIndex, partIds: null })
-        setBarSelectionMenuPos({ x: event.clientX, y: event.clientY })
+        setContextMenuTab('volta')
+        setSelectionMenuPos({ x: event.clientX, y: event.clientY })
       }
     }
   }
@@ -2859,8 +2890,13 @@ export function ScoreCanvas(): JSX.Element {
   }, [inputMode])
 
   useEffect(() => {
-    if (selectedNoteIds.length === 0) setSelectionMenuPos(null)
-  }, [selectedNoteIds.length])
+    if (selectedNoteIds.length === 0 && !barSelection) setSelectionMenuPos(null)
+  }, [selectedNoteIds.length, barSelection])
+
+  // Reset drag offset whenever menu position changes (new selection)
+  useEffect(() => {
+    setMenuDragOffset({ x: 0, y: 0 })
+  }, [selectionMenuPos])
 
   // ── Cursor style per mode ───────────────────────────────────────────────────
 
@@ -3019,65 +3055,101 @@ export function ScoreCanvas(): JSX.Element {
           onClose={() => setPedalMarkPickerState(null)}
         />
       )}
-      {selectedNoteIds.length > 0 && inputMode === 'select' && selectionMenuPos && (() => {
-        // Resolve current dynamic for single-note selection
-        let currentDynamic: DynamicLevel | undefined
-        if (selectedNoteId) {
-          for (const part of score.parts) {
-            for (const staff of part.staves) {
-              for (const measure of staff.measures) {
-                for (const voice of measure.voices) {
-                  const ev = voice.events.find(e => e.id === selectedNoteId)
-                  if (ev) { currentDynamic = (ev as any).dynamic; break }
-                }
-              }
-            }
-          }
+      {((selectedNoteIds.length > 0 || barSelection !== null) && inputMode === 'select' && selectionMenuPos !== null) && (() => {
+        const isBar    = barSelection !== null && selectedNoteIds.length === 0
+        const isSingle = selectedNoteIds.length === 1
+        const isMulti  = selectedNoteIds.length > 1
+
+        // Summary text for the drag handle header
+        let summaryText: string
+        if (isBar) {
+          const { startMeasureIndex: si, endMeasureIndex: ei, partIds } = barSelection!
+          const barRange = si === ei ? `Bar ${si + 1}` : `Bars ${si + 1}–${ei + 1}`
+          const partLabel = partIds
+            ? partIds.length === 1
+              ? score.parts.find(p => p.id === partIds![0])?.name ?? '1 part'
+              : `${partIds.length} parts`
+            : 'All parts'
+          summaryText = `${barRange} · ${partLabel}`
+        } else if (isMulti) {
+          summaryText = `${selectedNoteIds.length} notes`
+        } else {
+          summaryText = '1 note'
         }
-        // Find active tie state
+
+        // Resolve tie state (single note only)
         let hasTie = false
-        if (selectedNoteId) {
-          for (const part of score.parts) {
+        if (isSingle && selectedNoteId) {
+          outer: for (const part of score.parts) {
             for (const staff of part.staves) {
               for (const measure of staff.measures) {
                 for (const voice of measure.voices) {
                   const ev = voice.events.find(e => e.id === selectedNoteId)
-                  if (ev?.type === 'note' && (ev as Note).tieStart) hasTie = true
+                  if (ev?.type === 'note' && (ev as Note).tieStart) { hasTie = true; break outer }
                 }
               }
             }
           }
         }
-        // Compute the measure index range covered by the current selection
-        const selIdSet = new Set(selectedNoteIds)
-        let selMinMeasure = Infinity, selMaxMeasure = -Infinity
-        const firstStaff = score.parts[0]?.staves[0]
-        if (firstStaff) {
-          firstStaff.measures.forEach((m, idx) => {
-            for (const voice of m.voices) {
-              if (voice.events.some(e => selIdSet.has(e.id))) {
-                selMinMeasure = Math.min(selMinMeasure, idx)
-                selMaxMeasure = Math.max(selMaxMeasure, idx)
+
+        // Resolve dynamic (single note only)
+        let currentDynamic: DynamicLevel | undefined
+        if (isSingle && selectedNoteId) {
+          outer: for (const part of score.parts) {
+            for (const staff of part.staves) {
+              for (const measure of staff.measures) {
+                for (const voice of measure.voices) {
+                  const ev = voice.events.find(e => e.id === selectedNoteId)
+                  if (ev) { currentDynamic = (ev as any).dynamic; break outer }
+                }
               }
             }
-          })
+          }
         }
-        const selHasMeasure = selMaxMeasure >= selMinMeasure && selMinMeasure !== Infinity
-        // Existing volta that exactly covers the selected range (for toggle)
-        const existingVolta: Volta | undefined = selHasMeasure
-          ? (score.voltas ?? []).find(v =>
-              v.startMeasureIndex === selMinMeasure && v.endMeasureIndex === selMaxMeasure
-            )
+
+        // Measure range for Volta tab — from bar selection or note selection
+        let effectiveStart = -1, effectiveEnd = -1
+        if (isBar) {
+          effectiveStart = barSelection!.startMeasureIndex
+          effectiveEnd   = barSelection!.endMeasureIndex
+        } else {
+          const selIdSet = new Set(selectedNoteIds)
+          let selMin = Infinity, selMax = -Infinity
+          const firstStaff = score.parts[0]?.staves[0]
+          if (firstStaff) {
+            firstStaff.measures.forEach((m, idx) => {
+              for (const voice of m.voices) {
+                if (voice.events.some(e => selIdSet.has(e.id))) {
+                  selMin = Math.min(selMin, idx)
+                  selMax = Math.max(selMax, idx)
+                }
+              }
+            })
+          }
+          if (selMax >= selMin && selMin !== Infinity) { effectiveStart = selMin; effectiveEnd = selMax }
+        }
+        const hasRange = effectiveStart !== -1
+        const existingVolta: Volta | undefined = hasRange
+          ? (score.voltas ?? []).find(v => v.startMeasureIndex === effectiveStart && v.endMeasureIndex === effectiveEnd)
           : undefined
 
+        // Slur state (note selections only)
+        const hasOutgoingSlur = !isBar && !slurPendingId && selectedNoteId != null && score.parts.some(p =>
+          p.staves.some(s => s.slurs?.some(sl => sl.fromNoteId === selectedNoteId))
+        )
+
         const menuW = 380
-        const left = Math.min(selectionMenuPos.x - menuW / 2, window.innerWidth - menuW - 8)
-        const top  = Math.min(selectionMenuPos.y, window.innerHeight - 260)
+        const rawLeft = selectionMenuPos.x - menuW / 2 + menuDragOffset.x
+        const rawTop  = selectionMenuPos.y + menuDragOffset.y
+        const left = Math.max(8, Math.min(rawLeft, window.innerWidth - menuW - 8))
+        const top  = Math.max(8, Math.min(rawTop, window.innerHeight - 300))
+
         const btnBase: React.CSSProperties = {
           padding: '3px 8px', borderRadius: 3, border: '1px solid #555',
           background: '#2d2d2d', color: '#ccc', cursor: 'pointer', fontSize: 11,
         }
-        const btnActive: React.CSSProperties = { ...btnBase, background: '#0e639c', color: '#fff', border: '1px solid #0e639c' }
+        const btnActive: React.CSSProperties  = { ...btnBase, background: '#0e639c', color: '#fff', border: '1px solid #0e639c' }
+        const btnDisabled: React.CSSProperties = { ...btnBase, color: '#555', cursor: 'not-allowed' }
         const DYNAMICS: DynamicLevel[] = ['pp', 'p', 'mp', 'mf', 'f', 'ff']
         const NAMED_INTERVALS = [
           { label: 'm2', semitones: 1 }, { label: 'M2', semitones: 2 },
@@ -3092,46 +3164,54 @@ export function ScoreCanvas(): JSX.Element {
           { key: 'volta',         label: 'Volta' },
           { key: 'transpose',     label: 'Transpose' },
         ]
+
         return (
-          <div style={{
-            position: 'fixed', left, top,
-            background: '#1e1e1e', border: '1px solid #444', borderRadius: 6,
-            padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6,
-            zIndex: 1000, boxShadow: '0 4px 16px rgba(0,0,0,0.5)', fontSize: 12, color: '#d4d4d4',
-            minWidth: menuW,
-          }}>
-            {/* Header row: note / multi-select operations */}
+          <div
+            style={{
+              position: 'fixed', left, top,
+              background: '#1e1e1e', border: '1px solid #444', borderRadius: 6,
+              padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6,
+              zIndex: 1000, boxShadow: '0 4px 16px rgba(0,0,0,0.5)', fontSize: 12, color: '#d4d4d4',
+              minWidth: menuW,
+            }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            {/* Drag handle + summary + close */}
+            <div
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: isDraggingMenu ? 'grabbing' : 'grab', userSelect: 'none' }}
+              onMouseDown={handleMenuDragStart}
+            >
+              <span style={{ color: '#888', fontSize: 11 }}>⠿ {summaryText}</span>
+              <button
+                onClick={() => { clearSelection(); setBarSelection(null); setSelectionMenuPos(null) }}
+                style={{ ...btnBase, padding: '1px 6px', fontSize: 10, cursor: 'pointer' }}
+                onMouseDown={e => e.stopPropagation()}
+              >✕</button>
+            </div>
+
+            {/* Operations row */}
             <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-              {selectedNoteIds.length > 1 && (
-                <span style={{ color: '#888', fontSize: 11, marginRight: 4 }}>
-                  {selectedNoteIds.length} selected
-                </span>
-              )}
-              {selectedNoteId && (() => {
-                const hasOutgoingSlur = !slurPendingId && score.parts.some(p =>
-                  p.staves.some(s => s.slurs?.some(sl => sl.fromNoteId === selectedNoteId))
-                )
-                return (
-                  <>
-                    <button onClick={toggleTie} title="Toggle tie (T)" style={hasTie ? btnActive : btnBase}>Tie</button>
-                    <button
-                      onClick={handleSlurKey}
-                      title={slurPendingId ? 'Cancel slur (Esc)' : hasOutgoingSlur ? 'Remove slur (L)' : 'Start slur (L)'}
-                      style={
-                        slurPendingId    ? { ...btnBase, background: '#6d3a00', border: '1px solid #a0550a', color: '#ffc080' } :
-                        hasOutgoingSlur  ? { ...btnBase, background: '#3a1a3a', border: '1px solid #7a3a7a', color: '#e0a0e0' } :
-                        btnBase
-                      }
-                    >
-                      {slurPendingId ? 'Slur…' : hasOutgoingSlur ? 'Slur ✕' : 'Slur'}
-                    </button>
-                  </>
-                )
-              })()}
-              {selectedNoteIds.length >= 2 && (
+              <button
+                onClick={isBar || isMulti ? undefined : toggleTie}
+                title="Toggle tie (T)"
+                style={isBar || isMulti ? btnDisabled : hasTie ? btnActive : btnBase}
+              >Tie</button>
+              <button
+                onClick={isBar ? undefined : handleSlurKey}
+                title={isBar ? 'Not available for bar selection'
+                  : slurPendingId  ? 'Cancel slur (Esc)'
+                  : hasOutgoingSlur ? 'Remove slur (L)' : 'Start slur (L)'}
+                style={
+                  isBar           ? btnDisabled :
+                  slurPendingId   ? { ...btnBase, background: '#6d3a00', border: '1px solid #a0550a', color: '#ffc080' } :
+                  hasOutgoingSlur ? { ...btnBase, background: '#3a1a3a', border: '1px solid #7a3a7a', color: '#e0a0e0' } :
+                  btnBase
+                }
+              >{slurPendingId ? 'Slur…' : hasOutgoingSlur ? 'Slur ✕' : 'Slur'}</button>
+              {(isMulti || isBar) && (
                 <>
-                  <button onClick={() => addHairpin('crescendo')}   title="Add crescendo"   style={btnBase}>cresc</button>
-                  <button onClick={() => addHairpin('decrescendo')} title="Add decrescendo" style={btnBase}>dim</button>
+                  <button onClick={isBar ? undefined : () => addHairpin('crescendo')}   title="Add crescendo"   style={isBar ? btnDisabled : btnBase}>cresc</button>
+                  <button onClick={isBar ? undefined : () => addHairpin('decrescendo')} title="Add decrescendo" style={isBar ? btnDisabled : btnBase}>dim</button>
                 </>
               )}
               {selectedNoteIds.length === 3 && <button onClick={() => applyTuplet(3, 2)} title="Make triplet"    style={btnBase}>3</button>}
@@ -3141,37 +3221,42 @@ export function ScoreCanvas(): JSX.Element {
 
             {/* Tab bar */}
             <div style={{ display: 'flex', borderBottom: '1px solid #333', marginTop: 2 }}>
-              {tabs.map(({ key, label }) => (
-                <button key={key} onClick={() => setContextMenuTab(key)} style={{
-                  padding: '4px 12px', border: 'none', background: 'none', cursor: 'pointer',
-                  fontSize: 11, color: contextMenuTab === key ? '#d4d4d4' : '#666',
-                  borderBottom: contextMenuTab === key ? '2px solid #0e639c' : '2px solid transparent',
-                  marginBottom: -1,
-                }}>
-                  {label}
-                </button>
-              ))}
+              {tabs.map(({ key, label }) => {
+                const tabDisabled = isBar && key === 'articulations'
+                return (
+                  <button key={key}
+                    onClick={tabDisabled ? undefined : () => setContextMenuTab(key)}
+                    style={{
+                      padding: '4px 12px', border: 'none', background: 'none',
+                      cursor: tabDisabled ? 'not-allowed' : 'pointer',
+                      fontSize: 11,
+                      color: tabDisabled ? '#444' : contextMenuTab === key ? '#d4d4d4' : '#666',
+                      borderBottom: contextMenuTab === key ? '2px solid #0e639c' : '2px solid transparent',
+                      marginBottom: -1,
+                    }}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
             </div>
 
-            {/* Articulations tab */}
-            {contextMenuTab === 'articulations' && (
+            {/* Articulations tab (disabled for bar selection) */}
+            {contextMenuTab === 'articulations' && !isBar && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 2 }}>
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' as const }}>
                   {ARTICULATION_BUTTONS.map(({ art, label, title }) => (
                     <button key={art} onClick={() => handleArticulationClick(art)} title={title}
-                      style={{ ...( artActive[art] ? btnActive : btnBase ), fontFamily: 'serif', fontSize: 13 }}>
+                      style={{ ...(artActive[art] ? btnActive : btnBase), fontFamily: 'serif', fontSize: 13 }}>
                       {label}
                     </button>
                   ))}
-                  {ARTICULATION_BUTTONS.length === 0 && (
-                    <span style={{ color: '#555', fontSize: 11 }}>No notes selected</span>
-                  )}
                 </div>
-                {selectedNoteId && (
+                {isSingle && selectedNoteId && (
                   <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' as const, paddingTop: 4, borderTop: '1px solid #2a2a2a' }}>
                     {DYNAMICS.map(d => (
                       <button key={d}
-                        onClick={() => setNoteDynamic(selectedNoteId, currentDynamic === d ? undefined : d)}
+                        onClick={() => setNoteDynamic(selectedNoteId!, currentDynamic === d ? undefined : d)}
                         title={currentDynamic === d ? `Remove ${d}` : `Set dynamic: ${d}`}
                         style={{ ...(currentDynamic === d ? btnActive : btnBase), fontFamily: 'Edwin, serif', fontStyle: 'italic', fontWeight: 'bold', fontSize: 13 }}
                       >
@@ -3186,30 +3271,34 @@ export function ScoreCanvas(): JSX.Element {
             {/* Volta tab */}
             {contextMenuTab === 'volta' && (
               <div style={{ paddingTop: 2 }}>
-                {selHasMeasure ? (
+                {hasRange ? (
                   <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                     {([1, 2, 3] as const).map(n => {
                       const isActive = existingVolta?.number === n
                       return (
                         <button key={n}
                           onClick={() => {
-                            if (isActive && existingVolta) {
-                              removeVolta(existingVolta.id)
-                            } else {
+                            if (isActive && existingVolta) { removeVolta(existingVolta.id) }
+                            else {
                               if (existingVolta) removeVolta(existingVolta.id)
-                              addVolta({ number: n, startMeasureIndex: selMinMeasure, endMeasureIndex: selMaxMeasure })
+                              addVolta({ number: n, startMeasureIndex: effectiveStart, endMeasureIndex: effectiveEnd })
                             }
                           }}
-                          title={isActive ? `Remove ending ${n}` : `Add ending ${n} (measures ${selMinMeasure + 1}–${selMaxMeasure + 1})`}
+                          title={isActive ? `Remove ending ${n}` : `Add ending ${n} (measures ${effectiveStart + 1}–${effectiveEnd + 1})`}
                           style={isActive ? btnActive : btnBase}
                         >
                           {n}.
                         </button>
                       )
                     })}
+                    {existingVolta && (
+                      <button style={{ ...btnBase, marginLeft: 8 }} onClick={() => removeVolta(existingVolta.id)}>
+                        Remove
+                      </button>
+                    )}
                   </div>
                 ) : (
-                  <span style={{ color: '#555', fontSize: 11 }}>Select a range of measures to apply a volta bracket</span>
+                  <span style={{ color: '#555', fontSize: 11 }}>Select notes or measures to apply a volta bracket</span>
                 )}
               </div>
             )}
@@ -3242,139 +3331,34 @@ export function ScoreCanvas(): JSX.Element {
                   <input
                     type="number" min={1} max={24} value={transposeAmt}
                     onChange={e => setTransposeAmt(Math.max(1, Math.min(24, Number(e.target.value))))}
-                    onKeyDown={e => { if (e.key === 'Enter') { transposeSelectedNotes(transposeDir === 'up' ? transposeAmt : -transposeAmt) } }}
-                    style={{
-                      width: 48, padding: '2px 4px', border: '1px solid #555', borderRadius: 3,
-                      background: '#2d2d2d', color: '#ccc', fontSize: 11, textAlign: 'center',
-                    }}
-                  />
-                  <button
-                    onClick={() => transposeSelectedNotes(transposeDir === 'up' ? transposeAmt : -transposeAmt)}
-                    style={{ ...btnActive, marginLeft: 'auto' }}
-                  >
-                    Apply
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )
-      })()}
-
-      {barSelection && barSelectionMenuPos && (() => {
-        const { startMeasureIndex, endMeasureIndex } = barSelection
-        const existingVolta = (score.voltas ?? []).find(v =>
-          v.startMeasureIndex === startMeasureIndex && v.endMeasureIndex === endMeasureIndex
-        )
-        const menuW = 380
-        const left  = Math.min(barSelectionMenuPos.x - menuW / 2, window.innerWidth - menuW - 8)
-        const top   = Math.min(barSelectionMenuPos.y + 8, window.innerHeight - 260)
-        const btnBase: React.CSSProperties = {
-          padding: '3px 8px', borderRadius: 3, border: '1px solid #555',
-          background: '#2d2d2d', color: '#ccc', cursor: 'pointer', fontSize: 11,
-        }
-        const btnActive: React.CSSProperties = { ...btnBase, background: '#0e639c', color: '#fff', border: '1px solid #0e639c' }
-        const NAMED_INTERVALS = [
-          { label: 'm2', semitones: 1 }, { label: 'M2', semitones: 2 },
-          { label: 'm3', semitones: 3 }, { label: 'M3', semitones: 4 },
-          { label: 'P4', semitones: 5 }, { label: 'Tritone', semitones: 6 },
-          { label: 'P5', semitones: 7 }, { label: 'm6', semitones: 8 },
-          { label: 'M6', semitones: 9 }, { label: 'm7', semitones: 10 },
-          { label: 'M7', semitones: 11 }, { label: 'P8', semitones: 12 },
-        ]
-        const barRange = startMeasureIndex === endMeasureIndex
-          ? `Bar ${startMeasureIndex + 1}`
-          : `Bars ${startMeasureIndex + 1}–${endMeasureIndex + 1}`
-        const partLabel = barSelection.partIds
-          ? barSelection.partIds.length === 1
-            ? score.parts.find(p => p.id === barSelection.partIds![0])?.name ?? '1 part'
-            : `${barSelection.partIds.length} parts`
-          : 'All parts'
-
-        return (
-          <div
-            style={{
-              position: 'fixed', left, top,
-              background: '#1e1e1e', border: '1px solid #444', borderRadius: 6,
-              padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6,
-              zIndex: 1000, boxShadow: '0 4px 16px rgba(0,0,0,0.5)', fontSize: 12, color: '#d4d4d4',
-              minWidth: menuW,
-            }}
-            onMouseDown={e => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: '#888', fontSize: 11 }}>
-                {barRange} · {partLabel}
-              </span>
-              <button
-                onClick={() => { setBarSelection(null); setBarSelectionMenuPos(null) }}
-                style={{ ...btnBase, padding: '1px 6px', fontSize: 10 }}
-              >✕</button>
-            </div>
-
-            {/* Tabs */}
-            <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid #333', paddingBottom: 4 }}>
-              {(['transpose', 'volta'] as const).map(tab => (
-                <button key={tab} onClick={() => setBarMenuTab(tab)} style={{
-                  ...btnBase,
-                  ...(barMenuTab === tab ? { background: '#333', borderColor: '#555' } : {}),
-                  textTransform: 'capitalize',
-                }}>{tab}</button>
-              ))}
-            </div>
-
-            {barMenuTab === 'volta' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ color: '#888', fontSize: 11 }}>Apply volta bracket to selection</div>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {([1, 2, 3] as const).map(n => {
-                    const active = existingVolta?.number === n
-                    return (
-                      <button key={n} style={active ? btnActive : btnBase} onClick={() => {
-                        if (active && existingVolta) { removeVolta(existingVolta.id) }
-                        else {
-                          if (existingVolta) removeVolta(existingVolta.id)
-                          addVolta({ number: n, startMeasureIndex, endMeasureIndex })
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        const semitones = transposeDir === 'up' ? transposeAmt : -transposeAmt
+                        if (isBar) {
+                          const partSet = barSelection!.partIds ? new Set(barSelection!.partIds) : null
+                          const { startMeasureIndex: si, endMeasureIndex: ei } = barSelection!
+                          const moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] = []
+                          for (const part of score.parts) {
+                            if (partSet && !partSet.has(part.id)) continue
+                            for (const staff of part.staves) {
+                              for (let i = si; i <= ei; i++) {
+                                const measure = (staff.measures as any[])[i]
+                                if (!measure) continue
+                                for (const voice of measure.voices) {
+                                  for (const ev of voice.events) {
+                                    if (ev.type === 'note' || ev.type === 'chord')
+                                      moves.push({ partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id, noteId: ev.id })
+                                  }
+                                }
+                              }
+                            }
+                          }
+                          if (moves.length > 0) dispatch({ type: 'TRANSPOSE_NOTES', moves, semitones })
+                        } else {
+                          transposeSelectedNotes(semitones)
                         }
-                      }}>
-                        {n}
-                      </button>
-                    )
-                  })}
-                  {existingVolta && (
-                    <button style={{ ...btnBase, marginLeft: 8 }} onClick={() => removeVolta(existingVolta.id)}>
-                      Remove
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {barMenuTab === 'transpose' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  {(['up', 'down'] as const).map(d => (
-                    <button key={d} onClick={() => setTransposeDir(d)} style={{
-                      ...btnBase, flex: 1,
-                      ...(transposeDir === d ? { background: '#0e639c', color: '#fff', border: '1px solid #0e639c' } : {}),
-                    }}>
-                      {d === 'up' ? '↑ Up' : '↓ Down'}
-                    </button>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 3 }}>
-                  {NAMED_INTERVALS.map(({ label, semitones }) => (
-                    <button key={label} onClick={() => setTransposeAmt(semitones)} style={{
-                      ...btnBase,
-                      ...(transposeAmt === semitones ? { background: '#0e639c', color: '#fff', border: '1px solid #0e639c' } : {}),
-                    }}>{label}</button>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ color: '#888', fontSize: 11 }}>Semitones:</span>
-                  <input
-                    type="number" min={1} max={24} value={transposeAmt}
-                    onChange={e => setTransposeAmt(Math.max(1, Math.min(24, Number(e.target.value))))}
+                      }
+                    }}
                     style={{
                       width: 48, padding: '2px 4px', border: '1px solid #555', borderRadius: 3,
                       background: '#2d2d2d', color: '#ccc', fontSize: 11, textAlign: 'center',
@@ -3384,25 +3368,29 @@ export function ScoreCanvas(): JSX.Element {
                     style={{ ...btnActive, marginLeft: 'auto' }}
                     onClick={() => {
                       const semitones = transposeDir === 'up' ? transposeAmt : -transposeAmt
-                      const partSet = barSelection.partIds ? new Set(barSelection.partIds) : null
-                      const moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] = []
-                      for (const part of score.parts) {
-                        if (partSet && !partSet.has(part.id)) continue
-                        for (const staff of part.staves) {
-                          for (let i = startMeasureIndex; i <= endMeasureIndex; i++) {
-                            const measure = (staff.measures as any[])[i]
-                            if (!measure) continue
-                            for (const voice of measure.voices) {
-                              for (const ev of voice.events) {
-                                if (ev.type === 'note' || ev.type === 'chord') {
-                                  moves.push({ partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id, noteId: ev.id })
+                      if (isBar) {
+                        const partSet = barSelection!.partIds ? new Set(barSelection!.partIds) : null
+                        const { startMeasureIndex: si, endMeasureIndex: ei } = barSelection!
+                        const moves: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[] = []
+                        for (const part of score.parts) {
+                          if (partSet && !partSet.has(part.id)) continue
+                          for (const staff of part.staves) {
+                            for (let i = si; i <= ei; i++) {
+                              const measure = (staff.measures as any[])[i]
+                              if (!measure) continue
+                              for (const voice of measure.voices) {
+                                for (const ev of voice.events) {
+                                  if (ev.type === 'note' || ev.type === 'chord')
+                                    moves.push({ partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id, noteId: ev.id })
                                 }
                               }
                             }
                           }
                         }
+                        if (moves.length > 0) dispatch({ type: 'TRANSPOSE_NOTES', moves, semitones })
+                      } else {
+                        transposeSelectedNotes(semitones)
                       }
-                      if (moves.length > 0) dispatch({ type: 'TRANSPOSE_NOTES', moves, semitones })
                     }}
                   >
                     Apply

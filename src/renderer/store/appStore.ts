@@ -356,17 +356,20 @@ export const useAppStore = create<AppState>()(
       s.selectedNoteIds = id ? [id] : []
       s.selectedAnchorId = id
       s.selectedChordPitchIndex = null
+      s.barSelection = null
     }),
     setSelectedNotes: (ids, anchorId) => set(s => {
       s.selectedNoteIds = ids
       s.selectedNoteId  = ids[ids.length - 1] ?? null
       if (anchorId !== undefined) s.selectedAnchorId = anchorId
+      s.barSelection = null
     }),
     addToSelection: (id) => set(s => {
       if (!s.selectedNoteIds.includes(id)) {
         s.selectedNoteIds = [...s.selectedNoteIds, id]
         s.selectedNoteId  = id
         s.selectedAnchorId = id
+        s.barSelection = null
       }
     }),
     toggleSelectedNote: (id) => set(s => {
@@ -381,6 +384,7 @@ export const useAppStore = create<AppState>()(
         s.selectedNoteId  = id
         s.selectedAnchorId = id
       }
+      s.barSelection = null
     }),
     clearSelection: () => set(s => {
       s.selectedNoteIds = []
