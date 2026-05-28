@@ -132,6 +132,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
   const hasKeySigOverride  = selectedMeasureId !== null && selMeasureCtx?.measure.keySignature  !== undefined
 
   const handleAudioClick = () => {
+    if (isPlaying) return
     const btn = audioSettingsBtnRef.current
     if (!btn) return
     if (audioSettingsPos) { setAudioSettingsPos(null); return }
@@ -148,6 +149,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
   }
 
   const handleKeySigClick = () => {
+    if (isPlaying) return
     const btn = keySigBtnRef.current
     if (!btn) return
     if (keySigPickerPos) { setKeySigPickerPos(null); return }
@@ -171,6 +173,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
   }
 
   const handleTimeSigClick = () => {
+    if (isPlaying) return
     const btn = timeSigBtnRef.current
     if (!btn) return
     if (timeSigPickerPos) { setTimeSigPickerPos(null); return }
@@ -223,37 +226,40 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
 
         {/* Input modes */}
         <div style={{ display: 'flex', gap: 2, background: '#1e1e1e', borderRadius: 4, padding: 2 }}>
-          {MODES.map(({ mode, label, key }) => (
-            <button
-              key={mode}
-              onClick={() => setInputMode(mode)}
-              title={`${label} (${key})`}
-              style={{
-                padding: '4px 10px',
-                fontSize: 12,
-                borderRadius: 3,
-                border: 'none',
-                cursor: 'pointer',
-                background: inputMode === mode ? '#0e639c' : 'transparent',
-                color: inputMode === mode ? '#fff' : '#9d9d9d',
-                transition: 'background 0.1s',
-              }}
-            >
-              {label}
-            </button>
-          ))}
+          {MODES.map(({ mode, label, key }) => {
+            const modeDisabled = isPlaying && mode !== 'select'
+            return (
+              <button
+                key={mode}
+                onClick={() => { if (!modeDisabled) setInputMode(mode) }}
+                title={`${label} (${key})`}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: 12,
+                  borderRadius: 3,
+                  border: 'none',
+                  cursor: modeDisabled ? 'not-allowed' : 'pointer',
+                  background: inputMode === mode ? '#0e639c' : 'transparent',
+                  color: modeDisabled ? '#555' : inputMode === mode ? '#fff' : '#9d9d9d',
+                  transition: 'background 0.1s',
+                }}
+              >
+                {label}
+              </button>
+            )
+          })}
         </div>
 
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
 
-        <ToolbarButton onClick={undo} disabled={undoStack.length === 0} title="Undo (⌘Z)"  label="↩ Undo" />
-        <ToolbarButton onClick={redo} disabled={redoStack.length === 0} title="Redo (⌘⇧Z)" label="↪ Redo" />
+        <ToolbarButton onClick={undo} disabled={isPlaying || undoStack.length === 0} title="Undo (⌘Z)"  label="↩ Undo" />
+        <ToolbarButton onClick={redo} disabled={isPlaying || redoStack.length === 0} title="Redo (⌘⇧Z)" label="↪ Redo" />
 
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
 
         <ToolbarButton
           onClick={insertMeasure}
-          disabled={!(selectedMeasureId ?? cursorMeasureId)}
+          disabled={isPlaying || !(selectedMeasureId ?? cursorMeasureId)}
           title="Insert bar after selection (⌘B)"
           label="+ Bar"
         />

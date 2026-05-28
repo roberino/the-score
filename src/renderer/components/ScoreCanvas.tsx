@@ -1778,6 +1778,18 @@ export function ScoreCanvas(): JSX.Element {
 
       const mod = e.metaKey || e.ctrlKey
 
+      // During playback: allow escape/select-mode switch and navigation; block mutations
+      if (isPlaying) {
+        if (e.key === 'Escape') { setInputMode('select'); setSlurPendingId(null); setSelectedMeasure(null); setBarSelection(null); setBarSelectionMenuPos(null); return }
+        if (!mod && (e.key === 's' || e.key === 'S')) { setInputMode('select'); return }
+        if (!mod && (e.key === 'k' || e.key === 'K')) { toggleKeyboard(); return }
+        if (!mod && inputMode === 'select' && selectedNoteIds.length > 0) {
+          if (e.key === 'ArrowLeft')  { e.preventDefault(); setChordCycleState(null); setSelectedChordPitch(null); navigateSelection('prev'); return }
+          if (e.key === 'ArrowRight') { e.preventDefault(); setChordCycleState(null); setSelectedChordPitch(null); navigateSelection('next'); return }
+        }
+        return
+      }
+
       // Escape → select mode + cancel pending slur + deselect everything
       if (e.key === 'Escape') {
         setSlurPendingId(null)
@@ -1924,6 +1936,7 @@ export function ScoreCanvas(): JSX.Element {
     setInputMode, setSelectedDuration, toggleDot, resizeNote, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
     insertMeasure, deleteMeasure, selectedMeasureId, insertTuplet,
     barSelection, deleteSelectedBars, setBarSelection,
+    isPlaying,
   ])
 
   // Set cursor when first entering note/rest mode
@@ -2064,7 +2077,7 @@ export function ScoreCanvas(): JSX.Element {
     const layouts = layoutsRef.current
 
     // ── Directive zone: headroom above each stave (Text mode only) ──────────
-    if (inputMode === 'text') for (const l of layouts) {
+    if (inputMode === 'text' && !isPlaying) for (const l of layouts) {
       if (
         canvasX >= l.x && canvasX <= l.x + l.width &&
         canvasY >= l.staveY && canvasY < l.staveTopY
@@ -2089,7 +2102,7 @@ export function ScoreCanvas(): JSX.Element {
 
     // ── Pedal mark zone: below each stave (Text mode only) ──────────────────
     // Zone covers the full dynamic pedal range (base + max note overhang headroom).
-    if (inputMode === 'text') for (const l of layouts) {
+    if (inputMode === 'text' && !isPlaying) for (const l of layouts) {
       const staveBottom = l.staveTopY + STAVE_HEIGHT_PX
       if (
         canvasX >= l.x && canvasX <= l.x + l.width &&
@@ -2125,7 +2138,7 @@ export function ScoreCanvas(): JSX.Element {
 
     // ── MIDI event zone: below each stave (MIDI mode only) ───────────────────
     // Zone covers both pedal level and MIDI level so either can be targeted.
-    if (inputMode === 'midi') for (const l of layouts) {
+    if (inputMode === 'midi' && !isPlaying) for (const l of layouts) {
       const staveBottom = l.staveTopY + STAVE_HEIGHT_PX
       if (
         canvasX >= l.x && canvasX <= l.x + l.width &&
@@ -2198,6 +2211,7 @@ export function ScoreCanvas(): JSX.Element {
     }
 
     if (inputMode === 'note') {
+      if (isPlaying) return
       const part    = score.parts.find(p => p.id === layout.partId)
       const staff   = part?.staves.find(s => s.id === layout.staffId)
       const measure = staff?.measures.find(m => m.id === layout.measureId)
@@ -2387,6 +2401,7 @@ export function ScoreCanvas(): JSX.Element {
     }
 
     if (inputMode === 'rest') {
+      if (isPlaying) return
       const part    = score.parts.find(p => p.id === layout.partId)
       const staff   = part?.staves.find(s => s.id === layout.staffId)
       if (!staff) return
@@ -2443,6 +2458,7 @@ export function ScoreCanvas(): JSX.Element {
           canvasX >= l.x && canvasX <= l.x + CLEF_HIT_WIDTH &&
           canvasY >= l.staveTopY - 20 && canvasY <= l.staveTopY + STAVE_HEIGHT + 20
         ) {
+          if (isPlaying) return
           const rect = canvas.getBoundingClientRect()
           setSelectionMenuPos(null)
           setClefPickerState({
@@ -2475,6 +2491,7 @@ export function ScoreCanvas(): JSX.Element {
             || (prevKey !== null && prevKey.fifths !== effectiveKey.fifths)
 
           if (!displaysKeySig) continue
+          if (isPlaying) return
 
           const rect = canvas.getBoundingClientRect()
           setSelectionMenuPos(null)
@@ -2509,6 +2526,7 @@ export function ScoreCanvas(): JSX.Element {
             || (l.isLineStart && (l.measureIndex === 0 || !timeSigsEqual(effectiveSig, score.timeSignature)))
 
           if (!displaysTimeSig) continue
+          if (isPlaying) return
 
           const rect = canvas.getBoundingClientRect()
           setSelectionMenuPos(null)
@@ -2535,6 +2553,7 @@ export function ScoreCanvas(): JSX.Element {
           const part  = score.parts.find(p => p.id === l.partId)
           const staff = part?.staves.find(s => s.id === l.staffId)
           const isLastMeasure = staff?.measures[staff.measures.length - 1]?.id === l.measureId
+          if (isPlaying) return
           const rect = canvas.getBoundingClientRect()
           setSelectionMenuPos(null)
           setSelectedBarline(l.measureId)
