@@ -62,6 +62,8 @@ export async function playScoreWithSampler(
 
   await Tone.start()
 
+  Tone.getContext().lookAhead = 0.3
+
   const sampler = _sampler!
 
   Tone.Transport.stop()

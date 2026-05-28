@@ -148,11 +148,23 @@ class MidiOutputEngine {
 
     await Tone.start()
 
+    // Increase lookahead: callbacks fire 300ms ahead of the note's beat time, giving
+    // the JS thread up to ~280ms of blocking before timing errors appear.
+    Tone.getContext().lookAhead = 0.3
+
     Tone.Transport.stop()
     Tone.Transport.cancel()
     Tone.Transport.bpm.value = bpm
 
-    const perfAudioOffset = performance.now() - Tone.now() * 1000
+    // Compute MIDI DOMHighResTimeStamp fresh inside every callback so clock drift
+    // and late-firing callbacks don't accumulate into timing errors.
+    // time  = Tone-context time at which the note should fire (rawCtx.currentTime + lookAhead)
+    // delta = how many ms until the note is due from this callback's perspective
+    // If the JS thread ran late, delta shrinks symmetrically and the note still lands on time
+    // as long as the block was shorter than lookAhead (300 ms).
+    const rawCtx = Tone.getContext().rawContext as AudioContext
+    const midiTs = (time: number): number =>
+      Math.max(performance.now(), performance.now() + (time - rawCtx.currentTime) * 1000)
 
     let totalDuration = 0
     const tempoStaff = score.parts[0]?.staves[0]
@@ -169,8 +181,7 @@ class MidiOutputEngine {
 
       const pgm = Math.max(0, Math.min(127, part.midiProgram - 1))
       Tone.Transport.schedule((time) => {
-        const ts = perfAudioOffset + time * 1000
-        output.send([0xC0 | channel, pgm], ts)
+        output.send([0xC0 | channel, pgm], midiTs(time))
       }, 0)
 
       const schedule       = buildFlatSchedule(staff, sequence, tempoStaff, bpm, score.timeSignature, staff.slurs)
@@ -194,9 +205,9 @@ class MidiOutputEngine {
               if (isPartMuted?.(partId)) return
               const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
               const liveVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(20 * Math.log10(Math.max(0.001, liveVolume))) * hairpinFactor)))
-              const ts = perfAudioOffset + time * 1000
-              output.send([0x90 | channel, midiNum, liveVel], ts)
-              output.send([0x80 | channel, midiNum, 0], ts + noteOffMs)
+              const noteOnTs = midiTs(time)
+              output.send([0x90 | channel, midiNum, liveVel], noteOnTs)
+              output.send([0x80 | channel, midiNum, 0], noteOnTs + noteOffMs)
             }, on.startSec)
           }
           continue
@@ -215,9 +226,9 @@ class MidiOutputEngine {
             if (isPartMuted?.(partId)) return
             const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
             const liveVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(20 * Math.log10(Math.max(0.001, liveVolume))) * velFactor * hairpinFactor)))
-            const ts = perfAudioOffset + time * 1000
-            output.send([0x90 | channel, midiNum, liveVel], ts)
-            output.send([0x80 | channel, midiNum, 0], ts + noteOffRelMs)
+            const noteOnTs = midiTs(time)
+            output.send([0x90 | channel, midiNum, liveVel], noteOnTs)
+            output.send([0x80 | channel, midiNum, 0], noteOnTs + noteOffRelMs)
           }, startSec)
         } else if (event.type === 'chord') {
           const midiNums = (event as Chord).pitches.map(
@@ -227,10 +238,10 @@ class MidiOutputEngine {
             if (isPartMuted?.(partId)) return
             const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
             const liveVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(20 * Math.log10(Math.max(0.001, liveVolume))) * velFactor * hairpinFactor)))
-            const ts = perfAudioOffset + time * 1000
+            const noteOnTs = midiTs(time)
             midiNums.forEach(n => {
-              output.send([0x90 | channel, n, liveVel], ts)
-              output.send([0x80 | channel, n, 0], ts + noteOffRelMs)
+              output.send([0x90 | channel, n, liveVel], noteOnTs)
+              output.send([0x80 | channel, n, 0], noteOnTs + noteOffRelMs)
             })
           }, startSec)
         }
@@ -254,7 +265,7 @@ class MidiOutputEngine {
         for (const me of measure.midiEvents ?? []) {
           const eventT = measStartT + (me.beatPosition / 16) * (60 / localBpm)
           Tone.Transport.schedule((time) => {
-            const ts = perfAudioOffset + time * 1000
+            const ts = midiTs(time)
             switch (me.type) {
               case 'cc':
                 output.send([0xB0 | channel, me.cc!.controller, me.cc!.value], ts)
@@ -279,8 +290,7 @@ class MidiOutputEngine {
         for (const mark of measure.pedalMarks ?? []) {
           const eventT = measStartT + (mark.beatPosition / 16) * (60 / localBpm)
           Tone.Transport.schedule((time) => {
-            const ts = perfAudioOffset + time * 1000
-            output.send([0xB0 | channel, 64, mark.type === 'down' ? 127 : 0], ts)
+            output.send([0xB0 | channel, 64, mark.type === 'down' ? 127 : 0], midiTs(time))
           }, eventT)
         }
 

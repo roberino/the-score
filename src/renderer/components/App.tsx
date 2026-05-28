@@ -30,23 +30,23 @@ export function App(): JSX.Element {
   // ── Wire native menu events to store actions ────────────────────────────────
   useEffect(() => {
     const cleanups = [
-      window.electronAPI.onMenuEvent('menu:new',     () => newScore()),
-      window.electronAPI.onMenuEvent('menu:open',    () => handleOpen()),
+      window.electronAPI.onMenuEvent('menu:new',     () => { if (!isPlaying) newScore() }),
+      window.electronAPI.onMenuEvent('menu:open',    () => { if (!isPlaying) handleOpen() }),
       window.electronAPI.onMenuEvent('menu:save',    () => saveScore()),
       window.electronAPI.onMenuEvent('menu:saveAs',  () => saveScoreAs()),
-      window.electronAPI.onMenuEvent('menu:undo',    () => undo()),
-      window.electronAPI.onMenuEvent('menu:redo',    () => redo()),
+      window.electronAPI.onMenuEvent('menu:undo',    () => { if (!isPlaying) undo() }),
+      window.electronAPI.onMenuEvent('menu:redo',    () => { if (!isPlaying) redo() }),
       window.electronAPI.onMenuEvent('menu:zoomIn',  () => setZoom(zoom + 0.1)),
       window.electronAPI.onMenuEvent('menu:zoomOut', () => setZoom(zoom - 0.1)),
       window.electronAPI.onMenuEvent('menu:zoomFit', () => setZoom(1.0)),
       window.electronAPI.onMenuEvent('menu:exportMidi',      () => handleExportMidi()),
-      window.electronAPI.onMenuEvent('menu:importMidi',      () => handleImportMidi()),
+      window.electronAPI.onMenuEvent('menu:importMidi',      () => { if (!isPlaying) handleImportMidi() }),
       window.electronAPI.onMenuEvent('menu:exportPdf',       () => handleExportPdf()),
       window.electronAPI.onMenuEvent('menu:exportMusicXml',  () => handleExportMusicXml()),
-      window.electronAPI.onMenuEvent('menu:importMusicXml',  () => handleImportMusicXml()),
+      window.electronAPI.onMenuEvent('menu:importMusicXml',  () => { if (!isPlaying) handleImportMusicXml() }),
     ]
     return () => cleanups.forEach(cleanup => cleanup())
-  }, [zoom])   // re-register when zoom changes so closure captures latest value
+  }, [zoom, isPlaying])   // re-register when zoom or playback state changes
 
   // ── Keyboard shortcuts ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -54,8 +54,8 @@ export function App(): JSX.Element {
       const target = e.target as HTMLElement
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
       const mod = e.metaKey || e.ctrlKey
-      if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo() }
-      if (mod && e.key === 'z' &&  e.shiftKey) { e.preventDefault(); redo() }
+      if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); if (!isPlaying) undo() }
+      if (mod && e.key === 'z' &&  e.shiftKey) { e.preventDefault(); if (!isPlaying) redo() }
       if (mod && e.key === 's' && !e.shiftKey) { e.preventDefault(); saveScore() }
       // Space toggles playback except in note/rest mode (where Space enters a rest)
       if (!mod && e.key === ' ' && inputMode !== 'note' && inputMode !== 'rest') {
@@ -152,10 +152,14 @@ export function App(): JSX.Element {
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {activeView === 'score' && partsPanelOpen && <PartsPanel onClose={() => setPartsPanelOpen(false)} />}
-        <main style={{ flex: 1, overflow: 'auto' }}>
-          <div style={{ padding: activeView === 'score' ? '24px' : '0' }}>
-            {activeView === 'score'   ? <ScoreCanvas /> : <RoutingView />}
+        {/* Both views stay mounted — toggle via display to avoid expensive remount renders during playback */}
+        <main style={{ flex: 1, overflow: 'auto', display: activeView === 'score' ? 'block' : 'none' }}>
+          <div style={{ padding: '24px' }}>
+            <ScoreCanvas />
           </div>
+        </main>
+        <main style={{ flex: 1, overflow: 'auto', display: activeView === 'routing' ? 'block' : 'none' }}>
+          <RoutingView />
         </main>
       </div>
       <StatusBar />

@@ -45,6 +45,8 @@ export async function playScore(
 ): Promise<PlaybackController> {
   await Tone.start()
 
+  Tone.getContext().lookAhead = 0.3
+
   Tone.Transport.stop()
   Tone.Transport.cancel()
   Tone.Transport.bpm.value = bpm
