@@ -102,8 +102,10 @@ export function buildAppMenu(win: BrowserWindow): Menu {
           accelerator: 'CmdOrCtrl+0',
           click: () => send('menu:zoomFit')
         },
-        { type: 'separator' },
-        { role: 'toggleDevTools' }
+        ...(process.env['ELECTRON_RENDERER_URL'] ? [
+          { type: 'separator' as const },
+          { role: 'toggleDevTools' as const },
+        ] : [])
       ]
     },
     {

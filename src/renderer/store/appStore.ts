@@ -255,6 +255,7 @@ export const useAppStore = create<AppState>()(
         state.barSelection = null
         state.isPlaying = false
       })
+      void window.electronAPI.setWindowTitle('Untitled — Volta', null)
     },
 
     loadScore: (score: Score, path: string) => {
@@ -277,6 +278,8 @@ export const useAppStore = create<AppState>()(
         state.barSelection = null
         state.isPlaying = false
       })
+      const fileName = path.split(/[/\\]/).pop() ?? 'Untitled'
+      void window.electronAPI.setWindowTitle(`${fileName} — Volta`, path)
     },
 
     saveScore: async () => {
@@ -299,6 +302,8 @@ export const useAppStore = create<AppState>()(
           s.filePath = result.path
           s.isDirty = false
         })
+        const fileName = result.path.split(/[/\\]/).pop() ?? 'Untitled'
+        void window.electronAPI.setWindowTitle(`${fileName} — Volta`, result.path)
       }
     },
 

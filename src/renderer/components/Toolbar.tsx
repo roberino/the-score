@@ -381,7 +381,8 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           {midiInputDeviceName ? `MIDI In: ${midiInputDeviceName}` : 'MIDI In'}
         </button>
 
-        <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
+        {/* Drag region — fills empty space so the window is draggable by the toolbar */}
+        <div style={{ flex: 1, WebkitAppRegion: 'drag' } as React.CSSProperties} />
 
         <button
           ref={timeSigBtnRef}

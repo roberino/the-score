@@ -32,6 +32,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   importMusicXml: () =>
     ipcRenderer.invoke('musicxml:import') as Promise<{ xml: string; path: string } | null>,
 
+  // ── Window chrome ─────────────────────────────────────────────────────────
+  setWindowTitle: (title: string, filePath: string | null) =>
+    ipcRenderer.invoke('window:setTitle', { title, filePath }) as Promise<void>,
+
   // ── Menu events → renderer ─────────────────────────────────────────────────
   // The main process sends these when native menu items are clicked.
   onMenuEvent: (

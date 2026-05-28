@@ -24,6 +24,7 @@ interface ElectronAPI {
   exportMusicXml:  (xml: string) => Promise<{ success: boolean }>
   importMusicXml:  () => Promise<{ xml: string; path: string } | null>
   onMenuEvent:     (event: MenuEvent, handler: () => void) => () => void
+  setWindowTitle:  (title: string, filePath: string | null) => Promise<void>
 }
 
 declare interface Window {

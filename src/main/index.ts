@@ -1,4 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
+
+let mainWin: BrowserWindow | null = null
 import { join } from 'path'
 import { readFile, writeFile } from 'fs/promises'
 import { buildAppMenu } from './menu'
@@ -13,12 +15,15 @@ function createWindow(): BrowserWindow {
     minHeight: 600,
     titleBarStyle: 'hiddenInset',       // macOS: traffic lights inset
     backgroundColor: '#1e1e1e',
+    show: false,                        // prevent white flash on startup
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,           // required for security
       nodeIntegration: false
     }
   })
+
+  win.once('ready-to-show', () => win.show())
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     // Dev: Vite dev server
@@ -29,6 +34,7 @@ function createWindow(): BrowserWindow {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
+  mainWin = win
   return win
 }
 
@@ -54,6 +60,17 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+// ── IPC handlers — Window chrome ─────────────────────────────────────────────
+
+ipcMain.handle('window:setTitle', (_event, { title, filePath }: { title: string; filePath: string | null }) => {
+  const win = BrowserWindow.getFocusedWindow() ?? mainWin
+  if (!win) return
+  win.setTitle(title)
+  if (process.platform === 'darwin') {
+    win.setRepresentedFilename(filePath ?? '')
+  }
 })
 
 // ── IPC handlers — File I/O ───────────────────────────────────────────────────
