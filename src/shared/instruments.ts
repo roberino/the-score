@@ -1,7 +1,7 @@
 import type { ClefType } from './score'
 import data from './instruments.json'
 
-export type InstrumentFamily = 'strings' | 'woodwinds' | 'brass' | 'keyboards' | 'percussion' | 'voices'
+export type InstrumentFamily = 'strings' | 'woodwinds' | 'brass' | 'keyboards' | 'percussion' | 'voices' | 'synths'
 
 export interface PitchRange {
   /** Minimum written MIDI note number (concert pitch for non-transposing instruments). */
@@ -24,12 +24,16 @@ export interface InstrumentDef {
   readonly icon: string
   /** Practical written pitch range for range advisory warnings. */
   readonly pitchRange: PitchRange
+  /** Fixed MIDI channel (1–16). Used for e.g. drum kit (channel 10). */
+  readonly midiChannel?: number
+  /** Default input mode for this instrument. */
+  readonly inputMode?: 'score' | 'sequencer'
 }
 
 export const INSTRUMENTS: readonly InstrumentDef[] = data.instruments as InstrumentDef[]
 
 export const INSTRUMENT_FAMILIES: InstrumentFamily[] = [
-  'strings', 'woodwinds', 'brass', 'keyboards', 'voices', 'percussion',
+  'strings', 'woodwinds', 'brass', 'keyboards', 'voices', 'percussion', 'synths',
 ]
 
 export const FAMILY_LABELS: Record<InstrumentFamily, string> = {
@@ -39,6 +43,7 @@ export const FAMILY_LABELS: Record<InstrumentFamily, string> = {
   keyboards:  'Keyboards',
   voices:     'Voices',
   percussion: 'Percussion',
+  synths:     'Synths',
 }
 
 export function getInstrument(id: string): InstrumentDef | undefined {

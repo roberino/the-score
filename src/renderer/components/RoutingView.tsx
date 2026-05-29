@@ -16,6 +16,7 @@ const FAMILY_EMOJI: Record<InstrumentFamily, string> = {
   keyboards:  '🎹',
   percussion: '🥁',
   voices:     '🎤',
+  synths:     '🎛️',
 }
 
 /** Returns { type: 'svg', url } or { type: 'emoji', char }. */

@@ -145,7 +145,11 @@ function PartRow({ partId, name, shortName, labelVisible, midiChannel, inputMode
       shortName:          inst.shortName,
       midiProgram:        inst.midiProgram,
       transposeSemitones: inst.transposeSemitones,
+      ...(inst.midiChannel !== undefined ? { midiChannel: inst.midiChannel } : {}),
     })
+    if (inst.inputMode !== undefined) {
+      dispatch({ type: 'SET_PART_INPUT_MODE', partId, mode: inst.inputMode })
+    }
   }
 
   return (
@@ -364,6 +368,8 @@ export function PartsPanel({ onClose }: PartsPanelProps): JSX.Element {
       clef:               inst.defaultClef as ClefType,
       midiProgram:        inst.midiProgram,
       transposeSemitones: inst.transposeSemitones,
+      ...(inst.midiChannel !== undefined ? { midiChannel: inst.midiChannel } : {}),
+      ...(inst.inputMode   !== undefined ? { inputMode:   inst.inputMode   } : {}),
     })
   }
 

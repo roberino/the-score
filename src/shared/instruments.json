@@ -356,6 +356,64 @@
       "transposeSemitones": 0,
       "icon": "vibraphone.svg",
       "pitchRange": { "min": 53, "max": 89 }
+    },
+    {
+      "id": "drum-kit",
+      "name": "Drum Kit",
+      "shortName": "Dr.",
+      "family": "percussion",
+      "defaultClef": "percussion",
+      "midiProgram": 0,
+      "transposeSemitones": 0,
+      "icon": "timpani.svg",
+      "pitchRange": { "min": 35, "max": 81 },
+      "midiChannel": 10,
+      "inputMode": "sequencer"
+    },
+
+    {
+      "id": "synth-lead",
+      "name": "Synth Lead",
+      "shortName": "Syn.",
+      "family": "synths",
+      "defaultClef": "treble",
+      "midiProgram": 80,
+      "transposeSemitones": 0,
+      "icon": "piano.svg",
+      "pitchRange": { "min": 36, "max": 96 }
+    },
+    {
+      "id": "synth-pad",
+      "name": "Synth Pad",
+      "shortName": "Pad",
+      "family": "synths",
+      "defaultClef": "treble",
+      "midiProgram": 88,
+      "transposeSemitones": 0,
+      "icon": "piano.svg",
+      "pitchRange": { "min": 36, "max": 96 }
+    },
+    {
+      "id": "synth-bass",
+      "name": "Synth Bass",
+      "shortName": "S.B.",
+      "family": "synths",
+      "defaultClef": "bass",
+      "midiProgram": 38,
+      "transposeSemitones": 0,
+      "icon": "piano.svg",
+      "pitchRange": { "min": 28, "max": 60 }
+    },
+    {
+      "id": "synth-brass",
+      "name": "Synth Brass",
+      "shortName": "S.Br.",
+      "family": "synths",
+      "defaultClef": "treble",
+      "midiProgram": 62,
+      "transposeSemitones": 0,
+      "icon": "piano.svg",
+      "pitchRange": { "min": 36, "max": 84 }
     }
   ]
 }
