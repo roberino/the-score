@@ -2028,6 +2028,10 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         return
       }
       const part    = score.parts.find(p => p.id === layout.partId)
+      if (part?.inputMode === 'sequencer') {
+        if (hoverCursor !== 'default') setHoverCursor('default')
+        return
+      }
       const staff   = part?.staves.find(s => s.id === layout.staffId)
       const measure = staff?.measures.find(m => m.id === layout.measureId)
       const voice   = measure?.voices[activeVoice]
@@ -2240,6 +2244,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     if (inputMode === 'note') {
       if (isPlaying) return
       const part    = score.parts.find(p => p.id === layout.partId)
+      if (part?.inputMode === 'sequencer') return
       const staff   = part?.staves.find(s => s.id === layout.staffId)
       const measure = staff?.measures.find(m => m.id === layout.measureId)
       if (!measure) return
@@ -2430,6 +2435,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     if (inputMode === 'rest') {
       if (isPlaying) return
       const part    = score.parts.find(p => p.id === layout.partId)
+      if (part?.inputMode === 'sequencer') return
       const staff   = part?.staves.find(s => s.id === layout.staffId)
       if (!staff) return
       const mIdx    = staff.measures.findIndex(m => m.id === layout.measureId)

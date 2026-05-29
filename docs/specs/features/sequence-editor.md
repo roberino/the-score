@@ -28,11 +28,13 @@ The Parts Panel gains a new field **Input Mode** for each part, implemented as a
 
 ### 2.1 Stave appearance
 
-A sequencer-mode part renders a simplified stave:
+A sequencer-mode part renders a **track band**, not a music stave:
+
 - **No clef**, **no key signature**.
-- **Time signature** is shown normally.
+- **No staff lines.** The five VexFlow stave lines are suppressed. In their place a subtle filled band (`rgba(0,0,0,0.06)`) spans the full stave height, and a single thin horizontal rule (`rgba(0,0,0,0.18)`, 1 px) is drawn at the vertical midpoint to delineate the part boundary.
+- **Time signature** is shown on the first measure of each system (same rules as score parts).
 - **Barlines** are shown normally.
-- Stave lines are rendered at reduced opacity (`rgba(255,255,255,0.15)`) to visually distinguish the row from score parts.
+- **No note or rest glyphs are rendered.** The VexFlow voice/formatter pipeline is skipped entirely for sequencer bars; the bar body shows only the mini-grid preview (§2.2).
 
 ### 2.2 Mini grid preview
 
@@ -43,7 +45,15 @@ Each bar of a sequencer part displays a **mini step-grid thumbnail** showing the
 - **Inactive cells** are not drawn (background only).
 - The thumbnail is vertically compressed to fit within the stave height; pitch rows are distributed evenly across the stave height.
 - Bars covered by a repetition of the same pattern show an identical thumbnail.
-- Bars with no sequence attached show blank (empty stave body).
+- Bars with no sequence attached show blank (empty band body).
+
+### 2.3 Note input is blocked
+
+Sequencer-mode staves do not accept notation editing from the score view:
+
+- In **Note Input** or **Rest Input** mode, clicks on a sequencer-mode row have no effect. The note-placement hover cursor is not shown for these rows.
+- In **Select** mode, clicking opens the Sequence Editor (§3.1) as normal.
+- No other interaction (drag, shift-click, keyboard note entry advancing the cursor) applies to sequencer rows.
 
 ---
 

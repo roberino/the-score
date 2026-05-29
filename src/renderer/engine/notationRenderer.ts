@@ -447,9 +447,10 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
     let width_mid   = MIN_STAVE_WIDTH
     let width_start = MIN_STAVE_WIDTH
     for (const part of score.parts) {
+      const isSeq   = (part as any).inputMode === 'sequencer'
       const pEvents = part.staves[0]?.measures[mIdx]?.voices[0]?.events ?? []
-      width_mid   = Math.max(width_mid,   computeMeasureWidth(pEvents, effectiveSig, showClef_mid,   showKeySig_mid,   showTimeSig_mid,   effectiveKey))
-      width_start = Math.max(width_start, computeMeasureWidth(pEvents, effectiveSig, showClef_start, showKeySig_start, showTimeSig_start, effectiveKey))
+      width_mid   = Math.max(width_mid,   computeMeasureWidth(pEvents, effectiveSig, isSeq ? false : showClef_mid,   isSeq ? false : showKeySig_mid,   showTimeSig_mid,   effectiveKey))
+      width_start = Math.max(width_start, computeMeasureWidth(pEvents, effectiveSig, isSeq ? false : showClef_start, isSeq ? false : showKeySig_start, showTimeSig_start, effectiveKey))
     }
 
     let isLineStart: boolean
@@ -932,6 +933,8 @@ function renderFromLayouts(
       ? resolveVoltaOpts(layout.measureIndex, score.voltas ?? [])
       : undefined
 
+    const isSequencer = (part as any).inputMode === 'sequencer'
+
     const { stave, staveNotes, events } = renderMeasure(
       ctx, measure, prevMeasure,
       effectiveKey, prevKey,
@@ -940,7 +943,8 @@ function renderFromLayouts(
       layout.x, layout.staveY, layout.width,
       layout.measureIndex, layout.isLineStart, layout.showClef,
       selectedNoteIds, notePositions,
-      voltaOpts, selectedChordPitchInfo
+      voltaOpts, selectedChordPitchInfo,
+      isSequencer
     )
 
     const measureKey = `${layout.partId}:${layout.staffId}:${layout.measureId}`
@@ -1394,7 +1398,8 @@ function renderMeasure(
   selectedNoteIds: ReadonlySet<string>,
   notePositions: Map<string, number>,
   voltaOpts?: VoltaOpts,
-  selectedChordPitchInfo?: SelectedChordPitchInfo | null
+  selectedChordPitchInfo?: SelectedChordPitchInfo | null,
+  sequencerMode?: boolean
 ): MeasureRenderResult {
   const stave = new Stave(x, y, width)
 
@@ -1404,8 +1409,8 @@ function renderMeasure(
   // Written key for this part (transposed from concert key)
   const writtenFifths = transposeKeyFifths(effectiveKey.fifths, transposeSemitones)
 
-  // Clef: full size at system starts, small size for mid-score changes
-  if (showClef) {
+  // Clef: full size at system starts, small size for mid-score changes. Suppressed for sequencer rows.
+  if (showClef && !sequencerMode) {
     if (isLineStart) {
       stave.addClef(clefType)
     } else {
@@ -1413,8 +1418,8 @@ function renderMeasure(
     }
   }
 
-  // Key sig: show at system starts (if non-C in written key) and when concert key changes
-  const showKeySig = (isLineStart && writtenFifths !== 0) || keyChanged
+  // Key sig: show at system starts (if non-C in written key) and when concert key changes. Suppressed for sequencer rows.
+  const showKeySig = ((isLineStart && writtenFifths !== 0) || keyChanged) && !sequencerMode
   if (showKeySig) stave.addKeySignature(FIFTHS_TO_VEX_KEY[writtenFifths] ?? 'C')
 
   // Time sig: show on first measure, when it changes, or when repeated at system start
@@ -1438,6 +1443,31 @@ function renderMeasure(
   }
 
   stave.setContext(ctx).draw()
+
+  // Sequencer rows: erase the five staff lines VexFlow just drew and replace with a
+  // plain track band + midline. All note/rest rendering is then skipped entirely.
+  if (sequencerMode) {
+    const nCtx = typeof (ctx as any).context2D !== 'undefined'
+      ? (ctx as any).context2D as CanvasRenderingContext2D
+      : null
+    if (nCtx) {
+      const topY = y + VEXFLOW_HEADROOM_PX
+      nCtx.save()
+      nCtx.fillStyle = '#ffffff'
+      nCtx.fillRect(x + 1, topY, width - 1, STAVE_HEIGHT_PX)
+      nCtx.fillStyle = 'rgba(0,0,0,0.06)'
+      nCtx.fillRect(x + 1, topY, width - 1, STAVE_HEIGHT_PX)
+      nCtx.strokeStyle = 'rgba(0,0,0,0.18)'
+      nCtx.lineWidth = 1
+      nCtx.beginPath()
+      const mid = topY + STAVE_HEIGHT_PX / 2
+      nCtx.moveTo(x + 1, mid)
+      nCtx.lineTo(x + width, mid)
+      nCtx.stroke()
+      nCtx.restore()
+    }
+    return { stave, staveNotes: [], events: [] as NoteEvent[] }
+  }
 
   // Exact note area after VexFlow has placed clef/key/time preamble.
   // Short notes (16th and below) have flags that extend right of the stem —
