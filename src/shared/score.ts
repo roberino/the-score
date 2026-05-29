@@ -173,6 +173,29 @@ export interface Staff {
   readonly hairpins?: readonly Hairpin[]
 }
 
+// ── Sequence (step-sequencer) types ───────────────────────────────────────────
+
+export interface SequenceCell {
+  pitch: number     // MIDI note number 0–127
+  velocity: number  // 1–127, default 127
+}
+
+export interface SequencePattern {
+  id: string
+  // Outer index = step column (0 to stepsPerBar-1)
+  // Inner array = active cells in that column (empty = no notes on this step)
+  steps: SequenceCell[][]
+  stepsPerBar: number
+}
+
+export interface SequenceRegion {
+  id: string
+  patternId: string
+  startMeasureIndex: number
+  repetitions: number | null  // null = repeat to end of score
+  label?: string
+}
+
 export type GroupSymbol = 'bracket' | 'brace'
 
 export interface Part {
@@ -188,6 +211,9 @@ export interface Part {
   readonly labelVisible: boolean     // show label on score
   readonly groupId?: string          // parts sharing the same groupId are in one bracket/brace group
   readonly groupSymbol?: GroupSymbol // visual symbol drawn for the group (bracket or brace)
+  readonly inputMode?: 'score' | 'sequencer'  // defaults to 'score' when absent
+  readonly sequencePatterns?: readonly SequencePattern[]
+  readonly sequenceRegions?: readonly SequenceRegion[]
 }
 
 export interface ScoreMetadata {

@@ -1,6 +1,6 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord } from '@shared/score'
-import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, articulationPlaybackMods, expandOrnamentNotes } from '@shared/musicUtils'
+import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, articulationPlaybackMods, expandOrnamentNotes } from '@shared/musicUtils'
 import { pitchToHz, type PlaybackController } from './audioEngine'
 
 // ── Salamander Grand Piano samples (Tone.js CDN) ──────────────────────────────
@@ -79,7 +79,25 @@ export async function playScoreWithSampler(
     const staff = part.staves[0]
     if (!staff || !tempoStaff) continue
 
-    const partId   = part.id
+    const partId = part.id
+
+    if (part.inputMode === 'sequencer') {
+      const seqEntries = buildSequenceSchedule(part, sequence, tempoStaff, bpm, score.timeSignature)
+      for (const entry of seqEntries) {
+        if (entry.startSec < resumeFrom) continue
+        const hz = 440 * Math.pow(2, (entry.midiPitch - 69) / 12)
+        const vol = part.volume
+        Tone.Transport.schedule((time) => {
+          if (isPartMuted?.(partId)) return
+          const liveVol = getPartVolume?.(partId) ?? vol
+          sampler.volume.value = 20 * Math.log10(Math.max(0.001, liveVol))
+          sampler.triggerAttackRelease(hz, entry.durSec * 0.9, time)
+        }, entry.startSec)
+        totalDuration = Math.max(totalDuration, entry.startSec + entry.durSec)
+      }
+      continue
+    }
+
     const schedule = buildFlatSchedule(staff, sequence, tempoStaff, bpm, score.timeSignature, staff.slurs)
 
     for (const fe of schedule) {

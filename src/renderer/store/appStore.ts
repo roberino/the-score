@@ -106,6 +106,8 @@ export interface AppState {
   stopPlayback: () => void
   setPlaybackMode: (mode: 'beginning' | 'from-cursor') => void
   dispatch: (command: Command) => void
+  dispatchSilent: (command: Command) => void
+  pushUndoSnapshot: () => void
   undo: () => void
   redo: () => void
   newScore: () => void
@@ -214,6 +216,22 @@ export const useAppStore = create<AppState>()(
       if (command.type === 'ADD_NOTE') {
         get().checkAndAutoAddBar()
       }
+    },
+
+    dispatchSilent: (command: Command) => {
+      set(state => {
+        state.score = applyCommand(state.score, command) as any
+        state.isDirty = true
+      })
+    },
+
+    pushUndoSnapshot: () => {
+      set(state => {
+        const prev = state.score
+        state.undoStack.push(prev)
+        if (state.undoStack.length > 100) state.undoStack.shift()
+        state.redoStack = []
+      })
     },
 
     undo: () => {

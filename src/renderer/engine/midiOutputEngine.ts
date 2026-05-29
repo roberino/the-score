@@ -1,6 +1,6 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord, Hairpin } from '@shared/score'
-import { resolveDirectiveDynamic, resolveDirectiveTempo, resolveKeySig, resolveTimeSig, measureCapacityUnits, buildPlaybackSequence, buildFlatSchedule, articulationPlaybackMods, expandOrnamentNotes, type FlatScheduleEntry } from '@shared/musicUtils'
+import { resolveDirectiveDynamic, resolveDirectiveTempo, resolveKeySig, resolveTimeSig, measureCapacityUnits, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, articulationPlaybackMods, expandOrnamentNotes, type FlatScheduleEntry } from '@shared/musicUtils'
 import { type PlaybackController } from './audioEngine'
 import { midiService } from '../services/midiService'
 
@@ -183,6 +183,24 @@ class MidiOutputEngine {
       Tone.Transport.schedule((time) => {
         output.send([0xC0 | channel, pgm], midiTs(time))
       }, 0)
+
+      if (part.inputMode === 'sequencer') {
+        const seqEntries = buildSequenceSchedule(part, sequence, tempoStaff, bpm, score.timeSignature)
+        for (const entry of seqEntries) {
+          if (entry.startSec < resumeFrom) continue
+          const noteOffMs = Math.max(20, entry.durSec * 900 - 20)
+          Tone.Transport.schedule((time) => {
+            if (isPartMuted?.(partId)) return
+            const liveVol = getPartVolume?.(partId) ?? part.volume
+            const liveVel = Math.max(1, Math.min(127, Math.round(liveVol * entry.velocity)))
+            const noteOnTs = midiTs(time)
+            output.send([0x90 | channel, entry.midiPitch, liveVel], noteOnTs)
+            output.send([0x80 | channel, entry.midiPitch, 0], noteOnTs + noteOffMs)
+          }, entry.startSec)
+          totalDuration = Math.max(totalDuration, entry.startSec + entry.durSec)
+        }
+        return
+      }
 
       const schedule       = buildFlatSchedule(staff, sequence, tempoStaff, bpm, score.timeSignature, staff.slurs)
       const hairpinFactors = buildHairpinFactorMap(staff.hairpins, schedule)

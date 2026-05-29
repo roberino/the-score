@@ -5,6 +5,7 @@ import { ScoreCanvas } from './ScoreCanvas'
 import { RoutingView } from './RoutingView'
 import { StatusBar } from './StatusBar'
 import { PartsPanel } from './PartsPanel'
+import { SequenceEditor } from './SequenceEditor'
 import type { Score } from '@shared/score'
 import { scoreToMidi, midiToScore } from '../engine/midiEngine'
 import { loadSampler } from '../engine/samplerEngine'
@@ -23,6 +24,7 @@ export function App(): JSX.Element {
           isPlaying, startPlayback, stopPlayback, inputMode } = useAppStore()
   const [partsPanelOpen, setPartsPanelOpen] = useState(false)
   const [activeView, setActiveView] = useState<AppView>('score')
+  const [sequencerPartId, setSequencerPartId] = useState<string | null>(null)
 
   // Prefetch Salamander Grand Piano samples in the background
   useEffect(() => { loadSampler() }, [])
@@ -151,14 +153,22 @@ export function App(): JSX.Element {
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {activeView === 'score' && partsPanelOpen && <PartsPanel onClose={() => setPartsPanelOpen(false)} />}
-        {/* Both views stay mounted — toggle via display to avoid expensive remount renders during playback */}
-        <main style={{ flex: 1, overflow: 'auto', display: activeView === 'score' ? 'block' : 'none' }}>
+        {activeView === 'score' && !sequencerPartId && partsPanelOpen && (
+          <PartsPanel onClose={() => setPartsPanelOpen(false)} />
+        )}
+        {/* Sequence editor: shown when user drills into a sequencer-mode part bar */}
+        {sequencerPartId && (
+          <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <SequenceEditor partId={sequencerPartId} onBack={() => setSequencerPartId(null)} />
+          </main>
+        )}
+        {/* Both score/routing views stay mounted — toggle via display to avoid expensive remount renders during playback */}
+        <main style={{ flex: 1, overflow: 'auto', display: !sequencerPartId && activeView === 'score' ? 'block' : 'none' }}>
           <div style={{ padding: '24px' }}>
-            <ScoreCanvas />
+            <ScoreCanvas onOpenSequencer={setSequencerPartId} />
           </div>
         </main>
-        <main style={{ flex: 1, overflow: 'auto', display: activeView === 'routing' ? 'block' : 'none' }}>
+        <main style={{ flex: 1, overflow: 'auto', display: !sequencerPartId && activeView === 'routing' ? 'block' : 'none' }}>
           <RoutingView />
         </main>
       </div>

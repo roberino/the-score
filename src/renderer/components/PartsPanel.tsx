@@ -105,6 +105,7 @@ interface PartRowProps {
   shortName: string
   labelVisible: boolean
   midiChannel: number
+  inputMode: 'score' | 'sequencer'
   groupId?: string
   groupSymbol?: GroupSymbol
   availableGroups: GroupDef[]
@@ -113,7 +114,7 @@ interface PartRowProps {
   canDelete: boolean
 }
 
-function PartRow({ partId, name, shortName, labelVisible, midiChannel, groupId, groupSymbol, availableGroups, isFirst, isLast, canDelete }: PartRowProps): JSX.Element {
+function PartRow({ partId, name, shortName, labelVisible, midiChannel, inputMode, groupId, groupSymbol, availableGroups, isFirst, isLast, canDelete }: PartRowProps): JSX.Element {
   const { dispatch } = useAppStore()
   const [expanded, setExpanded]           = useState(false)
   const [editName, setEditName]           = useState(name)
@@ -243,6 +244,19 @@ function PartRow({ partId, name, shortName, labelVisible, midiChannel, groupId, 
             />
             Show label on score
           </label>
+
+          {/* Input mode */}
+          <div>
+            <label style={labelStyle}>Input Mode</label>
+            <select
+              value={inputMode}
+              onChange={e => dispatch({ type: 'SET_PART_INPUT_MODE', partId, mode: e.target.value as 'score' | 'sequencer' })}
+              style={{ ...inputStyle, cursor: 'pointer' }}
+            >
+              <option value="score">Score</option>
+              <option value="sequencer">Sequencer</option>
+            </select>
+          </div>
 
           {/* MIDI channel */}
           <div>
@@ -389,6 +403,7 @@ export function PartsPanel({ onClose }: PartsPanelProps): JSX.Element {
             shortName={part.shortName}
             labelVisible={part.labelVisible}
             midiChannel={part.midiChannel ?? Math.min(idx + 1, 16)}
+            inputMode={part.inputMode ?? 'score'}
             {...(part.groupId ? { groupId: part.groupId, groupSymbol: part.groupSymbol } : {})}
             availableGroups={availableGroups}
             isFirst={idx === 0}

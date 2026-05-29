@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid'
-import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, Slur, TimeSignature, KeySignature, ClefType, Measure, TupletInfo, Volta } from './score'
+import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, Slur, TimeSignature, KeySignature, ClefType, Measure, TupletInfo, Volta, Part } from './score'
 
 // ── Duration arithmetic (64th-note units) ─────────────────────────────────────
 
@@ -629,4 +629,67 @@ export const DURATION_LABELS: Record<Duration, string> = {
   'quarter': 'Quarter',
   'half':    'Half',
   'whole':   'Whole',
+}
+
+// ── Sequence scheduling ───────────────────────────────────────────────────────
+
+export interface SequenceScheduleEntry {
+  midiPitch: number
+  velocity:  number
+  startSec:  number
+  durSec:    number
+}
+
+export function buildSequenceSchedule(
+  part: Part,
+  measureSequence: number[],
+  tempoStaff: Staff,
+  baseBpm: number,
+  baseTimeSig: TimeSignature,
+): SequenceScheduleEntry[] {
+  if (part.inputMode !== 'sequencer') return []
+  const regions  = part.sequenceRegions ?? []
+  const patterns = part.sequencePatterns ?? []
+  const result: SequenceScheduleEntry[] = []
+
+  // Build a map of measure index → transport start time using the playback sequence
+  const measureStartTimes = new Map<number, { startSec: number; measureDurSec: number; timeSig: TimeSignature }>()
+  let t = 0
+  for (const mIdx of measureSequence) {
+    const bpm        = resolveDirectiveTempo(tempoStaff.measures, mIdx, baseBpm)
+    const timeSig    = resolveTimeSig(part.staves[0]?.measures ?? [], mIdx, baseTimeSig)
+    const durSec     = (measureCapacityUnits(timeSig) / 16) * (60 / bpm)
+    measureStartTimes.set(mIdx, { startSec: t, measureDurSec: durSec, timeSig })
+    t += durSec
+  }
+
+  for (const region of regions) {
+    const pattern = patterns.find(p => p.id === region.patternId)
+    if (!pattern || pattern.stepsPerBar === 0) continue
+
+    const reps = region.repetitions ?? Infinity
+    for (let rep = 0; rep < reps; rep++) {
+      const mIdx = region.startMeasureIndex + rep
+      const timing = measureStartTimes.get(mIdx)
+      if (!timing) break  // beyond playback sequence length
+
+      const { startSec, measureDurSec } = timing
+      const stepDurSec = measureDurSec / pattern.stepsPerBar
+
+      for (let step = 0; step < pattern.stepsPerBar; step++) {
+        const cells = pattern.steps[step]
+        if (!cells || cells.length === 0) continue
+        for (const cell of cells) {
+          result.push({
+            midiPitch: cell.pitch,
+            velocity:  cell.velocity,
+            startSec:  startSec + step * stepDurSec,
+            durSec:    stepDurSec,
+          })
+        }
+      }
+    }
+  }
+
+  return result
 }

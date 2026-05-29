@@ -25,7 +25,7 @@ import {
   type RenderContext
 } from 'vexflow'
 
-import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent } from '@shared/score'
+import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, SequencePattern } from '@shared/score'
 import { resolveTimeSig, timeSigsEqual, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo, eventDurationUnits } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
@@ -950,7 +950,28 @@ function renderFromLayouts(
       noteToMeasureKey.set(e.id, measureKey)
     })
 
-    noteStartX.set(measureKey, stave.getNoteStartX())
+    const staveNoteStartX = stave.getNoteStartX()
+    noteStartX.set(measureKey, staveNoteStartX)
+
+    // Sequencer parts: draw mini-grid overlay on top of the normal stave rendering
+    if ((part as any).inputMode === 'sequencer') {
+      const nativeCtxSeq: CanvasRenderingContext2D | null =
+        typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
+      if (nativeCtxSeq) {
+        const regions  = (part as any).sequenceRegions ?? []
+        const patterns = (part as any).sequencePatterns ?? []
+        // Find the pattern covering this measure
+        const region = [...regions].sort((a: any, b: any) => a.startMeasureIndex - b.startMeasureIndex)
+          .find((r: any) => {
+            const end = r.startMeasureIndex + (r.repetitions ?? Infinity)
+            return mIdx >= r.startMeasureIndex && mIdx < end
+          }) ?? null
+        const pattern: SequencePattern | null = region
+          ? patterns.find((p: any) => p.id === region.patternId) ?? null
+          : null
+        drawSequencerMeasureOverlay(nativeCtxSeq, layout, staveNoteStartX, pattern)
+      }
+    }
 
     // Collect stave references for group connector drawing
     const pKey = `${layout.partId}:${mIdx}`
@@ -1782,6 +1803,68 @@ function drawHairpinsForStaff(
 
     ctx2d.restore()
   }
+}
+
+// ── Sequencer measure overlay ─────────────────────────────────────────────────
+// Draws a dimmed fill over the stave body and a mini step-grid thumbnail
+// showing which steps have active cells.
+
+function drawSequencerMeasureOverlay(
+  nativeCtx: CanvasRenderingContext2D,
+  layout: MeasureLayout,
+  noteStartX: number,
+  pattern: SequencePattern | null,
+): void {
+  const noteAreaLeft  = noteStartX
+  const noteAreaRight = layout.x + layout.width - 2
+  const noteAreaW     = noteAreaRight - noteAreaLeft
+  const top    = layout.staveTopY
+  const height = STAVE_HEIGHT_PX
+
+  nativeCtx.save()
+
+  // Dim the stave lines by drawing a white semi-transparent overlay
+  nativeCtx.fillStyle = 'rgba(255,255,255,0.72)'
+  nativeCtx.fillRect(noteAreaLeft, top, noteAreaW, height)
+
+  if (pattern && pattern.stepsPerBar > 0 && noteAreaW > 0) {
+    const steps = pattern.stepsPerBar
+    const cellW = noteAreaW / steps
+
+    // Determine pitch range from active cells
+    const allPitches = pattern.steps.flatMap(col => col.map(c => c.pitch))
+    if (allPitches.length > 0) {
+      const minP = Math.min(...allPitches)
+      const maxP = Math.max(...allPitches)
+      const range = Math.max(1, maxP - minP)
+
+      for (let step = 0; step < steps; step++) {
+        const cells = pattern.steps[step]
+        if (!cells || cells.length === 0) continue
+        for (const cell of cells) {
+          const normY = 1 - (cell.pitch - minP) / range   // 0 = bottom, 1 = top
+          const cellH = Math.max(2, height / Math.max(steps, 8))
+          const cellX = noteAreaLeft + step * cellW
+          const cellY = top + normY * (height - cellH)
+          nativeCtx.fillStyle = 'rgba(59,157,221,0.6)'
+          nativeCtx.fillRect(cellX + 1, cellY, Math.max(1, cellW - 1), cellH)
+        }
+      }
+    } else {
+      // No active cells — just draw faint column dividers
+      nativeCtx.strokeStyle = 'rgba(0,0,0,0.08)'
+      nativeCtx.lineWidth = 0.5
+      for (let step = 1; step < steps; step++) {
+        const x = noteAreaLeft + step * cellW
+        nativeCtx.beginPath()
+        nativeCtx.moveTo(x, top)
+        nativeCtx.lineTo(x, top + height)
+        nativeCtx.stroke()
+      }
+    }
+  }
+
+  nativeCtx.restore()
 }
 
 // ── Cursor overlay ────────────────────────────────────────────────────────────

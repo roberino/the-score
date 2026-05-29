@@ -510,7 +510,11 @@ const ARTICULATION_BUTTONS: { art: Articulation; label: string; title: string }[
   { art: 'turn',           label: '~',  title: 'Turn' },
 ]
 
-export function ScoreCanvas(): JSX.Element {
+interface ScoreCanvasProps {
+  onOpenSequencer?: (partId: string) => void
+}
+
+export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Element {
   // Container div that holds all canvas slices for multi-canvas rendering
   const canvasAreaRef = useRef<HTMLDivElement>(null)
   // Overlay div — same stacking geometry as canvasAreaRef; holds transparent canvases
@@ -2715,6 +2719,13 @@ export function ScoreCanvas(): JSX.Element {
 
       const clickedMeasureIndex = layout.measureIndex
       const clickedPartId = layout.partId
+
+      // Sequencer part: open sequence editor instead of bar selection
+      const clickedPart = score.parts.find(p => p.id === clickedPartId)
+      if (clickedPart?.inputMode === 'sequencer' && inputMode === 'select') {
+        onOpenSequencer?.(clickedPartId)
+        return
+      }
 
       if (barSelection) {
         const inRange = clickedMeasureIndex >= barSelection.startMeasureIndex &&
