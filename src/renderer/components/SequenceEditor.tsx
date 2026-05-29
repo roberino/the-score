@@ -2,6 +2,8 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { useAppStore } from '../store/appStore'
 import { v4 as uuid } from 'uuid'
 import type { SequencePattern, SequenceRegion } from '@shared/score'
+import { previewNote } from '../engine/notePreview'
+import { midiOutputEngine } from '../engine/midiOutputEngine'
 
 // ── GM Percussion labels (MIDI notes 35–81) ───────────────────────────────────
 
@@ -60,8 +62,20 @@ export interface SequenceEditorProps {
 }
 
 export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Element {
-  const { score, dispatch, dispatchSilent, pushUndoSnapshot } = useAppStore()
+  const { score, dispatch, dispatchSilent, pushUndoSnapshot, soundOnInput, audioMode } = useAppStore()
   const part = score.parts.find(p => p.id === partId)
+
+  const previewCell = useCallback((midiPitch: number) => {
+    if (!soundOnInput || !part) return
+    const volDb = 20 * Math.log10(Math.max(0.001, part.volume))
+    if (audioMode === 'midi-out') {
+      const channel = (part.midiChannel ?? 1) - 1
+      midiOutputEngine.previewNote(midiPitch, 100, channel, part.midiProgram)
+    } else {
+      const hz = 440 * Math.pow(2, (midiPitch - 69) / 12)
+      void previewNote(hz, volDb, false)
+    }
+  }, [soundOnInput, audioMode, part])
 
   // Determine if drum part (channel 10 or midiProgram 0 on ch 10)
   const isDrum = part ? (part.midiChannel === 10) : false
@@ -116,14 +130,17 @@ export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Ele
   const handleCellMouseDown = useCallback((step: number, pitch: number, currentlyOn: boolean) => {
     if (!currentPattern) return
     pushUndoSnapshot()
-    dragRef.current = { on: !currentlyOn }
-    dispatchSilent({ type: 'SET_SEQUENCE_CELL', partId, patternId: currentPattern.id, step, pitch, on: !currentlyOn })
-  }, [currentPattern, partId, dispatchSilent, pushUndoSnapshot])
+    const turningOn = !currentlyOn
+    dragRef.current = { on: turningOn }
+    dispatchSilent({ type: 'SET_SEQUENCE_CELL', partId, patternId: currentPattern.id, step, pitch, on: turningOn })
+    if (turningOn) previewCell(pitch)
+  }, [currentPattern, partId, dispatchSilent, pushUndoSnapshot, previewCell])
 
   const handleCellMouseEnter = useCallback((step: number, pitch: number) => {
     if (!dragRef.current || !currentPattern) return
     dispatchSilent({ type: 'SET_SEQUENCE_CELL', partId, patternId: currentPattern.id, step, pitch, on: dragRef.current.on })
-  }, [currentPattern, partId, dispatchSilent])
+    if (dragRef.current.on) previewCell(pitch)
+  }, [currentPattern, partId, dispatchSilent, previewCell])
 
   useEffect(() => {
     const up = () => { dragRef.current = null }
