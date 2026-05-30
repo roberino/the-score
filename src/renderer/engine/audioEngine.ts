@@ -8,6 +8,7 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord, Hairpin } from '@shared/score'
 import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, eventToSeconds, articulationPlaybackMods, expandOrnamentNotes, type FlatScheduleEntry } from '@shared/musicUtils'
+import { scheduleDrumHit, releaseDrumSampler } from './drumSamplerEngine'
 
 // Re-export so callers that import from here continue to work
 export { eventToSeconds }
@@ -94,17 +95,22 @@ export async function playScore(
     // Sequencer parts: schedule cells directly from sequence data
     if (part.inputMode === 'sequencer') {
       const seqEntries = buildSequenceSchedule(part, sequence, tempoStaff, bpm, score.timeSignature)
+      const isDrumPart = (part.midiChannel ?? 1) === 10
+      const vol = part.volume
       for (const entry of seqEntries) {
         if (entry.startSec < resumeFrom) continue
-        const hz = 440 * Math.pow(2, (entry.midiPitch - 69) / 12)
-        const vol = part.volume
         Tone.Transport.schedule((time) => {
           if (isPartMuted?.(partId)) return
           const liveVol = getPartVolume?.(partId) ?? vol
           const liveDb  = 20 * Math.log10(Math.max(0.001, liveVol))
-          synth.set({ envelope: { attack: 0.005, decay: 0.1, sustain: 0.7, release: 0.1 } })
-          synth.volume.value = liveDb
-          synth.triggerAttackRelease(hz, entry.durSec * 0.9, time)
+          if (isDrumPart) {
+            scheduleDrumHit(entry.midiPitch, entry.velocity / 127, liveDb, time)
+          } else {
+            const hz = 440 * Math.pow(2, (entry.midiPitch - 69) / 12)
+            synth.set({ envelope: { attack: 0.005, decay: 0.1, sustain: 0.7, release: 0.1 } })
+            synth.volume.value = liveDb
+            synth.triggerAttackRelease(hz, entry.durSec * 0.9, time)
+          }
         }, entry.startSec)
         totalDuration = Math.max(totalDuration, entry.startSec + entry.durSec)
       }
@@ -207,6 +213,7 @@ export async function playScore(
       Tone.Transport.stop()
       Tone.Transport.cancel()
       synth.releaseAll()
+      releaseDrumSampler()
       setTimeout(() => synth.dispose(), 300)
       onStop?.()
     },

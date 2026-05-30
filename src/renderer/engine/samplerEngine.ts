@@ -2,10 +2,11 @@ import * as Tone from 'tone'
 import type { Score, Note, Chord } from '@shared/score'
 import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, articulationPlaybackMods, expandOrnamentNotes } from '@shared/musicUtils'
 import { pitchToHz, type PlaybackController } from './audioEngine'
+import { scheduleDrumHit, releaseDrumSampler } from './drumSamplerEngine'
 
-// ── Salamander Grand Piano samples (Tone.js CDN) ──────────────────────────────
+// ── Salamander Grand Piano samples (bundled) ──────────────────────────────────
 
-const SAMPLE_BASE_URL = 'https://tonejs.github.io/audio/salamander/'
+const SAMPLE_BASE_URL = './samples/piano/'
 const SAMPLE_URLS: Record<string, string> = {
   A0: 'A0.mp3',  C1: 'C1.mp3',  'D#1': 'Ds1.mp3', 'F#1': 'Fs1.mp3',
   A1: 'A1.mp3',  C2: 'C2.mp3',  'D#2': 'Ds2.mp3', 'F#2': 'Fs2.mp3',
@@ -83,15 +84,21 @@ export async function playScoreWithSampler(
 
     if (part.inputMode === 'sequencer') {
       const seqEntries = buildSequenceSchedule(part, sequence, tempoStaff, bpm, score.timeSignature)
+      const isDrumPart = (part.midiChannel ?? 1) === 10
+      const vol = part.volume
       for (const entry of seqEntries) {
         if (entry.startSec < resumeFrom) continue
-        const hz = 440 * Math.pow(2, (entry.midiPitch - 69) / 12)
-        const vol = part.volume
         Tone.Transport.schedule((time) => {
           if (isPartMuted?.(partId)) return
           const liveVol = getPartVolume?.(partId) ?? vol
-          sampler.volume.value = 20 * Math.log10(Math.max(0.001, liveVol))
-          sampler.triggerAttackRelease(hz, entry.durSec * 0.9, time)
+          const volDb   = 20 * Math.log10(Math.max(0.001, liveVol))
+          if (isDrumPart) {
+            scheduleDrumHit(entry.midiPitch, entry.velocity / 127, volDb, time)
+          } else {
+            const hz = 440 * Math.pow(2, (entry.midiPitch - 69) / 12)
+            sampler.volume.value = volDb
+            sampler.triggerAttackRelease(hz, entry.durSec * 0.9, time)
+          }
         }, entry.startSec)
         totalDuration = Math.max(totalDuration, entry.startSec + entry.durSec)
       }
@@ -183,6 +190,7 @@ export async function playScoreWithSampler(
       Tone.Transport.stop()
       Tone.Transport.cancel()
       sampler.releaseAll()
+      releaseDrumSampler()
       onStop?.()
     },
     getPositionSec: () => Tone.Transport.seconds,

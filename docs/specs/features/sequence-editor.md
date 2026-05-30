@@ -239,7 +239,18 @@ Sequence parts are expanded inline: for each measure in the export sequence, `bu
 
 Sequence parts are expanded to regular `<note>` elements: each active cell becomes a pitched note (or `<unpitched>` for channel-10 parts) of duration `1/stepsPerBar` bars. Steps with no active cells produce rests of the same duration. Measures before the first assignment, or covered by a `null` assignment, are filled with whole rests. MIDI pitch → `<pitch>` conversion uses the standard `pitch = 12*(octave+1) + semitone` mapping. Channel-10 parts use `<clef sign="percussion">` and `<unpitched>` elements.
 
-## 10. Deferred / Out of Scope
+## 10. Stock Drum Rhythms
+
+On a drum part, the user should have the ability to load a pre-configured sequence from a list of common rhythms below:
+
+* 8 Beat - when the time signature is 4/4
+* 16 Beat - available when the time signature is  4/4
+* Waltz - available when the time signature is 3/4
+* Balad - available when the time signature is 6/8
+
+Stock rhythms should be stored in a json asset file.
+
+## 11. Deferred / Out of Scope
 
 - Step granularity configuration (currently fixed at 16th notes)
 - Per-cell velocity editing

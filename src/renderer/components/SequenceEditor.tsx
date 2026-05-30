@@ -4,6 +4,7 @@ import { v4 as uuid } from 'uuid'
 import type { SequencePattern } from '@shared/score'
 import { previewNote } from '../engine/notePreview'
 import { midiOutputEngine } from '../engine/midiOutputEngine'
+import { previewDrumHit } from '../engine/drumSamplerEngine'
 
 // ── GM Percussion labels (MIDI notes 35–81) ───────────────────────────────────
 
@@ -68,10 +69,13 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
 
   const previewCell = useCallback((midiPitch: number) => {
     if (!soundOnInput || !part) return
-    const volDb = 20 * Math.log10(Math.max(0.001, part.volume))
+    const volDb    = 20 * Math.log10(Math.max(0.001, part.volume))
+    const isDrum   = (part.midiChannel ?? 1) === 10
     if (audioMode === 'midi-out') {
       const channel = (part.midiChannel ?? 1) - 1
       midiOutputEngine.previewNote(midiPitch, 100, channel, part.midiProgram)
+    } else if (isDrum) {
+      previewDrumHit(midiPitch, volDb)
     } else {
       const hz = 440 * Math.pow(2, (midiPitch - 69) / 12)
       void previewNote(hz, volDb, false)

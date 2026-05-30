@@ -294,3 +294,197 @@ Directive resolution (`resolveDirectiveTempo`, `resolveDirectiveDynamic`, `resol
 14. Back-to-back repeats (`|: A :|  |: B :|`) each repeat exactly once independently.
 15. Repeated sections honour tempo/dynamic directives on each pass (resolve by original measure index).
 16. Stop during the repeated section cancels immediately with no click artefact.
+
+---
+
+## Advanced Playback — Bundled Samples
+
+### Overview
+
+Both the piano sampler and the new drum sampler use audio samples **bundled inside the Electron application package** rather than loading from an external CDN. This ensures playback works fully offline and with no network latency on first use.
+
+### Asset location
+
+Samples are stored under `public/samples/` and are served from the renderer as local paths:
+
+| Instrument | Path |
+|---|---|
+| Piano (Salamander) | `public/samples/piano/<note>.mp3` (e.g. `A0.mp3`, `C4.mp3`) |
+| GM Drums | `public/samples/drums/<midi-note>.mp3` (e.g. `36.mp3`, `38.mp3`) |
+
+`public/` is copied verbatim by Vite/Electron-Forge to the app bundle, so files are accessible at runtime as `/samples/piano/A0.mp3` etc. (renderer-relative paths work the same way they do for a web app served from the same origin).
+
+### Piano sample set
+
+The same Salamander Grand Piano note set used previously, now loaded from `public/samples/piano/` instead of the Tone.js CDN. Files are standard mp3. The mapping (note name → filename) is unchanged:
+
+```
+A0 → A0.mp3   C1 → C1.mp3   D#1 → Ds1.mp3   F#1 → Fs1.mp3
+A1 → A1.mp3   C2 → C2.mp3   D#2 → Ds2.mp3   F#2 → Fs2.mp3
+…  (same set through C8)
+```
+
+`samplerEngine.ts` is updated to replace `SAMPLE_BASE_URL` with `/samples/piano/`.
+
+### Drum sample set
+
+One mp3 per GM percussion note, named by MIDI note number. The minimum required set:
+
+| MIDI notes | Sounds |
+|---|---|
+| 35, 36 | Bass drum 2, Bass drum 1 |
+| 37, 38, 39, 40 | Side stick, Snare 1, Hand clap, Snare 2 |
+| 41, 43, 45, 47, 48, 50 | Toms (low floor → high) |
+| 42, 44, 46 | Closed hi-hat, Pedal hi-hat, Open hi-hat |
+| 49, 52, 55, 57 | Crash cymbals |
+| 51, 53, 59 | Ride cymbal, Ride bell, Ride cymbal 2 |
+| 54, 56 | Tambourine, Cowbell |
+
+Notes not present in the set use the synthesised fallback (§ drum synthesis below).
+
+---
+
+## Advanced Playback — Drum Parts (Internal Engine)
+
+### Overview
+
+Sequencer parts with `midiChannel === 10` are drum/percussion parts. The internal audio engines must play these using percussive sounds rather than the piano sampler or synth oscillator. This section specifies the drum audio backend.
+
+### Detection
+
+A part is treated as a drum part when `(part.midiChannel ?? 1) === 10`. Both `audioEngine.ts` and `samplerEngine.ts` check this when processing sequencer entries from `buildSequenceSchedule`.
+
+### Module: `drumSamplerEngine.ts`
+
+Located at `src/renderer/engine/drumSamplerEngine.ts`. Public API:
+
+```typescript
+// Preload all bundled drum samples. Call once at app startup.
+export function loadDrumSampler(): Promise<void>
+
+// True once all samples have loaded.
+export function isDrumSamplerReady(): boolean
+
+// Schedule a drum hit on the Tone.js Transport.
+// midiNote: GM percussion note number (35–81)
+// velocity: normalised 0–1
+// volumeDb: part volume in dB
+// time:     Tone.js audio context time
+export function scheduleDrumHit(
+  midiNote: number, velocity: number, volumeDb: number, time: number
+): void
+
+// Immediate (non-Transport) preview for the Sequence Editor.
+export function previewDrumHit(midiNote: number, volumeDb: number): void
+
+// Stop all active drum players (called on playback stop).
+export function releaseDrumSampler(): void
+```
+
+### Sample playback
+
+`drumSamplerEngine.ts` uses `Tone.Players` — a dictionary of independent `Tone.Player` instances, one per GM note in the bundled set. Unlike `Tone.Sampler`, `Tone.Players` plays each sample at its original pitch with no interpolation, which is correct for percussive sounds that must not be transposed.
+
+```typescript
+const players = new Tone.Players({
+  36: '/samples/drums/36.mp3',
+  38: '/samples/drums/38.mp3',
+  // …
+}).toDestination()
+```
+
+`scheduleDrumHit` looks up the player by `midiNote`; if the note is not in the map it falls back to synthesis (§ below).
+
+### Synthesised fallback
+
+If `isDrumSamplerReady()` is `false` at schedule time, or the MIDI note has no bundled sample, the engine synthesises an approximation using Web Audio API nodes via `Tone.getContext().rawContext`:
+
+| Category | MIDI notes | Synthesis |
+|---|---|---|
+| Kick | 35, 36 | Sine oscillator sweeping 120 Hz → 40 Hz over 200 ms with fast exponential amplitude decay |
+| Snare | 38, 40 | White noise through a bandpass filter (200–600 Hz), 120 ms decay; mixed with a 180 Hz tone |
+| Rimshot / side stick | 37, 39 | Very short white noise burst (40 ms), bandpass 800 Hz – 3 kHz |
+| Closed hi-hat | 42, 44 | White noise through a highpass filter (8 kHz), 40 ms decay |
+| Open hi-hat | 46 | White noise highpassed at 8 kHz, 300 ms decay |
+| Toms | 41, 43, 45, 47, 48, 50 | Sine sweep from a per-tom start frequency (80–200 Hz) to half that value, 150–250 ms decay |
+| Crash cymbal | 49, 52, 57 | Broadband noise through a peaking filter centred at 8 kHz, 800 ms decay |
+| Ride cymbal | 51, 53, 59 | Bandpass noise 3–8 kHz, 400 ms decay |
+| Hand clap | 39 | Three rapid noise bursts (0, 10, 20 ms offsets), 60 ms each |
+| Other / default | all remaining | Short noise burst through a bandpass filter, 80 ms decay |
+
+The fallback synthesiser is also used as a standalone path when `isDrumSamplerReady()` is false at startup, so the app is fully functional before samples finish loading.
+
+### Prefetch
+
+`loadDrumSampler()` is called once at app startup in `App.tsx`, alongside the existing `loadSampler()` call:
+
+```typescript
+useEffect(() => {
+  loadSampler()
+  loadDrumSampler()
+}, [])
+```
+
+Playback does not wait for the drum sampler before starting — the `scheduleDrumHit` callback falls back gracefully.
+
+### Integration with `audioEngine.ts` and `samplerEngine.ts`
+
+In both engines, the sequencer scheduling block gains a drum-part branch:
+
+```typescript
+if (part.inputMode === 'sequencer') {
+  const seqEntries = buildSequenceSchedule(part, sequence, tempoStaff, bpm, score.timeSignature)
+  const isDrumPart = (part.midiChannel ?? 1) === 10
+
+  for (const entry of seqEntries) {
+    if (entry.startSec < resumeFrom) continue
+    Tone.Transport.schedule((time) => {
+      if (isPartMuted?.(partId)) return
+      const liveVol = getPartVolume?.(partId) ?? part.volume
+      const volDb   = 20 * Math.log10(Math.max(0.001, liveVol))
+      if (isDrumPart) {
+        scheduleDrumHit(entry.midiPitch, entry.velocity / 127, volDb, time)
+      } else {
+        // existing pitched path (synth or sampler)
+      }
+    }, entry.startSec)
+    totalDuration = Math.max(totalDuration, entry.startSec + entry.durSec)
+  }
+  continue
+}
+```
+
+The `stop()` method of each engine calls `releaseDrumSampler()` alongside any existing cleanup.
+
+### Note preview in the Sequence Editor
+
+`SequenceEditor.tsx` calls `previewNote(hz, volDb, false)` when the user toggles a cell on. For drum parts this must call `previewDrumHit(midiPitch, volDb)` instead. The `previewCell` callback is extended:
+
+```typescript
+if (audioMode === 'midi-out') {
+  midiOutputEngine.previewNote(midiPitch, 100, channel, part.midiProgram)
+} else if (isDrum) {
+  void previewDrumHit(midiPitch, volDb)
+} else {
+  const hz = 440 * Math.pow(2, (midiPitch - 69) / 12)
+  void previewNote(hz, volDb, false)
+}
+```
+
+### Out of scope
+
+- Velocity-layered samples (all hits use cell velocity as linear volume only)
+- Humanisation (timing/velocity randomisation)
+- Reverb / room modelling
+- Non-GM drum kits (custom sample mappings)
+- Non-drum sequencer parts — continue to use the synth/piano sampler path
+
+### Acceptance Criteria
+
+17. Playing a score with a drum sequencer part produces percussive sounds, not piano or synth tones.
+18. Bass drum notes (MIDI 35/36) sound distinctly different from snare (MIDI 38/40) and hi-hat (MIDI 42).
+19. If the drum sampler has not yet loaded, synthesised fallback sounds play with no silence or JavaScript errors.
+20. Toggling a cell on in the Sequence Editor for a drum part triggers a drum preview sound, not a piano tone.
+21. Stopping playback stops all drum sounds immediately with no click artefact.
+22. Drum parts respect the part mute and volume controls during playback.
+23. Piano sampler samples load from the bundled `public/samples/piano/` path, not from an external CDN. The app plays correctly with no network access.

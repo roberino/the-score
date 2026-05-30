@@ -15,6 +15,7 @@ import type {
   Pitch, NoteName, Duration, Accidental, ClefType, BarlineType, Articulation,
   Directive, Slur, Hairpin, ScoreMetadata, TimeSignature, KeySignature, TupletInfo, DynamicLevel, Volta,
 } from '@shared/score'
+import { activeAssignmentAt } from '@shared/musicUtils'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -410,18 +411,12 @@ function barlineLines(
 
 function partListLines(score: Score): string[] {
   const lines = ['  <part-list>']
-  let midiChannel = 1
 
   for (let i = 0; i < score.parts.length; i++) {
-    const part   = score.parts[i]
-    const partId = `P${i + 1}`
+    const part    = score.parts[i]
+    const partId  = `P${i + 1}`
     const instrId = `${partId}-I1`
-    const isPerc  = part.staves[0]?.clef === 'percussion'
-    const channel = isPerc ? 10 : Math.min(midiChannel, 16)
-    if (!isPerc) {
-      midiChannel++
-      if (midiChannel === 10) midiChannel++  // skip channel 10 for non-percussion
-    }
+    const channel = part.midiChannel ?? 1
 
     lines.push(
       `    <score-part id="${partId}">`,
@@ -521,6 +516,90 @@ function partLines(score: Score, partIdx: number): string[] {
       isFirst && partIdx === 0,
       lvl + 1,
     ))
+
+    // Sequencer parts: expand step cells instead of rendering score voices
+    if ((part as any).inputMode === 'sequencer') {
+      const assignments = (part as any).sequenceAssignments ?? []
+      const patterns    = (part as any).sequencePatterns ?? []
+      const timeSig     = measure.timeSignature ?? score.timeSignature
+      const isPercChannel = (part.midiChannel ?? 1) === 10
+
+      // divisions per bar for this time signature
+      const measureDivs = DIVISIONS * 4 * timeSig.numerator / timeSig.denominator
+      const assignment  = activeAssignmentAt(assignments, mIdx)
+
+      if (assignment && assignment.patternId !== null) {
+        const pattern = patterns.find((p: any) => p.id === assignment.patternId)
+        if (pattern && pattern.stepsPerBar > 0) {
+          const stepDivs = Math.round(measureDivs / pattern.stepsPerBar)
+          const stepType = stepDivs <= 1 ? '64th' : stepDivs <= 2 ? '32nd' : stepDivs <= 4 ? '16th'
+                         : stepDivs <= 8 ? 'eighth' : 'quarter'
+
+          for (let step = 0; step < pattern.stepsPerBar; step++) {
+            const cells: Array<{ pitch: number; velocity: number }> = pattern.steps[step] ?? []
+
+            if (cells.length === 0) {
+              // Rest for this step
+              lines.push(`      <note>`)
+              lines.push(`        <rest/>`)
+              lines.push(`        <duration>${stepDivs}</duration>`)
+              lines.push(`        <voice>1</voice>`)
+              lines.push(`        <type>${stepType}</type>`)
+              lines.push(`      </note>`)
+            } else {
+              for (let ci = 0; ci < cells.length; ci++) {
+                const cell  = cells[ci]
+                const semi  = cell.pitch % 12
+                const oct   = Math.floor(cell.pitch / 12) - 1
+                const NOTE_STEPS = ['C','C','D','D','E','F','F','G','G','A','A','B']
+                const ALTER_MAP  = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0]
+                const stepName   = NOTE_STEPS[semi]
+                const alter      = ALTER_MAP[semi]
+
+                lines.push(`      <note>`)
+                if (ci > 0) lines.push(`        <chord/>`)
+                if (isPercChannel) {
+                  lines.push(`        <unpitched>`)
+                  lines.push(`          <display-step>${stepName}</display-step>`)
+                  lines.push(`          <display-octave>${oct}</display-octave>`)
+                  lines.push(`        </unpitched>`)
+                } else {
+                  lines.push(`        <pitch>`)
+                  lines.push(`          <step>${stepName}</step>`)
+                  if (alter) lines.push(`          <alter>${alter}</alter>`)
+                  lines.push(`          <octave>${oct}</octave>`)
+                  lines.push(`        </pitch>`)
+                }
+                lines.push(`        <duration>${stepDivs}</duration>`)
+                lines.push(`        <voice>1</voice>`)
+                lines.push(`        <type>${stepType}</type>`)
+                lines.push(`      </note>`)
+              }
+            }
+          }
+        } else {
+          // Pattern not found — whole rest
+          lines.push(`      <note><rest/><duration>${Math.round(measureDivs)}</duration><voice>1</voice><type>whole</type></note>`)
+        }
+      } else {
+        // No assignment or explicit silence — whole rest
+        lines.push(`      <note><rest/><duration>${Math.round(measureDivs)}</duration><voice>1</voice><type>whole</type></note>`)
+      }
+
+      // Right barline for non-default barlines
+      if (measure.barline && measure.barline !== 'single' && measure.barline !== 'repeat-start') {
+        const bl: Record<string, [string, string | undefined]> = {
+          'double':     ['light-light', undefined],
+          'final':      ['light-heavy', undefined],
+          'repeat-end': ['light-heavy', 'backward'],
+        }
+        const [style, dir] = bl[measure.barline] ?? []
+        if (style) lines.push(...barlineLines(style, dir, 'right', lvl + 1))
+      }
+
+      lines.push('    </measure>')
+      continue
+    }
 
     // Notes — all voices (voice index 0 = MusicXML voice 1, index 1 = voice 2)
     for (let vIdx = 0; vIdx < measure.voices.length; vIdx++) {

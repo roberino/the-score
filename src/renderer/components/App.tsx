@@ -9,6 +9,7 @@ import { SequenceEditor } from './SequenceEditor'
 import type { Score } from '@shared/score'
 import { scoreToMidi, midiToScore } from '../engine/midiEngine'
 import { loadSampler } from '../engine/samplerEngine'
+import { loadDrumSampler } from '../engine/drumSamplerEngine'
 import { exportScorePdf } from '../engine/pdfExporter'
 import { scoreToMusicXml, musicxmlToScore } from '../engine/musicxmlEngine'
 
@@ -27,8 +28,8 @@ export function App(): JSX.Element {
   const [sequencerPartId,    setSequencerPartId]    = useState<string | null>(null)
   const [sequencerPatternId, setSequencerPatternId] = useState<string | undefined>(undefined)
 
-  // Prefetch Salamander Grand Piano samples in the background
-  useEffect(() => { loadSampler() }, [])
+  // Prefetch bundled samples in the background
+  useEffect(() => { loadSampler(); loadDrumSampler() }, [])
 
   // ── Wire native menu events to store actions ────────────────────────────────
   useEffect(() => {

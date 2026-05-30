@@ -15,7 +15,7 @@ import {
   type Score, type Note, type Chord, type Rest, type NoteEvent,
   type Duration, type Pitch, type BarlineType, type TimeSignature,
 } from '@shared/score'
-import { measureCapacityUnits } from '@shared/musicUtils'
+import { measureCapacityUnits, activeAssignmentAt } from '@shared/musicUtils'
 
 // ── Duration tables ───────────────────────────────────────────────────────────
 
@@ -99,6 +99,10 @@ function pitchToMidi(pitch: Pitch): number {
 
 // ── Export ────────────────────────────────────────────────────────────────────
 
+function measureTicks(timeSig: TimeSignature, ppq: number): number {
+  return Math.round(timeSig.numerator * (4 / timeSig.denominator) * ppq)
+}
+
 export function scoreToMidi(score: Score): Uint8Array {
   const midi = new Midi()
 
@@ -109,42 +113,80 @@ export function scoreToMidi(score: Score): Uint8Array {
     measures: 0,
   })
 
-  const part  = score.parts[0]
-  const staff = part?.staves[0]
-  if (!staff) return midi.toArray()
-
-  const track = midi.addTrack()
-  track.name  = part.name
-
   const ppq = midi.header.ppq   // 480
-  let currentTick = 0
 
-  for (const measure of staff.measures) {
-    for (const event of measure.voices[0]?.events ?? []) {
-      const beats        = DURATION_BEATS[event.duration] ?? 1
-      const dotFactor    = event.dots === 2 ? 1.75 : event.dots === 1 ? 1.5 : 1
-      const durationTicks = Math.round(beats * dotFactor * ppq)
+  for (const part of score.parts) {
+    const staff = part.staves[0]
+    if (!staff) continue
 
-      if (event.type === 'note') {
-        track.addNote({
-          midi:         pitchToMidi((event as Note).pitch),
-          ticks:        currentTick,
-          durationTicks,
-          velocity:     0.8,
-        })
-      } else if (event.type === 'chord') {
-        for (const pitch of (event as Chord).pitches) {
-          track.addNote({
-            midi:         pitchToMidi(pitch),
-            ticks:        currentTick,
-            durationTicks,
-            velocity:     0.8,
-          })
+    const track = midi.addTrack()
+    track.name = part.name
+    const channel = (part.midiChannel ?? 1) - 1  // @tonejs/midi uses 0-based channels
+    track.channel = channel
+
+    let currentTick = 0
+
+    if (part.inputMode === 'sequencer') {
+      // Expand sequence assignments inline
+      const assignments = part.sequenceAssignments ?? []
+      const patterns    = part.sequencePatterns ?? []
+
+      for (let mIdx = 0; mIdx < staff.measures.length; mIdx++) {
+        const timeSig  = staff.measures[mIdx].timeSignature ?? score.timeSignature
+        const mTicks   = measureTicks(timeSig, ppq)
+        const assignment = activeAssignmentAt(assignments, mIdx)
+
+        if (assignment && assignment.patternId !== null) {
+          const pattern = patterns.find(p => p.id === assignment.patternId)
+          if (pattern && pattern.stepsPerBar > 0) {
+            const stepTicks = mTicks / pattern.stepsPerBar
+            for (let step = 0; step < pattern.stepsPerBar; step++) {
+              const cells = pattern.steps[step]
+              if (!cells || cells.length === 0) continue
+              for (const cell of cells) {
+                track.addNote({
+                  midi:         cell.pitch,
+                  ticks:        currentTick + Math.round(step * stepTicks),
+                  durationTicks: Math.max(1, Math.round(stepTicks)),
+                  velocity:     cell.velocity / 127,
+                })
+              }
+            }
+          }
+        }
+
+        currentTick += mTicks
+      }
+    } else {
+      // Standard score part
+      for (const measure of staff.measures) {
+        for (const event of measure.voices[0]?.events ?? []) {
+          const beats         = DURATION_BEATS[event.duration] ?? 1
+          const dotFactor     = event.dots === 2 ? 1.75 : event.dots === 1 ? 1.5 : 1
+          const durationTicks = Math.round(beats * dotFactor * ppq)
+
+          if (event.type === 'note') {
+            track.addNote({
+              midi:         pitchToMidi((event as Note).pitch),
+              ticks:        currentTick,
+              durationTicks,
+              velocity:     0.8,
+            })
+          } else if (event.type === 'chord') {
+            for (const pitch of (event as Chord).pitches) {
+              track.addNote({
+                midi:         pitchToMidi(pitch),
+                ticks:        currentTick,
+                durationTicks,
+                velocity:     0.8,
+              })
+            }
+          }
+          // rests: just advance tick
+
+          currentTick += durationTicks
         }
       }
-      // rests: just advance tick
-
-      currentTick += durationTicks
     }
   }
 
