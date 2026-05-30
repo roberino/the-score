@@ -233,7 +233,7 @@ For each measure in the playback sequence, find the active assignment (largest `
 
 ### 9.1 MIDI export
 
-Sequence parts are expanded inline: for each measure in the export sequence, `buildSequenceSchedule` resolves the active assignment and emits one MIDI note per active cell (pitch from `cell.pitch`, velocity from `cell.velocity`, duration = one step). No MIDI repeat markers are used. `patternId: null` assignments produce no events. Channel follows the part's MIDI channel setting (channel 10 for drum parts).
+Sequence parts are expanded inline: for each measure in the export sequence, `buildSequenceSchedule` resolves the active assignment and emits one MIDI note per active cell (pitch from `cell.pitch`, velocity from `cell.velocity`, duration = one step). No MIDI repeat markers are used. `patternId: null` assignments produce no events. Channel always follows the part's MIDI channel setting — it is never overridden by the export. When a new drum part is created, its channel defaults to 10, but the user may change it via the Parts Panel.
 
 ### 9.2 MusicXML export
 
