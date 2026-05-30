@@ -976,6 +976,10 @@ export function applyCommand(score: Score, command: Command): Score {
         const part = (draft.parts as any[]).find((p: any) => p.id === command.partId)
         if (!part) break
         part.inputMode = command.mode
+        // Default percussion parts to MIDI channel 10 when switched to sequencer
+        if (command.mode === 'sequencer' && part.staves?.[0]?.clef === 'percussion' && part.midiChannel !== 10) {
+          part.midiChannel = 10
+        }
         break
       }
 
