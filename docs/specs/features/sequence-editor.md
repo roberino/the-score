@@ -229,7 +229,17 @@ For each measure in the playback sequence, find the active assignment (largest `
 
 `SET_SEQUENCE_CELL` is the hot-path command for toggling grid cells and must be dispatched without triggering a full undo snapshot per cell (drag-to-fill accumulates a single undo step, flushed on mouseup).
 
-## 9. Deferred / Out of Scope
+## 9. MIDI & MusicXML Export
+
+### 9.1 MIDI export
+
+Sequence parts are expanded inline: for each measure in the export sequence, `buildSequenceSchedule` resolves the active assignment and emits one MIDI note per active cell (pitch from `cell.pitch`, velocity from `cell.velocity`, duration = one step). No MIDI repeat markers are used. `patternId: null` assignments produce no events. Channel follows the part's MIDI channel setting (channel 10 for drum parts).
+
+### 9.2 MusicXML export
+
+Sequence parts are expanded to regular `<note>` elements: each active cell becomes a pitched note (or `<unpitched>` for channel-10 parts) of duration `1/stepsPerBar` bars. Steps with no active cells produce rests of the same duration. Measures before the first assignment, or covered by a `null` assignment, are filled with whole rests. MIDI pitch → `<pitch>` conversion uses the standard `pitch = 12*(octave+1) + semitone` mapping. Channel-10 parts use `<clef sign="percussion">` and `<unpitched>` elements.
+
+## 10. Deferred / Out of Scope
 
 - Step granularity configuration (currently fixed at 16th notes)
 - Per-cell velocity editing
