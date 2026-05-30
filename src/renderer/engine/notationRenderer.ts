@@ -26,7 +26,7 @@ import {
 } from 'vexflow'
 
 import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, SequencePattern } from '@shared/score'
-import { resolveTimeSig, timeSigsEqual, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo, eventDurationUnits } from '@shared/musicUtils'
+import { resolveTimeSig, timeSigsEqual, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo, eventDurationUnits, activeAssignmentAt } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
 
@@ -962,18 +962,16 @@ function renderFromLayouts(
       const nativeCtxSeq: CanvasRenderingContext2D | null =
         typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
       if (nativeCtxSeq) {
-        const regions  = (part as any).sequenceRegions ?? []
-        const patterns = (part as any).sequencePatterns ?? []
-        // Find the pattern covering this measure
-        const region = [...regions].sort((a: any, b: any) => a.startMeasureIndex - b.startMeasureIndex)
-          .find((r: any) => {
-            const end = r.startMeasureIndex + (r.repetitions ?? Infinity)
-            return mIdx >= r.startMeasureIndex && mIdx < end
-          }) ?? null
-        const pattern: SequencePattern | null = region
-          ? patterns.find((p: any) => p.id === region.patternId) ?? null
+        const assignments = (part as any).sequenceAssignments ?? []
+        const patterns    = (part as any).sequencePatterns    ?? []
+        const activeAssignment = activeAssignmentAt(assignments, mIdx)
+        const pattern: SequencePattern | null = (activeAssignment?.patternId)
+          ? patterns.find((p: any) => p.id === activeAssignment.patternId) ?? null
           : null
-        drawSequencerMeasureOverlay(nativeCtxSeq, layout, staveNoteStartX, pattern)
+        const isAssignmentStart = assignments.some((a: any) => a.startMeasureIndex === mIdx && a.patternId !== null)
+        const patternIdx = pattern ? patterns.indexOf(pattern) : -1
+        const regionLabel = pattern?.label ?? (patternIdx >= 0 ? `Sequence ${patternIdx + 1}` : undefined)
+        drawSequencerMeasureOverlay(nativeCtxSeq, layout, staveNoteStartX, pattern, isAssignmentStart, regionLabel)
       }
     }
 
@@ -1844,6 +1842,8 @@ function drawSequencerMeasureOverlay(
   layout: MeasureLayout,
   noteStartX: number,
   pattern: SequencePattern | null,
+  isRegionStart?: boolean,
+  regionLabel?: string,
 ): void {
   const noteAreaLeft  = noteStartX
   const noteAreaRight = layout.x + layout.width - 2
@@ -1853,9 +1853,18 @@ function drawSequencerMeasureOverlay(
 
   nativeCtx.save()
 
-  // Dim the stave lines by drawing a white semi-transparent overlay
-  nativeCtx.fillStyle = 'rgba(255,255,255,0.72)'
+  // The white band + midline were already drawn by renderMeasure; this overlay
+  // previously dimmed VexFlow stave lines but that's no longer needed.
+  nativeCtx.fillStyle = 'rgba(0,0,0,0)'
   nativeCtx.fillRect(noteAreaLeft, top, noteAreaW, height)
+
+  // Sequence label: drawn above the band at the first bar of each region
+  if (isRegionStart && regionLabel) {
+    nativeCtx.font = 'bold 10px sans-serif'
+    nativeCtx.fillStyle = '#3b9ddd'
+    nativeCtx.textAlign = 'left'
+    nativeCtx.fillText(regionLabel, noteAreaLeft, top - 5)
+  }
 
   if (pattern && pattern.stepsPerBar > 0 && noteAreaW > 0) {
     const steps = pattern.stepsPerBar

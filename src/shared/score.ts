@@ -186,14 +186,15 @@ export interface SequencePattern {
   // Inner array = active cells in that column (empty = no notes on this step)
   steps: SequenceCell[][]
   stepsPerBar: number
+  label?: string
 }
 
-export interface SequenceRegion {
+// An assignment pins a pattern (or silence) to a start bar.
+// The pattern plays from startMeasureIndex until the next assignment's startMeasureIndex.
+export interface SequenceAssignment {
   id: string
-  patternId: string
+  patternId: string | null  // null = explicit silence
   startMeasureIndex: number
-  repetitions: number | null  // null = repeat to end of score
-  label?: string
 }
 
 export type GroupSymbol = 'bracket' | 'brace'
@@ -213,7 +214,7 @@ export interface Part {
   readonly groupSymbol?: GroupSymbol // visual symbol drawn for the group (bracket or brace)
   readonly inputMode?: 'score' | 'sequencer'  // defaults to 'score' when absent
   readonly sequencePatterns?: readonly SequencePattern[]
-  readonly sequenceRegions?: readonly SequenceRegion[]
+  readonly sequenceAssignments?: readonly SequenceAssignment[]
 }
 
 export interface ScoreMetadata {

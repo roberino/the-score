@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid'
-import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, Slur, TimeSignature, KeySignature, ClefType, Measure, TupletInfo, Volta, Part } from './score'
+import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, Slur, TimeSignature, KeySignature, ClefType, Measure, TupletInfo, Volta, Part, SequenceAssignment } from './score'
 
 // ── Duration arithmetic (64th-note units) ─────────────────────────────────────
 
@@ -640,6 +640,18 @@ export interface SequenceScheduleEntry {
   durSec:    number
 }
 
+// Returns the active SequenceAssignment at measureIndex, or null if none.
+// "Active" means the assignment with the greatest startMeasureIndex ≤ measureIndex.
+export function activeAssignmentAt(assignments: readonly SequenceAssignment[], mIdx: number): SequenceAssignment | null {
+  let best: SequenceAssignment | null = null
+  for (const a of assignments) {
+    if (a.startMeasureIndex <= mIdx && (!best || a.startMeasureIndex > best.startMeasureIndex)) {
+      best = a
+    }
+  }
+  return best
+}
+
 export function buildSequenceSchedule(
   part: Part,
   measureSequence: number[],
@@ -648,45 +660,46 @@ export function buildSequenceSchedule(
   baseTimeSig: TimeSignature,
 ): SequenceScheduleEntry[] {
   if (part.inputMode !== 'sequencer') return []
-  const regions  = part.sequenceRegions ?? []
-  const patterns = part.sequencePatterns ?? []
+  const assignments = part.sequenceAssignments ?? []
+  const patterns    = part.sequencePatterns ?? []
+  if (assignments.length === 0) return []
+
   const result: SequenceScheduleEntry[] = []
 
   // Build a map of measure index → transport start time using the playback sequence
-  const measureStartTimes = new Map<number, { startSec: number; measureDurSec: number; timeSig: TimeSignature }>()
+  const measureStartTimes = new Map<number, { startSec: number; measureDurSec: number }>()
   let t = 0
   for (const mIdx of measureSequence) {
-    const bpm        = resolveDirectiveTempo(tempoStaff.measures, mIdx, baseBpm)
-    const timeSig    = resolveTimeSig(part.staves[0]?.measures ?? [], mIdx, baseTimeSig)
-    const durSec     = (measureCapacityUnits(timeSig) / 16) * (60 / bpm)
-    measureStartTimes.set(mIdx, { startSec: t, measureDurSec: durSec, timeSig })
+    const bpm     = resolveDirectiveTempo(tempoStaff.measures, mIdx, baseBpm)
+    const timeSig = resolveTimeSig(part.staves[0]?.measures ?? [], mIdx, baseTimeSig)
+    const durSec  = (measureCapacityUnits(timeSig) / 16) * (60 / bpm)
+    measureStartTimes.set(mIdx, { startSec: t, measureDurSec: durSec })
     t += durSec
   }
 
-  for (const region of regions) {
-    const pattern = patterns.find(p => p.id === region.patternId)
+  for (const mIdx of measureSequence) {
+    const assignment = activeAssignmentAt(assignments, mIdx)
+    if (!assignment || assignment.patternId === null) continue
+
+    const pattern = patterns.find(p => p.id === assignment.patternId)
     if (!pattern || pattern.stepsPerBar === 0) continue
 
-    const reps = region.repetitions ?? Infinity
-    for (let rep = 0; rep < reps; rep++) {
-      const mIdx = region.startMeasureIndex + rep
-      const timing = measureStartTimes.get(mIdx)
-      if (!timing) break  // beyond playback sequence length
+    const timing = measureStartTimes.get(mIdx)
+    if (!timing) continue
 
-      const { startSec, measureDurSec } = timing
-      const stepDurSec = measureDurSec / pattern.stepsPerBar
+    const { startSec, measureDurSec } = timing
+    const stepDurSec = measureDurSec / pattern.stepsPerBar
 
-      for (let step = 0; step < pattern.stepsPerBar; step++) {
-        const cells = pattern.steps[step]
-        if (!cells || cells.length === 0) continue
-        for (const cell of cells) {
-          result.push({
-            midiPitch: cell.pitch,
-            velocity:  cell.velocity,
-            startSec:  startSec + step * stepDurSec,
-            durSec:    stepDurSec,
-          })
-        }
+    for (let step = 0; step < pattern.stepsPerBar; step++) {
+      const cells = pattern.steps[step]
+      if (!cells || cells.length === 0) continue
+      for (const cell of cells) {
+        result.push({
+          midiPitch: cell.pitch,
+          velocity:  cell.velocity,
+          startSec:  startSec + step * stepDurSec,
+          durSec:    stepDurSec,
+        })
       }
     }
   }

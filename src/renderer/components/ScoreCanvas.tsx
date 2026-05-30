@@ -20,7 +20,7 @@ import {
   type HeadingFieldBound,
   type SelectedChordPitchInfo,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta, type Duration, type MidiScoreEvent, type PedalMark } from '@shared/score'
+import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta, type Duration, type MidiScoreEvent, type PedalMark, type SequenceAssignment } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import {
   DURATION_UNITS,
@@ -41,6 +41,7 @@ import {
   buildPlaybackSequence,
   buildMeasureTimeline,
   firstRestBeat,
+  activeAssignmentAt,
   type MeasureTimeEntry,
 } from '@shared/musicUtils'
 import { pitchToHz } from '../engine/audioEngine'
@@ -511,7 +512,7 @@ const ARTICULATION_BUTTONS: { art: Articulation; label: string; title: string }[
 ]
 
 interface ScoreCanvasProps {
-  onOpenSequencer?: (partId: string) => void
+  onOpenSequencer?: (partId: string, patternId?: string) => void
 }
 
 export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Element {
@@ -548,6 +549,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
   const [transposeAmt, setTransposeAmt]     = useState(1)
   const [menuDragOffset, setMenuDragOffset] = useState({ x: 0, y: 0 })
   const [isDraggingMenu, setIsDraggingMenu] = useState(false)
+  const [seqAssignMenu, setSeqAssignMenu]   = useState<{ x: number; y: number; partId: string; measureIndex: number } | null>(null)
   const menuDragRef = useRef<{ startX: number; startY: number; startOffX: number; startOffY: number } | null>(null)
 
   const {
@@ -1808,7 +1810,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
       // During playback: allow escape/select-mode switch and navigation; block mutations
       if (isPlaying) {
-        if (e.key === 'Escape') { setInputMode('select'); setSlurPendingId(null); setSelectedMeasure(null); setBarSelection(null); setSelectionMenuPos(null); return }
+        if (e.key === 'Escape') { setInputMode('select'); setSlurPendingId(null); setSelectedMeasure(null); setBarSelection(null); setSelectionMenuPos(null); setSeqAssignMenu(null); return }
         if (!mod && (e.key === 's' || e.key === 'S')) { setInputMode('select'); return }
         if (!mod && (e.key === 'k' || e.key === 'K')) { toggleKeyboard(); return }
         if (!mod && inputMode === 'select' && selectedNoteIds.length > 0) {
@@ -2726,10 +2728,10 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       const clickedMeasureIndex = layout.measureIndex
       const clickedPartId = layout.partId
 
-      // Sequencer part: open sequence editor instead of bar selection
+      // Sequencer part: show assignment dropdown instead of bar selection
       const clickedPart = score.parts.find(p => p.id === clickedPartId)
       if (clickedPart?.inputMode === 'sequencer' && inputMode === 'select') {
-        onOpenSequencer?.(clickedPartId)
+        setSeqAssignMenu({ x: event.clientX, y: event.clientY, partId: clickedPartId, measureIndex: clickedMeasureIndex })
         return
       }
 
@@ -3465,6 +3467,111 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           {resizeError}
         </div>
       )}
+
+      {/* Sequencer bar assignment dropdown */}
+      {seqAssignMenu && (() => {
+        const menuPart     = score.parts.find(p => p.id === seqAssignMenu.partId)
+        const patterns     = menuPart?.sequencePatterns ?? []
+        const assignments  = (menuPart?.sequenceAssignments ?? []) as SequenceAssignment[]
+        const mIdx         = seqAssignMenu.measureIndex
+        const activeAssign = activeAssignmentAt(assignments, mIdx)
+        const exactAssign  = assignments.find(a => a.startMeasureIndex === mIdx)
+
+        const handleAssign = (patternId: string | null) => {
+          if (!menuPart) return
+          const existing = assignments.find(a => a.startMeasureIndex === mIdx)
+          if (patternId === null && !existing) {
+            // "empty" with no existing assignment — create an explicit silence
+          }
+          dispatch({
+            type: 'SET_SEQUENCE_ASSIGNMENT',
+            partId: seqAssignMenu.partId,
+            assignment: { id: existing?.id ?? uuid(), patternId, startMeasureIndex: mIdx },
+          })
+          setSeqAssignMenu(null)
+        }
+
+        const handleRemove = () => {
+          if (!exactAssign) return
+          dispatch({ type: 'DELETE_SEQUENCE_ASSIGNMENT', partId: seqAssignMenu.partId, assignmentId: exactAssign.id })
+          setSeqAssignMenu(null)
+        }
+
+        const handleOpenEditor = (patternId?: string) => {
+          setSeqAssignMenu(null)
+          onOpenSequencer?.(seqAssignMenu.partId, patternId)
+        }
+
+        return (
+          <div
+            style={{
+              position: 'fixed', left: seqAssignMenu.x, top: seqAssignMenu.y,
+              background: '#252526', border: '1px solid #444', borderRadius: 6,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.4)', zIndex: 3000,
+              minWidth: 200, fontSize: 12, color: '#ccc', overflow: 'hidden',
+            }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            {/* Open editor */}
+            <div
+              onClick={() => handleOpenEditor(activeAssign?.patternId ?? undefined)}
+              style={seqMenuItemStyle}
+            >
+              Edit patterns…
+            </div>
+
+            <div style={{ borderTop: '1px solid #333', margin: '2px 0' }} />
+
+            {/* Empty option */}
+            <div
+              onClick={() => handleAssign(null)}
+              style={{
+                ...seqMenuItemStyle,
+                color: activeAssign?.patternId === null ? '#3b9ddd' : '#ccc',
+              }}
+            >
+              {activeAssign?.patternId === null ? '✓ ' : ''}(empty)
+            </div>
+
+            {/* Pattern list */}
+            {patterns.map((p, i) => {
+              const isActive = activeAssign?.patternId === p.id
+              const label    = p.label ?? `Sequence ${i + 1}`
+              return (
+                <div
+                  key={p.id}
+                  onClick={() => handleAssign(p.id)}
+                  style={{ ...seqMenuItemStyle, color: isActive ? '#3b9ddd' : '#ccc' }}
+                >
+                  {isActive ? '✓ ' : ''}{label}
+                </div>
+              )
+            })}
+
+            {/* Remove assignment at this bar (only if one is set exactly here) */}
+            {exactAssign && (
+              <>
+                <div style={{ borderTop: '1px solid #333', margin: '2px 0' }} />
+                <div onClick={handleRemove} style={{ ...seqMenuItemStyle, color: '#e06c75' }}>
+                  Clear assignment here
+                </div>
+              </>
+            )}
+
+            <div style={{ borderTop: '1px solid #333', margin: '2px 0' }} />
+            <div onClick={() => setSeqAssignMenu(null)} style={{ ...seqMenuItemStyle, color: '#888' }}>
+              Cancel
+            </div>
+          </div>
+        )
+      })()}
     </>
   )
 }
+
+const seqMenuItemStyle: React.CSSProperties = {
+  padding: '6px 14px', cursor: 'pointer', userSelect: 'none',
+  whiteSpace: 'nowrap',
+}
+
+// Hover is handled inline via onMouseEnter/Leave on each item if needed.

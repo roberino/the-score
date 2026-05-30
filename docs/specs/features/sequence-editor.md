@@ -47,7 +47,17 @@ Each bar of a sequencer part displays a **mini step-grid thumbnail** showing the
 - Bars covered by a repetition of the same pattern show an identical thumbnail.
 - Bars with no sequence attached show blank (empty band body).
 
-### 2.3 Note input is blocked
+### 2.3 Sequence region label
+
+When a `SequenceRegion` has a `label` set, that label is drawn above the track band at the first bar of the region:
+
+- Font: **bold 10 px** sans-serif, colour `#3b9ddd` (the accent blue used for grid cells).
+- Positioned just above the top edge of the track band, left-aligned with the note area.
+- Only shown on the first bar of the region — not repeated on subsequent bars covered by the same region.
+- Regions with no explicit label default to **"Sequence N"** where N is the 1-based position of the region in the part's sorted region list.
+- Bars with no region attached show nothing.
+
+### 2.4 Note input is blocked
 
 Sequencer-mode staves do not accept notation editing from the score view:
 
@@ -111,7 +121,7 @@ All active cells default to velocity **127**. Velocity editing is deferred to a 
 
 ## 4. Sequence Data Model
 
-### 4.1 New types
+### 4.1 Types
 
 ```typescript
 interface SequenceCell {
@@ -121,86 +131,103 @@ interface SequenceCell {
 
 interface SequencePattern {
   id: string
-  // Outer index = step column (0 to stepsPerBar-1)
-  // Inner array = active cells in that column (empty = no notes on this step)
-  steps: SequenceCell[][]
-  stepsPerBar: number   // snapshot of step count when pattern was created
+  steps: SequenceCell[][]   // outer = step column; inner = active cells in that column
+  stepsPerBar: number
+  label?: string            // user-visible name, e.g. "Verse", "Chorus"
 }
 
-interface SequenceRegion {
+// Pins a pattern (or silence) to a bar. The pattern plays from startMeasureIndex
+// until the next assignment's startMeasureIndex (exclusive).
+interface SequenceAssignment {
   id: string
-  patternId: string
+  patternId: string | null  // null = explicit silence from this bar
   startMeasureIndex: number
-  repetitions: number | null  // null = repeat to end of score
 }
 ```
 
-### 4.2 Part schema additions
+### 4.2 Part schema
 
 ```typescript
 interface Part {
   // ... existing fields
-  inputMode?: 'score' | 'sequencer'   // defaults to 'score' when absent
+  inputMode?: 'score' | 'sequencer'       // defaults to 'score' when absent
   sequencePatterns?: SequencePattern[]
-  sequenceRegions?: SequenceRegion[]
+  sequenceAssignments?: SequenceAssignment[]
 }
 ```
 
-### 4.3 Region semantics
+### 4.3 Assignment semantics
 
-- Regions are non-overlapping and sorted by `startMeasureIndex`.
-- A region covers bars `[startMeasureIndex, startMeasureIndex + (repetitions ?? Infinity))`.
-- When a new sequence is created at bar N, any existing region whose coverage includes bar N is **truncated** to end at bar N−1 (its `repetitions` is reduced accordingly).
-- A region with `repetitions: null` extends to the end of the score or until the next region starts, whichever comes first.
-
----
-
-## 5. Repetitions Control
-
-The header bar of the Sequence Editor shows a **Reps** control:
-
-- Displays `∞` (infinite) or a number (1–999).
-- Clicking opens a small dropdown: `[∞] [1] [2] [4] [8] [Custom…]`.
-- Changing repetitions updates the `SequenceRegion` and may truncate/restore the following region accordingly.
+- Assignments are sorted by `startMeasureIndex` and are non-overlapping per bar.
+- The **active assignment** at measure N is the one with the largest `startMeasureIndex ≤ N`.
+- A pattern plays from its assignment's `startMeasureIndex` until the next assignment starts.
+- `patternId: null` means explicit silence from that bar onwards (until the next assignment).
+- The same pattern can be assigned at multiple bars (e.g. bars 0 and 6 both use "Verse").
+- At most one assignment exists per bar — assigning a pattern to bar N replaces any existing assignment at that bar.
 
 ---
 
-## 6. Sequence Navigation
+## 5. Score View — Bar Assignment Dropdown
 
-From the editor header, the user can navigate between sequences defined for the current part:
+Clicking a sequencer-mode bar in **Select** mode opens a small dropdown at the click position:
 
-- `‹ Prev` / `Next ›` buttons move between `SequenceRegion` entries for this part.
-- Each region can be given an optional label (e.g. "Verse", "Chorus"). Displayed in the header; editable by clicking it.
+- Lists all patterns defined for this part, each showing its label (or "Sequence N" default).
+- The currently active pattern at that bar is marked with a checkmark.
+- **(empty)** is always available — assigns `patternId: null`, producing silence from that bar.
+- **Edit patterns…** opens the Sequence Editor (§6).
+- **Clear assignment here** appears only when an assignment exists exactly at the clicked bar (not just inherited); removing it reverts the bar to whatever assignment precedes it.
+
+---
+
+## 6. Sequence Editor View
+
+### 6.1 Activation
+
+Opened via "Edit patterns…" in the bar dropdown, or directly via the Parts Panel. The editor navigates between **patterns** (not assignments).
+
+### 6.2 Layout
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ← Back to Score   [Part name]   [Pattern label]   ‹ Prev  Next › + New Sequence │
+├──────────┬──────────────────────────────────────────────────────┤
+│          │  1   2   3   4   5   6   7   8  …                    │
+│  C#5 ──  │  ■   ·   ·   ·   ■   ·   ·   ·  …                   │
+│  C5  ──  │  ·   ·   ·   ·   ·   ·   ·   ·  …                   │
+│ (labels) │                                                       │
+└──────────┴──────────────────────────────────────────────────────┘
+```
+
+The Reps control has been removed. Navigation (`‹ Prev` / `Next ›`) moves between patterns, not assignments.
+
+### 6.3 Pattern label
+
+The label is a property of the `SequencePattern`. Clicking it in the header makes it editable inline. Clearing the label reverts to the "Sequence N" default.
+
+### 6.4 Keyboard / pitch labels — unchanged from original §3.3
+
+### 6.5 Grid — unchanged from original §3.4
 
 ---
 
 ## 7. Playback Integration
 
-Sequence patterns are resolved to note events at playback time in `buildFlatSchedule` / the audio engine:
-
-1. For each sequencer-mode part, iterate over `sequenceRegions`.
-2. For each measure covered by a region, read the `SequencePattern.steps`.
-3. For each column `c` in `steps`, compute `startBeat = c / stepsPerBar` (in beats within the measure).
-4. For each active cell in that column, emit a note event with the cell's pitch, velocity, and a duration of one step (1/stepsPerBar of a bar).
-5. These synthetic note events enter the same scheduling pipeline as regular note events.
-
-No changes are required to the MIDI output engine — synthetic events are indistinguishable from regular ones by the time they reach the scheduler.
+For each measure in the playback sequence, find the active assignment (largest `startMeasureIndex ≤ currentMeasure`). If it references a pattern, emit that pattern's step events for the measure. `patternId: null` produces silence.
 
 ---
 
 ## 8. Commands
 
 ```typescript
-| { type: 'SET_PART_INPUT_MODE';    partId: string; mode: 'score' | 'sequencer' }
-| { type: 'UPSERT_SEQUENCE_PATTERN'; partId: string; pattern: SequencePattern }
-| { type: 'UPSERT_SEQUENCE_REGION';  partId: string; region: SequenceRegion }
-| { type: 'DELETE_SEQUENCE_REGION';  partId: string; regionId: string }
-| { type: 'SET_SEQUENCE_CELL';       partId: string; patternId: string; step: number; pitch: number; on: boolean; velocity?: number }
+| { type: 'SET_PART_INPUT_MODE';        partId: string; mode: 'score' | 'sequencer' }
+| { type: 'UPSERT_SEQUENCE_PATTERN';    partId: string; pattern: SequencePattern }
+| { type: 'DELETE_SEQUENCE_PATTERN';    partId: string; patternId: string }
+| { type: 'SET_SEQUENCE_ASSIGNMENT';    partId: string; assignment: SequenceAssignment }
+| { type: 'DELETE_SEQUENCE_ASSIGNMENT'; partId: string; assignmentId: string }
+| { type: 'SET_SEQUENCE_CELL';          partId: string; patternId: string; step: number; pitch: number; on: boolean; velocity?: number }
 ```
 
 `SET_SEQUENCE_CELL` is the hot-path command for toggling grid cells and must be dispatched without triggering a full undo snapshot per cell (drag-to-fill accumulates a single undo step, flushed on mouseup).
-
----
 
 ## 9. Deferred / Out of Scope
 

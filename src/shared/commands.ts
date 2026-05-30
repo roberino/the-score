@@ -12,7 +12,7 @@
 import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
-import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, PedalMark, SequencePattern, SequenceRegion } from './score'
+import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, PedalMark, SequencePattern, SequenceAssignment } from './score'
 import { measureCapacityUnits, eventDurationUnits, dottedUnits, DURATION_UNITS, resolveClef, resolveTimeSig, pitchToStep, stepToPitch, shiftPitchBySemitones, fillWithRests } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
@@ -72,11 +72,12 @@ export type Command =
   | { type: 'REMOVE_PEDAL_MARK'; partId: string; staffId: string; measureId: string; markId: string }
   | { type: 'REMOVE_CHORD_PITCH'; partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; pitchIndex: number }
   | { type: 'CLEAR_MEASURES'; targets: { partId: string; staffId: string; measureId: string }[] }
-  | { type: 'SET_PART_INPUT_MODE';    partId: string; mode: 'score' | 'sequencer' }
-  | { type: 'UPSERT_SEQUENCE_PATTERN'; partId: string; pattern: SequencePattern }
-  | { type: 'UPSERT_SEQUENCE_REGION';  partId: string; region: SequenceRegion }
-  | { type: 'DELETE_SEQUENCE_REGION';  partId: string; regionId: string }
-  | { type: 'SET_SEQUENCE_CELL';       partId: string; patternId: string; step: number; pitch: number; on: boolean; velocity?: number }
+  | { type: 'SET_PART_INPUT_MODE';        partId: string; mode: 'score' | 'sequencer' }
+  | { type: 'UPSERT_SEQUENCE_PATTERN';    partId: string; pattern: SequencePattern }
+  | { type: 'DELETE_SEQUENCE_PATTERN';    partId: string; patternId: string }
+  | { type: 'SET_SEQUENCE_ASSIGNMENT';    partId: string; assignment: SequenceAssignment }
+  | { type: 'DELETE_SEQUENCE_ASSIGNMENT'; partId: string; assignmentId: string }
+  | { type: 'SET_SEQUENCE_CELL';          partId: string; patternId: string; step: number; pitch: number; on: boolean; velocity?: number }
 
 // ── Spill-over helper ────────────────────────────────────────────────────────
 // Moves events that overflow each measure's capacity forward into the next
@@ -988,34 +989,39 @@ export function applyCommand(score: Score, command: Command): Score {
         break
       }
 
-      case 'UPSERT_SEQUENCE_REGION': {
+      case 'DELETE_SEQUENCE_PATTERN': {
         const part = (draft.parts as any[]).find((p: any) => p.id === command.partId)
         if (!part) break
-        if (!part.sequenceRegions) part.sequenceRegions = []
-        const idx = part.sequenceRegions.findIndex((r: any) => r.id === command.region.id)
-        if (idx === -1) {
-          // Truncate any existing region whose range covers the new region's start
-          const newStart = command.region.startMeasureIndex
-          for (const existing of part.sequenceRegions) {
-            const reps = existing.repetitions ?? Infinity
-            const end  = existing.startMeasureIndex + reps
-            if (existing.startMeasureIndex < newStart && end > newStart) {
-              existing.repetitions = newStart - existing.startMeasureIndex
-            }
-          }
-          part.sequenceRegions.push(command.region)
-          part.sequenceRegions.sort((a: any, b: any) => a.startMeasureIndex - b.startMeasureIndex)
-        } else {
-          part.sequenceRegions[idx] = command.region
+        if (part.sequencePatterns) {
+          const idx = part.sequencePatterns.findIndex((p: any) => p.id === command.patternId)
+          if (idx !== -1) part.sequencePatterns.splice(idx, 1)
+        }
+        // Remove any assignments referencing this pattern
+        if (part.sequenceAssignments) {
+          part.sequenceAssignments = part.sequenceAssignments.filter((a: any) => a.patternId !== command.patternId)
         }
         break
       }
 
-      case 'DELETE_SEQUENCE_REGION': {
+      case 'SET_SEQUENCE_ASSIGNMENT': {
         const part = (draft.parts as any[]).find((p: any) => p.id === command.partId)
-        if (!part?.sequenceRegions) break
-        const idx = part.sequenceRegions.findIndex((r: any) => r.id === command.regionId)
-        if (idx !== -1) part.sequenceRegions.splice(idx, 1)
+        if (!part) break
+        if (!part.sequenceAssignments) part.sequenceAssignments = []
+        // Replace any existing assignment at the same bar, otherwise insert sorted
+        const existingIdx = part.sequenceAssignments.findIndex((a: any) => a.startMeasureIndex === command.assignment.startMeasureIndex)
+        if (existingIdx !== -1) part.sequenceAssignments[existingIdx] = command.assignment
+        else {
+          part.sequenceAssignments.push(command.assignment)
+          part.sequenceAssignments.sort((a: any, b: any) => a.startMeasureIndex - b.startMeasureIndex)
+        }
+        break
+      }
+
+      case 'DELETE_SEQUENCE_ASSIGNMENT': {
+        const part = (draft.parts as any[]).find((p: any) => p.id === command.partId)
+        if (!part?.sequenceAssignments) break
+        const idx = part.sequenceAssignments.findIndex((a: any) => a.id === command.assignmentId)
+        if (idx !== -1) part.sequenceAssignments.splice(idx, 1)
         break
       }
 

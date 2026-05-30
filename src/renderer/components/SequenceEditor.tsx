@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useAppStore } from '../store/appStore'
 import { v4 as uuid } from 'uuid'
-import type { SequencePattern, SequenceRegion } from '@shared/score'
+import type { SequencePattern } from '@shared/score'
 import { previewNote } from '../engine/notePreview'
 import { midiOutputEngine } from '../engine/midiOutputEngine'
 
@@ -58,10 +58,11 @@ const HEADER_H = 26
 
 export interface SequenceEditorProps {
   partId: string
+  initialPatternId?: string | undefined
   onBack: () => void
 }
 
-export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Element {
+export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEditorProps): JSX.Element {
   const { score, dispatch, dispatchSilent, pushUndoSnapshot, soundOnInput, audioMode } = useAppStore()
   const part = score.parts.find(p => p.id === partId)
 
@@ -77,55 +78,49 @@ export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Ele
     }
   }, [soundOnInput, audioMode, part])
 
-  // Determine if drum part (channel 10 or midiProgram 0 on ch 10)
-  const isDrum = part ? (part.midiChannel === 10) : false
-
-  const regions  = (part?.sequenceRegions ?? []).slice().sort((a, b) => a.startMeasureIndex - b.startMeasureIndex)
+  const isDrum  = part ? (part.midiChannel === 10) : false
   const patterns = part?.sequencePatterns ?? []
 
-  // Current region index (which sequence region we're editing)
-  const [regionIdx, setRegionIdx] = useState<number>(() => {
-    // Start on first region, or -1 if none (will create one)
-    return regions.length > 0 ? 0 : -1
-  })
-
-  // Current region and pattern (may be null if no regions yet)
-  const currentRegion  = regionIdx >= 0 ? regions[regionIdx] : null
-  const currentPattern = currentRegion ? patterns.find(p => p.id === currentRegion.patternId) ?? null : null
-
-  // Compute stepsPerBar from score time signature
   const timeSig     = score.timeSignature
   const stepsPerBar = Math.round((timeSig.numerator / timeSig.denominator) * 16)
+
+  // Current pattern index
+  const [patternIdx, setPatternIdx] = useState<number>(() => {
+    if (initialPatternId) {
+      const idx = patterns.findIndex(p => p.id === initialPatternId)
+      return idx >= 0 ? idx : 0
+    }
+    return patterns.length > 0 ? 0 : -1
+  })
+
+  // Sync patternIdx after initial pattern creation
+  useEffect(() => {
+    const pts = score.parts.find(p => p.id === partId)?.sequencePatterns ?? []
+    if (pts.length > 0 && patternIdx === -1) setPatternIdx(0)
+  }, [score, partId])
+
+  // Create first pattern if none exist
+  useEffect(() => {
+    if (!part || patterns.length > 0) return
+    createNewPattern()
+  }, [partId])
+
+  function createNewPattern(): void {
+    if (!part) return
+    const patternId = uuid()
+    const steps: { pitch: number; velocity: number }[][] = Array.from({ length: stepsPerBar }, () => [])
+    const pattern: SequencePattern = { id: patternId, steps, stepsPerBar }
+    dispatch({ type: 'UPSERT_SEQUENCE_PATTERN', partId, pattern })
+  }
 
   // Editable label
   const [editingLabel, setEditingLabel] = useState(false)
   const [labelDraft, setLabelDraft]     = useState('')
 
-  // Create first region+pattern if no regions exist
-  useEffect(() => {
-    if (!part || regions.length > 0) return
-    createNewRegion(0)
-  }, [partId])
-
-  // Sync regionIdx when regions change (e.g. after initial creation)
-  useEffect(() => {
-    const updatedRegions = (score.parts.find(p => p.id === partId)?.sequenceRegions ?? [])
-      .slice().sort((a, b) => a.startMeasureIndex - b.startMeasureIndex)
-    if (updatedRegions.length > 0 && regionIdx === -1) setRegionIdx(0)
-  }, [score, partId])
-
-  function createNewRegion(startMeasureIndex: number): void {
-    if (!part) return
-    const patternId = uuid()
-    const steps: { pitch: number; velocity: number }[][] = Array.from({ length: stepsPerBar }, () => [])
-    const pattern: SequencePattern = { id: patternId, steps, stepsPerBar }
-    const region: SequenceRegion   = { id: uuid(), patternId, startMeasureIndex, repetitions: null }
-    dispatch({ type: 'UPSERT_SEQUENCE_PATTERN', partId, pattern })
-    dispatch({ type: 'UPSERT_SEQUENCE_REGION',  partId, region })
-  }
-
-  // Drag-to-fill: apply changes silently (no undo snapshot per cell), flush on mouseup
+  // Drag-to-fill
   const dragRef = useRef<{ on: boolean } | null>(null)
+
+  const currentPattern = patternIdx >= 0 ? patterns[patternIdx] ?? null : null
 
   const handleCellMouseDown = useCallback((step: number, pitch: number, currentlyOn: boolean) => {
     if (!currentPattern) return
@@ -148,26 +143,18 @@ export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Ele
     return () => document.removeEventListener('mouseup', up)
   }, [])
 
-  // Reps control
-  const handleSetReps = useCallback((reps: number | null) => {
-    if (!currentRegion) return
-    dispatch({ type: 'UPSERT_SEQUENCE_REGION', partId, region: { ...currentRegion, repetitions: reps } })
-  }, [currentRegion, partId, dispatch])
-
   if (!part) return <div style={{ color: '#d4d4d4', padding: 20 }}>Part not found.</div>
 
   const rows = isDrum ? DRUM_NOTES : buildPianoRows(PIANO_LO, PIANO_HI)
 
-  const effectiveRegion  = currentRegion
-  const effectivePattern = currentPattern
-
   function isCellOn(step: number, pitch: number): boolean {
-    if (!effectivePattern?.steps[step]) return false
-    return effectivePattern.steps[step].some(c => c.pitch === pitch)
+    if (!currentPattern?.steps[step]) return false
+    return currentPattern.steps[step].some(c => c.pitch === pitch)
   }
 
-  const isFirstRegion = regionIdx <= 0
-  const isLastRegion  = regionIdx >= regions.length - 1
+  const isFirstPattern = patternIdx <= 0
+  const isLastPattern  = patternIdx >= patterns.length - 1
+  const defaultLabel   = `Sequence ${patternIdx + 1}`
 
   return (
     <div
@@ -183,10 +170,7 @@ export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Ele
         padding: '8px 14px', borderBottom: '1px solid #333', flexShrink: 0,
         background: '#252526',
       }}>
-        <button
-          onClick={onBack}
-          style={{ ...btnStyle, paddingLeft: 0 }}
-        >
+        <button onClick={onBack} style={{ ...btnStyle, paddingLeft: 0 }}>
           ← Back to Score
         </button>
 
@@ -194,7 +178,7 @@ export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Ele
 
         <span style={{ color: '#555' }}>|</span>
 
-        {/* Sequence label (editable) */}
+        {/* Pattern label (editable) */}
         {editingLabel ? (
           <input
             autoFocus
@@ -202,15 +186,15 @@ export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Ele
             onChange={e => setLabelDraft(e.target.value)}
             onBlur={() => {
               setEditingLabel(false)
-              if (effectiveRegion) {
+              if (currentPattern) {
                 const trimmed = labelDraft.trim()
-                const updated = { ...effectiveRegion }
+                const updated = { ...currentPattern }
                 if (trimmed) updated.label = trimmed
                 else delete (updated as any).label
-                dispatch({ type: 'UPSERT_SEQUENCE_REGION', partId, region: updated })
+                dispatch({ type: 'UPSERT_SEQUENCE_PATTERN', partId, pattern: updated })
               }
             }}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') { setEditingLabel(false) } }}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') setEditingLabel(false) }}
             style={{
               background: '#2d2d2d', border: '1px solid #555', borderRadius: 3,
               color: '#d4d4d4', padding: '2px 6px', fontSize: 12,
@@ -218,89 +202,58 @@ export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Ele
           />
         ) : (
           <span
-            onClick={() => { setEditingLabel(true); setLabelDraft(effectiveRegion?.label ?? '') }}
+            onClick={() => { setEditingLabel(true); setLabelDraft(currentPattern?.label ?? '') }}
             style={{ fontSize: 12, color: '#aaa', cursor: 'pointer', borderBottom: '1px dashed #555', paddingBottom: 1 }}
             title="Click to rename"
           >
-            {effectiveRegion?.label || `Sequence ${regionIdx + 1}`}
+            {currentPattern?.label || defaultLabel}
           </span>
         )}
 
         <span style={{ flex: 1 }} />
 
-        {/* Region navigation */}
+        {/* Pattern navigation */}
         <button
-          disabled={isFirstRegion}
-          onClick={() => setRegionIdx(i => i - 1)}
-          style={isFirstRegion ? disabledBtnStyle : btnStyle}
+          disabled={isFirstPattern}
+          onClick={() => setPatternIdx(i => i - 1)}
+          style={isFirstPattern ? disabledBtnStyle : btnStyle}
         >‹ Prev</button>
 
         <button
-          disabled={isLastRegion}
-          onClick={() => setRegionIdx(i => i + 1)}
-          style={isLastRegion ? disabledBtnStyle : btnStyle}
+          disabled={isLastPattern}
+          onClick={() => setPatternIdx(i => i + 1)}
+          style={isLastPattern ? disabledBtnStyle : btnStyle}
         >Next ›</button>
 
         <button
           onClick={() => {
-            const nextStart = (regions[regions.length - 1]?.startMeasureIndex ?? -1) + 1
-            createNewRegion(nextStart)
-            setRegionIdx(regions.length)
+            createNewPattern()
+            setPatternIdx(patterns.length)
           }}
           style={btnStyle}
         >+ New Sequence</button>
-
-        {/* Reps */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 12 }}>
-          <span style={{ fontSize: 11, color: '#888' }}>Reps:</span>
-          {[null, 1, 2, 4, 8].map(r => (
-            <button
-              key={r ?? 'inf'}
-              onClick={() => handleSetReps(r)}
-              style={{
-                ...btnStyle,
-                padding: '2px 7px',
-                background: (effectiveRegion?.repetitions ?? null) === r ? '#0e639c' : '#2d2d2d',
-                borderRadius: 3,
-                border: '1px solid #555',
-              }}
-            >
-              {r === null ? '∞' : r}
-            </button>
-          ))}
-        </div>
       </div>
 
       {/* Grid area */}
       <div style={{ flex: 1, overflow: 'auto', display: 'flex' }}>
         {/* Left: label column */}
         <div style={{ flexShrink: 0, borderRight: '1px solid #333', background: '#1a1a1a' }}>
-          {/* Corner spacer above column headers */}
           <div style={{ height: HEADER_H, width: LABEL_W, borderBottom: '1px solid #333' }} />
-
-          {/* Row labels */}
           {rows.map(pitch => {
-            const label = isDrum ? GM_DRUM_LABELS[pitch] : midiToNoteName(pitch)
+            const label   = isDrum ? GM_DRUM_LABELS[pitch] : midiToNoteName(pitch)
             const isBlack = !isDrum && IS_BLACK[pitch % 12]
             const isC     = !isDrum && pitch % 12 === 0
             return (
               <div
                 key={pitch}
                 style={{
-                  height: CELL_H,
-                  width: LABEL_W,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'flex-end',
-                  paddingRight: 8,
-                  fontSize: 10,
+                  height: CELL_H, width: LABEL_W,
+                  display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+                  paddingRight: 8, fontSize: 10,
                   color: isC ? '#fff' : isBlack ? '#aaa' : '#888',
                   background: isC ? '#2a2a2a' : isBlack ? '#222' : '#1a1a1a',
-                  borderBottom: '1px solid #2a2a2a',
-                  boxSizing: 'border-box',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
+                  borderBottom: '1px solid #2a2a2a', boxSizing: 'border-box',
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                 }}
               >
                 {label}
@@ -311,28 +264,23 @@ export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Ele
 
         {/* Right: grid */}
         <div style={{ flex: 1, overflow: 'auto' }}>
-          {effectivePattern ? (
+          {currentPattern ? (
             <div style={{ display: 'inline-block', minWidth: '100%' }}>
               {/* Column headers */}
               <div style={{ display: 'flex', height: HEADER_H, borderBottom: '1px solid #333', background: '#1a1a1a', position: 'sticky', top: 0, zIndex: 2 }}>
                 {Array.from({ length: stepsPerBar }, (_, step) => {
-                  const beat = Math.floor(step / 4) + 1
-                  const sub  = step % 4
+                  const beat       = Math.floor(step / 4) + 1
+                  const sub        = step % 4
                   const isDownbeat = sub === 0
                   return (
                     <div
                       key={step}
                       style={{
-                        width: CELL_W,
-                        flexShrink: 0,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 10,
-                        color: isDownbeat ? '#ccc' : '#555',
+                        width: CELL_W, flexShrink: 0,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 10, color: isDownbeat ? '#ccc' : '#555',
                         borderRight: `1px solid ${isDownbeat ? '#444' : '#2a2a2a'}`,
-                        boxSizing: 'border-box',
-                        fontWeight: isDownbeat ? 600 : 400,
+                        boxSizing: 'border-box', fontWeight: isDownbeat ? 600 : 400,
                       }}
                     >
                       {isDownbeat ? beat : sub === 2 ? '+' : ''}
@@ -345,18 +293,15 @@ export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Ele
               {rows.map(pitch => (
                 <div key={pitch} style={{ display: 'flex', height: CELL_H }}>
                   {Array.from({ length: stepsPerBar }, (_, step) => {
-                    const on = isCellOn(step, pitch)
-                    const beat = step % 4
-                    const isDownbeat = beat === 0
+                    const on         = isCellOn(step, pitch)
+                    const isDownbeat = step % 4 === 0
                     return (
                       <div
                         key={step}
                         onMouseDown={() => handleCellMouseDown(step, pitch, on)}
                         onMouseEnter={() => handleCellMouseEnter(step, pitch)}
                         style={{
-                          width: CELL_W,
-                          flexShrink: 0,
-                          boxSizing: 'border-box',
+                          width: CELL_W, flexShrink: 0, boxSizing: 'border-box',
                           background: on ? '#3b9ddd' : 'rgba(255,255,255,0.03)',
                           borderRight: `1px solid ${isDownbeat ? '#3a3a3a' : '#2a2a2a'}`,
                           borderBottom: '1px solid #2a2a2a',
@@ -371,7 +316,7 @@ export function SequenceEditor({ partId, onBack }: SequenceEditorProps): JSX.Ele
             </div>
           ) : (
             <div style={{ padding: 40, color: '#555', fontSize: 13 }}>
-              No sequence pattern. Click "+ New Sequence" to create one.
+              No sequences yet. Click "+ New Sequence" to create one.
             </div>
           )}
         </div>
