@@ -2208,7 +2208,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     }
 
     // ── Lyric text click: select or lyric mode → enter lyric edit for that note ──
-    if (inputMode === 'select' || inputMode === 'lyric') {
+    if (inputMode === 'lyric') {
       for (const l of layouts) {
         const lyricY = l.staveTopY + LYRIC_Y_OFFSET
         if (Math.abs(canvasY - lyricY) > 14) continue
