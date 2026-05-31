@@ -3482,21 +3482,14 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
         const handleAssign = (patternId: string | null) => {
           if (!menuPart) return
+          const alreadyEmpty = !activeAssign || activeAssign.patternId === null
+          if (patternId === null && alreadyEmpty) { setSeqAssignMenu(null); return }
           const existing = assignments.find(a => a.startMeasureIndex === mIdx)
-          if (patternId === null && !existing) {
-            // "empty" with no existing assignment — create an explicit silence
-          }
           dispatch({
             type: 'SET_SEQUENCE_ASSIGNMENT',
             partId: seqAssignMenu.partId,
             assignment: { id: existing?.id ?? uuid(), patternId, startMeasureIndex: mIdx },
           })
-          setSeqAssignMenu(null)
-        }
-
-        const handleRemove = () => {
-          if (!exactAssign) return
-          dispatch({ type: 'DELETE_SEQUENCE_ASSIGNMENT', partId: seqAssignMenu.partId, assignmentId: exactAssign.id })
           setSeqAssignMenu(null)
         }
 
@@ -3540,10 +3533,10 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
               onClick={() => handleAssign(null)}
               style={{
                 ...seqMenuItemStyle,
-                color: activeAssign?.patternId === null ? '#3b9ddd' : '#ccc',
+                color: (!activeAssign || activeAssign.patternId === null) ? '#3b9ddd' : '#ccc',
               }}
             >
-              {activeAssign?.patternId === null ? '✓ ' : ''}(empty)
+              {(!activeAssign || activeAssign.patternId === null) ? '✓ ' : ''}(empty)
             </div>
 
             {/* Pattern list */}
@@ -3561,15 +3554,6 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
               )
             })}
 
-            {/* Remove assignment at this bar (only if one is set exactly here) */}
-            {exactAssign && (
-              <>
-                <div style={{ borderTop: '1px solid #333', margin: '2px 0' }} />
-                <div onClick={handleRemove} style={{ ...seqMenuItemStyle, color: '#e06c75' }}>
-                  Clear assignment here
-                </div>
-              </>
-            )}
 
           </div>
         )
