@@ -1010,7 +1010,10 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       soundOnInput, audioMode])
 
   // Explicit-octave variant used by virtual keyboard and MIDI input
-  const enterNoteAtPitch = useCallback((noteName: NoteName, octave: number, accidental?: Accidental, skipPreview = false) => {
+  // forceBuiltinPreview: when true, use internal audio for the preview note even in
+  // midi-out mode. Set by the MIDI chord buffer path so hardware MIDI THRU chains don't
+  // loop the preview note back as additional input.
+  const enterNoteAtPitch = useCallback((noteName: NoteName, octave: number, accidental?: Accidental, forceBuiltinPreview = false) => {
     if (!cursorMeasureId) {
       setInputMode('note')
       return
@@ -1038,14 +1041,14 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
             return
           }
           dispatchBatch(result.cmds)
-          if (soundOnInput && !skipPreview) {
+          if (soundOnInput) {
             const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
             const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
             const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
             const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
             const partIdx = score.parts.indexOf(part)
             const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, forceBuiltinPreview ? 'builtin' : audioMode, ch, Math.max(0, midi - 1))
           }
           setLastEnteredPitch(noteWithDot.pitch)
           setSelectedMeasure(null)
@@ -1096,7 +1099,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
             return
           }
           dispatchBatch(result.cmds)
-          if (soundOnInput && !skipPreview) {
+          if (soundOnInput) {
             const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
             const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
             const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
@@ -1106,7 +1109,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
             const previewPitch = newEvent.type === 'chord'
               ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
               : (newEvent as Note).pitch
-            triggerInputPreview(previewPitch.noteName, previewPitch.octave, previewPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+            triggerInputPreview(previewPitch.noteName, previewPitch.octave, previewPitch.accidental, volDb, midi === 45, part.transposeSemitones, forceBuiltinPreview ? 'builtin' : audioMode, ch, Math.max(0, midi - 1))
           }
           const lastPitch = newEvent.type === 'chord'
             ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
@@ -1149,14 +1152,14 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         } else {
           dispatch(addNoteCmd)
         }
-        if (soundOnInput && !skipPreview) {
+        if (soundOnInput) {
           const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
           const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
           const partIdx = score.parts.indexOf(part)
           const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, forceBuiltinPreview ? 'builtin' : audioMode, ch, Math.max(0, midi - 1))
         }
         setLastEnteredPitch(noteWithDot.pitch)
         setSelectedMeasure(null)
@@ -1177,7 +1180,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       soundOnInput, audioMode])
 
   // Multi-pitch variant for chord entry from MIDI
-  const enterChordAtPitch = useCallback((inputs: import('../services/midiService').NoteInput[]) => {
+  const enterChordAtPitch = useCallback((inputs: import('../services/midiService').NoteInput[], forceBuiltinPreview = false) => {
     if (!cursorMeasureId) {
       setInputMode('note')
       return
@@ -1207,7 +1210,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           voiceId:   voice.id,
           event:     chord,
         })
-        if (soundOnInput && audioMode !== 'midi-out') {
+        if (soundOnInput) {
           const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
@@ -1215,7 +1218,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           const partIdx = score.parts.indexOf(part)
           const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
           const top = pitches[pitches.length - 1]
-          triggerInputPreview(top.noteName, top.octave, top.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+          triggerInputPreview(top.noteName, top.octave, top.accidental, volDb, midi === 45, part.transposeSemitones, forceBuiltinPreview ? 'builtin' : audioMode, ch, Math.max(0, midi - 1))
         }
         setLastEnteredPitch(pitches[pitches.length - 1])
         setSelectedMeasure(null)
@@ -1258,14 +1261,13 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       chordTimerRef.current = null
       const buf = chordBufRef.current
       chordBufRef.current = []
-      // In midi-out mode the external device sounds the note itself; sending
-      // a MIDI preview would create feedback loops on hardware MIDI THRU chains.
-      // In builtin mode the app is the only audio source, so preview must play.
-      const skipMidiPreview = audioMode === 'midi-out'
+      // In midi-out mode, force internal audio for the preview so hardware MIDI THRU
+      // chains don't loop the preview note back as additional input.
+      const forceBuiltinPreview = audioMode === 'midi-out'
       if (buf.length === 1) {
-        enterNoteRef.current(buf[0].noteName, buf[0].octave, buf[0].accidental as Accidental | undefined, skipMidiPreview)
+        enterNoteRef.current(buf[0].noteName, buf[0].octave, buf[0].accidental as Accidental | undefined, forceBuiltinPreview)
       } else if (buf.length > 1) {
-        enterChordRef.current(buf)
+        enterChordRef.current(buf, forceBuiltinPreview)
       }
     }, CHORD_WINDOW_MS)
   }, [inputMode, setInputMode, audioMode])
