@@ -2243,6 +2243,15 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       return
     }
 
+    // Sequencer parts: always open the assignment menu regardless of input mode
+    {
+      const clickedPart = score.parts.find(p => p.id === layout.partId)
+      if (clickedPart?.inputMode === 'sequencer') {
+        setSeqAssignMenu({ x: event.clientX, y: event.clientY, partId: layout.partId, measureIndex: layout.measureIndex })
+        return
+      }
+    }
+
     if (inputMode === 'note') {
       if (isPlaying) return
       const part    = score.parts.find(p => p.id === layout.partId)
@@ -2737,13 +2746,6 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
       const clickedMeasureIndex = layout.measureIndex
       const clickedPartId = layout.partId
-
-      // Sequencer part: show assignment dropdown instead of bar selection
-      const clickedPart = score.parts.find(p => p.id === clickedPartId)
-      if (clickedPart?.inputMode === 'sequencer' && inputMode === 'select') {
-        setSeqAssignMenu({ x: event.clientX, y: event.clientY, partId: clickedPartId, measureIndex: clickedMeasureIndex })
-        return
-      }
 
       if (barSelection) {
         const inRange = clickedMeasureIndex >= barSelection.startMeasureIndex &&
