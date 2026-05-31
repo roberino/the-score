@@ -25,9 +25,9 @@ import {
   type RenderContext
 } from 'vexflow'
 
-import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, SequencePattern, TabConfig } from '@shared/score'
+import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Accidental, NoteName, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, SequencePattern, TabConfig } from '@shared/score'
 import { pitchToMidi, pitchToTabPosition, chordToTabPositions } from '@shared/tabUtils'
-import { resolveTimeSig, timeSigsEqual, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo, eventDurationUnits, activeAssignmentAt } from '@shared/musicUtils'
+import { resolveTimeSig, timeSigsEqual, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo, eventDurationUnits, activeAssignmentAt, keyAccidental } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
 
@@ -75,6 +75,111 @@ const CLEF_REST_KEY: Record<string, string> = {
   percussion: 'b/4',  // treble fallback for unpitched percussion
 }
 
+// ── Accidental display computation ────────────────────────────────────────────
+// Determines which accidental symbol to display for each note/chord pitch in a
+// measure, applying three spec rules:
+//   1. Carry-forward: an accidental is active for all subsequent notes of the
+//      same pitch and octave until the barline; redundant symbols are suppressed.
+//   2. Restoration: when a note returns to the key-signature value after an
+//      in-measure override, the key-sig accidental (or ♮) is shown explicitly.
+//   3. Tied continuation: tieEnd notes never display their accidental symbol, but
+//      their pitch is pre-seeded into the carry state so subsequent notes see it.
+// Note: accidentals are computed independently per voice for simplicity. Cross-
+// voice carry-forward is deferred.
+
+type CarryAcc = 'sharp' | 'flat' | 'natural' | 'doubleSharp' | 'doubleFlat' | null
+
+// Normalize for comparison: 'natural' and null are both "no chromatic alteration".
+const normAcc = (a: CarryAcc): CarryAcc => (a === 'natural' ? null : a)
+
+export function accToVex(acc: 'sharp' | 'flat' | 'natural' | 'doubleSharp' | 'doubleFlat'): string {
+  switch (acc) {
+    case 'sharp':       return '#'
+    case 'flat':        return 'b'
+    case 'natural':     return 'n'
+    case 'doubleSharp': return '##'
+    case 'doubleFlat':  return 'bb'
+  }
+}
+
+// Returns Map<eventId, displayAccidentals[]> where displayAccidentals[i] is the
+// accidental symbol to render for pitch i (null = render no symbol).
+function computeDisplayAccidentals(
+  events: readonly NoteEvent[],
+  writtenKeyFifths: number,
+): Map<string, Accidental[]> {
+  // carry[`${noteName}${octave}`] = in-measure override currently active
+  // Missing entry = key-signature value is in effect
+  const carry = new Map<string, CarryAcc>()
+  const result = new Map<string, Accidental[]>()
+
+  // Pre-seed carry from tieEnd notes: pitch is active but not displayed.
+  for (const event of events) {
+    if (event.type !== 'note') continue
+    const note = event as Note
+    if (!note.tieEnd || note.pitch.accidental === null) continue
+    const keySigAcc = keyAccidental(note.pitch.noteName as NoteName, writtenKeyFifths)
+    if (normAcc(note.pitch.accidental) !== normAcc(keySigAcc)) {
+      carry.set(`${note.pitch.noteName}${note.pitch.octave}`, note.pitch.accidental)
+    }
+  }
+
+  for (const event of events) {
+    type P = { noteName: string; octave: number; accidental: Accidental; tieEnd: boolean }
+    let pitches: P[]
+    if (event.type === 'note') {
+      const n = event as Note
+      pitches = [{ noteName: n.pitch.noteName, octave: n.pitch.octave, accidental: n.pitch.accidental, tieEnd: n.tieEnd }]
+    } else if (event.type === 'chord') {
+      const c = event as Chord
+      pitches = c.pitches.map(p => ({ noteName: p.noteName, octave: p.octave, accidental: p.accidental, tieEnd: false }))
+    } else {
+      continue
+    }
+
+    const displayList: Accidental[] = []
+
+    for (const { noteName, octave, accidental: storedAcc, tieEnd } of pitches) {
+      const k = `${noteName}${octave}`
+      const keySigAcc = keyAccidental(noteName as NoteName, writtenKeyFifths)
+      const carryAcc: CarryAcc = carry.has(k) ? carry.get(k)! : keySigAcc
+
+      if (tieEnd) {
+        displayList.push(null)  // never display on tie continuation
+        continue
+      }
+
+      // What we want: null stored → follow key sig; otherwise the explicit accidental.
+      const intended: CarryAcc = storedAcc === null ? keySigAcc : storedAcc
+
+      let display: Accidental
+      if (normAcc(carryAcc) === normAcc(intended)) {
+        display = null  // reader already expects this pitch; no symbol needed
+      } else if (normAcc(intended) === normAcc(keySigAcc)) {
+        // Returning to key-signature pitch after an in-measure override.
+        // Show the key-sig accidental (e.g. '#' in D major) or ♮ if key is natural.
+        display = keySigAcc ?? 'natural'
+      } else {
+        // New explicit accidental.
+        display = intended === null ? 'natural' : intended
+      }
+
+      displayList.push(display)
+
+      // Update carry for subsequent notes in this measure.
+      if (normAcc(intended) === normAcc(keySigAcc)) {
+        carry.delete(k)
+      } else {
+        carry.set(k, intended)
+      }
+    }
+
+    result.set(event.id, displayList)
+  }
+
+  return result
+}
+
 // ── Convert a NoteEvent to a VexFlow StaveNote ────────────────────────────────
 
 const ARTICULATION_CODE: Partial<Record<Articulation, string>> = {
@@ -107,6 +212,7 @@ function noteEventToStaveNote(
   stemDirection?: number,
   noteColor?: string,
   selectedPitchIndex?: number,  // when set on a chord: only that notehead gets selection colour
+  displayAccidentals?: readonly Accidental[],  // computed by computeDisplayAccidentals
 ): StaveNote {
   const stemOpts = stemDirection !== undefined ? { stem_direction: stemDirection } : {}
   const SEL_STYLE     = { fillStyle: '#3b9ddd', strokeStyle: '#3b9ddd' }
@@ -125,14 +231,8 @@ function noteEventToStaveNote(
         ...stemOpts,
       })
       if (n.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
-      if (n.pitch.accidental) {
-        const acc = n.pitch.accidental === 'sharp'       ? '#'
-          : n.pitch.accidental === 'flat'        ? 'b'
-          : n.pitch.accidental === 'natural'     ? 'n'
-          : n.pitch.accidental === 'doubleSharp' ? '##'
-          : 'bb'
-        staveNote.addModifier(new VexAccidental(acc), 0)
-      }
+      const noteDisplayAcc = displayAccidentals !== undefined ? displayAccidentals[0] : n.pitch.accidental
+      if (noteDisplayAcc) staveNote.addModifier(new VexAccidental(accToVex(noteDisplayAcc)), 0)
       if (n.articulations.length > 0) attachArticulations(staveNote, n.articulations)
       applyColor(staveNote)
       return staveNote
@@ -158,6 +258,10 @@ function noteEventToStaveNote(
         ...stemOpts,
       })
       if (c.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
+      c.pitches.forEach((pitch, i) => {
+        const chordDisplayAcc = displayAccidentals !== undefined ? displayAccidentals[i] : pitch.accidental
+        if (chordDisplayAcc) staveNote.addModifier(new VexAccidental(accToVex(chordDisplayAcc)), i)
+      })
       if (c.articulations.length > 0) attachArticulations(staveNote, c.articulations)
       if (selected && selectedPitchIndex !== undefined) {
         // Individual pitch selected: highlight only that notehead, others default.
@@ -1680,10 +1784,14 @@ function renderMeasure(
 
   // Two-voice rendering
   if (events0.length > 0 && events1.length > 0) {
+    const dispAcc0 = computeDisplayAccidentals(events0, writtenFifths)
+    const dispAcc1 = computeDisplayAccidentals(events1, writtenFifths)
     const sns0 = events0.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, 1, undefined,
-      selectedChordPitchInfo?.eventId === e.id ? selectedChordPitchInfo.pitchIndex : undefined))
+      selectedChordPitchInfo?.eventId === e.id ? selectedChordPitchInfo.pitchIndex : undefined,
+      dispAcc0.get(e.id)))
     const sns1 = events1.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, -1, '#2d8f4e',
-      selectedChordPitchInfo?.eventId === e.id ? selectedChordPitchInfo.pitchIndex : undefined))
+      selectedChordPitchInfo?.eventId === e.id ? selectedChordPitchInfo.pitchIndex : undefined,
+      dispAcc1.get(e.id)))
 
     const vv0 = new VexVoice(vexVoiceCfg).setStrict(false)
     const vv1 = new VexVoice(vexVoiceCfg).setStrict(false)
@@ -1716,8 +1824,10 @@ function renderMeasure(
   const stemDir    = isVoice1Only ? -1 : undefined
   const noteColor  = isVoice1Only ? '#2d8f4e' : undefined
 
+  const dispAcc = computeDisplayAccidentals(events, writtenFifths)
   const staveNotes = events.map(e => noteEventToStaveNote(e, selectedNoteIds.has(e.id), clefType, stemDir, noteColor,
-    selectedChordPitchInfo?.eventId === e.id ? selectedChordPitchInfo.pitchIndex : undefined))
+    selectedChordPitchInfo?.eventId === e.id ? selectedChordPitchInfo.pitchIndex : undefined,
+    dispAcc.get(e.id)))
   const vexVoice   = new VexVoice(vexVoiceCfg).setStrict(false)
   vexVoice.addTickables(staveNotes)
 

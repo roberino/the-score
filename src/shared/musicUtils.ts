@@ -320,7 +320,7 @@ export function articulationPlaybackMods(event: NoteEvent): {
 const SHARPS_ORDER: NoteName[] = ['F', 'C', 'G', 'D', 'A', 'E', 'B']
 const FLATS_ORDER:  NoteName[] = ['B', 'E', 'A', 'D', 'G', 'C', 'F']
 
-function keyAccidental(noteName: NoteName, fifths: number): 'sharp' | 'flat' | null {
+export function keyAccidental(noteName: NoteName, fifths: number): 'sharp' | 'flat' | null {
   if (fifths > 0) return SHARPS_ORDER.slice(0, fifths).includes(noteName) ? 'sharp' : null
   if (fifths < 0) return FLATS_ORDER.slice(0, -fifths).includes(noteName) ? 'flat' : null
   return null
