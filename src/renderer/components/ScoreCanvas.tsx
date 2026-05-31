@@ -1207,7 +1207,16 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           voiceId:   voice.id,
           event:     chord,
         })
-        // MIDI keyboard already produced sound — no preview
+        if (soundOnInput) {
+          const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
+          const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
+          const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
+          const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
+          const partIdx = score.parts.indexOf(part)
+          const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+          const top = pitches[pitches.length - 1]
+          triggerInputPreview(top.noteName, top.octave, top.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+        }
         setLastEnteredPitch(pitches[pitches.length - 1])
         setSelectedMeasure(null)
         const newBeat  = cursorBeatPosition + units
@@ -1224,7 +1233,8 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       }
     }
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
-      dispatch, setLastEnteredPitch, setCursor, setInputMode, setSelectedMeasure])
+      dispatch, setLastEnteredPitch, setCursor, setInputMode, setSelectedMeasure,
+      soundOnInput, audioMode])
 
   // ── Chord assembly buffer for MIDI input ─────────────────────────────────────
   const CHORD_WINDOW_MS = 50
@@ -1249,7 +1259,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       const buf = chordBufRef.current
       chordBufRef.current = []
       if (buf.length === 1) {
-        enterNoteRef.current(buf[0].noteName, buf[0].octave, buf[0].accidental as Accidental | undefined, true)
+        enterNoteRef.current(buf[0].noteName, buf[0].octave, buf[0].accidental as Accidental | undefined)
       } else if (buf.length > 1) {
         enterChordRef.current(buf)
       }
