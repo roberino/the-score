@@ -738,7 +738,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         overlay, sliceLocalLayouts, score,
         notePositionsRef.current, noteToMeasureKeyRef.current, noteStartXRef.current,
         inputMode === 'select' ? new Set(selectedNoteIds) : new Set(),
-        cursor, selectedMeasureId, lyricCursorNoteId, barSelection,
+        cursor, selectedMeasureId, lyricCursorNoteId, inputMode === 'select' ? barSelection : null,
       )
     }
   }, [score, zoom, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId, barSelection, inputMode, isPlaying])
