@@ -2117,6 +2117,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         canvasY >= l.staveY && canvasY < l.staveTopY
       ) {
         const part  = score.parts.find(p => p.id === l.partId)
+        if (part?.inputMode === 'sequencer') continue
         const staff = part?.staves.find(s => s.id === l.staffId)
         const measure = staff?.measures.find(m => m.id === l.measureId)
         if (!measure) break
@@ -2143,6 +2144,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         canvasY >= staveBottom + 2 && canvasY <= staveBottom + PEDAL_BASE_BELOW_STAVE + 20
       ) {
         const part  = score.parts.find(p => p.id === l.partId)
+        if (part?.inputMode === 'sequencer') continue
         const staff = part?.staves.find(s => s.id === l.staffId)
         const measure = staff?.measures.find(m => m.id === l.measureId)
         if (!measure || !staff) break
