@@ -199,8 +199,7 @@ class MidiOutputEngine {
           }, entry.startSec)
           totalDuration = Math.max(totalDuration, entry.startSec + entry.durSec)
         }
-        return
-      }
+      } else {
 
       const schedule       = buildFlatSchedule(staff, sequence, tempoStaff, bpm, score.timeSignature, staff.slurs)
       const hairpinFactors = buildHairpinFactorMap(staff.hairpins, schedule)
@@ -269,6 +268,8 @@ class MidiOutputEngine {
         const last = schedule[schedule.length - 1]
         totalDuration = Math.max(totalDuration, last.startSec + last.playDurSec)
       }
+
+      } // end else (non-sequencer note scheduling)
 
       // Schedule MIDI score events at their beat-precise positions
       let midiT = 0
