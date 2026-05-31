@@ -2565,13 +2565,20 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
           if (!displaysTimeSig) continue
           if (isPlaying) return
+          if (timeSigJustClosedRef.current) { timeSigJustClosedRef.current = false; return }
+
+          // If this is the global time sig display (measure 0, no measure-level override),
+          // dispatch SET_SCORE_TIME so the score-level sig is updated, not just an override.
+          const measure = staff.measures[mIdx]
+          const hasOverride = measure.timeSignature !== undefined
+          const isGlobal = mIdx === 0 && !hasOverride
 
           const rect = canvas.getBoundingClientRect()
           setSelectionMenuPos(null)
           setTimeSigPickerState({
-            measureId: l.measureId,
-            partId: l.partId,
-            staffId: l.staffId,
+            measureId: isGlobal ? null : l.measureId,
+            partId:    isGlobal ? null : l.partId,
+            staffId:   isGlobal ? null : l.staffId,
             current: effectiveSig,
             screenX: rect.left + l.x,
             screenY: rect.top  + l.staveTopY + STAVE_HEIGHT + 10,
@@ -2893,7 +2900,15 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
   // ── Time sig picker handlers ────────────────────────────────────────────────
 
-  const closeTimeSigPicker = useCallback(() => setTimeSigPickerState(null), [])
+  // Guard against handleCanvasClick (fired on 'click') reopening the picker that
+  // the picker's mousedown outside-handler just closed. Both fire within the same
+  // browser event cycle; the ref is updated immediately (not batched like state).
+  const timeSigJustClosedRef = useRef(false)
+
+  const closeTimeSigPicker = useCallback(() => {
+    timeSigJustClosedRef.current = true
+    setTimeSigPickerState(null)
+  }, [])
 
   const handleTimeSigSelect = useCallback((sig: TimeSignature) => {
     const s = timeSigPickerState

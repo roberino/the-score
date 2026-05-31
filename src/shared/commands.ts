@@ -117,6 +117,10 @@ function spillOverFrom(
 
     const overflow = events.splice(splitIdx)
 
+    // Fill any empty space left in the current measure with proper rests
+    const remaining = capacity - used
+    if (remaining > 0) events.push(...fillWithRests(remaining))
+
     // Ensure a next measure exists
     if (i + 1 >= measures.length) {
       const prevLast = measures[measures.length - 1]
@@ -126,7 +130,24 @@ function spillOverFrom(
     }
 
     const nextVoice = measures[i + 1].voices?.[0]
-    if (nextVoice) nextVoice.events.unshift(...overflow)
+    if (nextVoice) {
+      // Resolve the next measure's capacity so we can decompose any overflow event
+      // that individually exceeds it. Without this, a whole rest cascading into a
+      // 3/4 measure (capacity 48) would never fit, causing an infinite loop.
+      let nextTimeSig: TimeSignature = scoreTimeSig
+      for (let k = i + 1; k >= 0; k--) {
+        if (measures[k].timeSignature) { nextTimeSig = measures[k].timeSignature; break }
+      }
+      const nextCapacity = measureCapacityUnits(nextTimeSig)
+
+      const safeOverflow = overflow.flatMap((ev: NoteEvent) => {
+        if (eventDurationUnits(ev) <= nextCapacity) return [ev]
+        // Event is too large for the target capacity; replace with a capacity-fill of rests
+        return fillWithRests(nextCapacity)
+      })
+
+      nextVoice.events.unshift(...safeOverflow)
+    }
   }
 }
 
