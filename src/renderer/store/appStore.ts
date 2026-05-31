@@ -35,6 +35,24 @@ function normalizeMeasureRests(score: Score): Score {
 
 export type InputMode = 'select' | 'note' | 'rest' | 'text' | 'lyric' | 'midi'
 
+export type MidiLearnFunctionId = 'durationCycle'
+
+export interface MidiLearnBinding {
+  type:    'cc' | 'note'
+  channel: number
+  number:  number  // CC number (for 'cc') or MIDI note (for 'note')
+}
+
+export const DURATION_CYCLE: Duration[] = ['whole', 'half', 'quarter', 'eighth', '16th', '32nd', '64th']
+
+function loadMidiLearnBindings(): Partial<Record<MidiLearnFunctionId, MidiLearnBinding>> {
+  try {
+    const raw = localStorage.getItem('midiLearn_durationCycle')
+    if (raw) return { durationCycle: JSON.parse(raw) as MidiLearnBinding }
+  } catch { /* ignore */ }
+  return {}
+}
+
 export interface BarSelection {
   startMeasureIndex: number
   endMeasureIndex: number
@@ -83,6 +101,11 @@ export interface AppState {
   // MIDI input
   midiInputDeviceId: string | null
   midiInputDeviceName: string | null
+
+  // MIDI learn
+  midiLearnListening: MidiLearnFunctionId | null
+  midiLearnBindings:  Partial<Record<MidiLearnFunctionId, MidiLearnBinding>>
+  midiLearnError:     string | null
 
   // Playback
   isPlaying: boolean
@@ -155,6 +178,11 @@ export interface AppState {
   setAudioMode: (mode: 'builtin' | 'midi-out') => void
   setMidiOutputDevice: (deviceId: string | null) => void
   setMidiInputDevice: (id: string | null, name: string | null) => void
+  startMidiLearnListening: (fnId: MidiLearnFunctionId) => void
+  stopMidiLearnListening:  () => void
+  setMidiLearnBinding:     (fnId: MidiLearnFunctionId, binding: MidiLearnBinding | null) => void
+  setMidiLearnError:       (msg: string | null) => void
+  cycleDuration:           () => void
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -193,6 +221,10 @@ export const useAppStore = create<AppState>()(
 
     midiInputDeviceId: localStorage.getItem('midiInputDeviceId') ?? null,
     midiInputDeviceName: localStorage.getItem('midiInputDeviceName') ?? null,
+
+    midiLearnListening: null,
+    midiLearnBindings:  loadMidiLearnBindings(),
+    midiLearnError:     null,
 
     isPlaying: false,
     playbackManualStop: false,
@@ -748,6 +780,26 @@ export const useAppStore = create<AppState>()(
       midiService.selectInput(id)
       if (id)   { localStorage.setItem('midiInputDeviceId', id); localStorage.setItem('midiInputDeviceName', name ?? '') }
       else       { localStorage.removeItem('midiInputDeviceId'); localStorage.removeItem('midiInputDeviceName') }
+    },
+
+    startMidiLearnListening: (fnId) => set(s => { s.midiLearnListening = fnId }),
+    stopMidiLearnListening:  () => set(s => { s.midiLearnListening = null }),
+    setMidiLearnError:       (msg) => set(s => { s.midiLearnError = msg }),
+
+    setMidiLearnBinding: (fnId, binding) => {
+      set(s => {
+        if (binding) s.midiLearnBindings[fnId] = binding
+        else         delete s.midiLearnBindings[fnId]
+      })
+      if (binding) localStorage.setItem(`midiLearn_${fnId}`, JSON.stringify(binding))
+      else         localStorage.removeItem(`midiLearn_${fnId}`)
+    },
+
+    cycleDuration: () => {
+      const { selectedDuration } = get()
+      const idx  = DURATION_CYCLE.indexOf(selectedDuration)
+      const next = DURATION_CYCLE[(idx + 1) % DURATION_CYCLE.length]
+      set(s => { s.selectedDuration = next })
     },
 
     insertMeasure: () => {

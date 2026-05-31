@@ -23,6 +23,14 @@ export interface MidiInputInfo {
 
 export type NoteInputHandler = (input: NoteInput) => void
 
+export interface MidiControlInput {
+  channel: number
+  number:  number   // CC number
+  value:   number   // 0–127
+}
+
+export type MidiControlHandler = (input: MidiControlInput) => void
+
 // Chromatic MIDI note → noteName + optional sharp accidental
 const CHROMATIC: { noteName: NoteName; accidental?: 'sharp' }[] = [
   { noteName: 'C' },
@@ -49,6 +57,7 @@ function midiNoteToInput(midiNote: number, velocity: number): NoteInput {
 class MidiService {
   private access:          MIDIAccess | null = null
   private handlers:        Set<NoteInputHandler> = new Set()
+  private controlHandlers: Set<MidiControlHandler> = new Set()
   private _connected       = false
   private _outputFilter:   string | null = null
   private _selectedInputId: string | null = null
@@ -125,6 +134,11 @@ class MidiService {
     return () => this.handlers.delete(handler)
   }
 
+  subscribeControl(handler: MidiControlHandler): () => void {
+    this.controlHandlers.add(handler)
+    return () => this.controlHandlers.delete(handler)
+  }
+
   private wireListeners(): void {
     this.access?.inputs.forEach(input => {
       // Skip the port whose name matches the active output — on virtual buses
@@ -145,10 +159,20 @@ class MidiService {
 
   private handleMessage(msg: MIDIMessageEvent): void {
     if (!msg.data || msg.data.length < 3) return
-    const [status, note, velocity] = msg.data as unknown as [number, number, number]
-    const isNoteOn = (status & 0xf0) === 0x90 && velocity > 0
+    const [status, data1, data2] = msg.data as unknown as [number, number, number]
+    const msgType = status & 0xf0
+    const channel = status & 0x0f
+
+    if (msgType === 0xb0 && data2 > 0) {
+      // CC message with non-zero value
+      const controlInput: MidiControlInput = { channel, number: data1, value: data2 }
+      this.controlHandlers.forEach(h => h(controlInput))
+      return
+    }
+
+    const isNoteOn = msgType === 0x90 && data2 > 0
     if (!isNoteOn) return
-    const input = midiNoteToInput(note, velocity)
+    const input = midiNoteToInput(data1, data2)
     this.handlers.forEach(h => h(input))
   }
 }

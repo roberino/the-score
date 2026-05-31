@@ -1,11 +1,16 @@
 import { useState, useRef, useEffect } from 'react'
 import { useAppStore, type InputMode } from '../store/appStore'
+import type { MidiLearnFunctionId } from '../store/appStore'
 import { DURATION_LABELS, KEY_TO_DURATION, resolveTimeSig, resolveKeySig, keyLabel, measureCapacityUnits, usedUnits } from '@shared/musicUtils'
 import type { Duration, TimeSignature, KeySignature } from '@shared/score'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
 import { AudioSettingsPanel } from './AudioSettingsPanel'
 import { MidiInputPanel } from './MidiInputPanel'
+
+function formatBinding(b: { type: string; channel: number; number: number }) {
+  return b.type === 'cc' ? `CC ${b.number} Ch${b.channel + 1}` : `Note ${b.number} Ch${b.channel + 1}`
+}
 
 const NOTE_CHARS: Record<Duration, string> = {
   whole:   '\u{1D15D}',                            // whole note
@@ -71,10 +76,36 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     selectedMeasureId,
     insertMeasure,
     playbackMode, setPlaybackMode,
+    midiLearnListening, midiLearnBindings, midiLearnError,
+    startMidiLearnListening, stopMidiLearnListening, setMidiLearnBinding, setMidiLearnError,
   } = useAppStore()
 
   const [timeSigError, setTimeSigError] = useState<string | null>(null)
   const [playDropdownOpen, setPlayDropdownOpen] = useState(false)
+
+  // MIDI learn state
+  const [learnPulse, setLearnPulse] = useState(false)
+  const isLearnListening = midiLearnListening === 'durationCycle'
+  const learnBinding     = midiLearnBindings['durationCycle']
+  const isLearnAssigned  = !!learnBinding && !isLearnListening
+
+  useEffect(() => {
+    if (!isLearnListening) { setLearnPulse(false); return }
+    const t = setInterval(() => setLearnPulse(v => !v), 500)
+    return () => clearInterval(t)
+  }, [isLearnListening])
+
+  useEffect(() => {
+    if (!midiLearnError) return
+    const t = setTimeout(() => setMidiLearnError(null), 4000)
+    return () => clearTimeout(t)
+  }, [midiLearnError, setMidiLearnError])
+
+  const handleLearnClick = () => {
+    if (isLearnListening)     stopMidiLearnListening()
+    else if (isLearnAssigned) setMidiLearnBinding('durationCycle' as MidiLearnFunctionId, null)
+    else                      startMidiLearnListening('durationCycle')
+  }
   const playSplitRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -535,6 +566,45 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
           >
             · Dot
           </button>
+
+          <div style={{ width: 1, height: 20, background: '#3e3e3e', margin: '0 4px' }} />
+
+          <button
+            onClick={handleLearnClick}
+            title={
+              isLearnListening  ? 'Listening for MIDI control… (click to cancel)' :
+              isLearnAssigned   ? `MIDI learn: ${formatBinding(learnBinding!)} — click to clear` :
+                                  'MIDI learn: assign a MIDI control to cycle duration'
+            }
+            style={{
+              padding: '3px 8px',
+              fontSize: 11,
+              borderRadius: 3,
+              border: 'none',
+              cursor: 'pointer',
+              background: isLearnListening
+                ? (learnPulse ? '#1a4a6e' : '#0e4060')
+                : isLearnAssigned ? '#1a4a6e'
+                : '#1e1e1e',
+              color: isLearnListening ? '#7ec8e3'
+                   : isLearnAssigned  ? '#7ec8e3'
+                   : '#9d9d9d',
+              transition: isLearnListening ? 'none' : 'background 0.1s',
+            }}
+          >
+            {isLearnListening ? '⊙ Listening…' : isLearnAssigned ? `⊙ ${formatBinding(learnBinding!)}` : '⊙ MIDI'}
+          </button>
+        </div>
+      )}
+
+      {midiLearnError && (
+        <div style={{
+          position: 'fixed', bottom: 48, left: '50%', transform: 'translateX(-50%)',
+          background: '#5a1a1a', border: '1px solid #a04040', borderRadius: 4,
+          padding: '6px 14px', color: '#ffbbbb', fontSize: 12, zIndex: 2000,
+          pointerEvents: 'none',
+        }}>
+          {midiLearnError}
         </div>
       )}
     </div>

@@ -57,6 +57,7 @@ import { MidiEventPicker } from './MidiEventPicker'
 import { PedalMarkPicker } from './PedalMarkPicker'
 import { VirtualKeyboard } from './VirtualKeyboard'
 import { useMidiInput } from '../hooks/useMidiInput'
+import { useMidiLearn } from '../hooks/useMidiLearn'
 import type { NoteInput } from '../services/midiService'
 import { TextBoxLayer, makeTextBox } from './TextBoxLayer'
 
@@ -581,6 +582,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     lyricCursorNoteId, setLyricCursor,
     isPlaying,
     barSelection, setBarSelection, deleteSelectedBars,
+    midiLearnListening, setMidiLearnError,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -1252,6 +1254,10 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
   // MIDI handler — buffers notes for CHORD_WINDOW_MS then dispatches note or chord
   const midiInputHandler = useCallback((input: NoteInput) => {
+    if (midiLearnListening) {
+      setMidiLearnError("That note is used for note input. Use a CC control instead.")
+      return
+    }
     if (inputMode === 'text') return
     if (inputMode !== 'note') setInputMode('note')
 
@@ -1270,7 +1276,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         enterChordRef.current(buf, forceBuiltinPreview)
       }
     }, CHORD_WINDOW_MS)
-  }, [inputMode, setInputMode, audioMode])
+  }, [inputMode, setInputMode, audioMode, midiLearnListening, setMidiLearnError])
 
   // Virtual keyboard still uses direct (non-buffered) path so it feels instant
   const keyboardInputHandler = useCallback((input: NoteInput) => {
@@ -1281,6 +1287,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
   const stableKeyboardHandler = useMemo(() => keyboardInputHandler, [keyboardInputHandler])
 
   useMidiInput(midiInputHandler)
+  useMidiLearn()
 
   const enterRest = useCallback(() => {
     if (!cursorMeasureId) return
