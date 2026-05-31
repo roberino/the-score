@@ -239,64 +239,56 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
         >+ New Sequence</button>
       </div>
 
-      {/* Grid area */}
-      <div style={{ flex: 1, overflow: 'auto', display: 'flex' }}>
-        {/* Left: label column */}
-        <div style={{ flexShrink: 0, borderRight: '1px solid #333', background: '#1a1a1a' }}>
-          <div style={{ height: HEADER_H, width: LABEL_W, borderBottom: '1px solid #333' }} />
-          {rows.map(pitch => {
-            const label   = isDrum ? GM_DRUM_LABELS[pitch] : midiToNoteName(pitch)
-            const isBlack = !isDrum && IS_BLACK[pitch % 12]
-            const isC     = !isDrum && pitch % 12 === 0
-            return (
-              <div
-                key={pitch}
-                style={{
-                  height: CELL_H, width: LABEL_W,
-                  display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
-                  paddingRight: 8, fontSize: 10,
-                  color: isC ? '#fff' : isBlack ? '#aaa' : '#888',
-                  background: isC ? '#2a2a2a' : isBlack ? '#222' : '#1a1a1a',
-                  borderBottom: '1px solid #2a2a2a', boxSizing: 'border-box',
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                }}
-              >
-                {label}
-              </div>
-            )
-          })}
-        </div>
+      {/* Grid area — single scroll container so labels and cells scroll together */}
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        {currentPattern ? (
+          <div style={{ display: 'inline-block', minWidth: '100%' }}>
+            {/* Header row: corner + beat numbers */}
+            <div style={{ display: 'flex', height: HEADER_H, position: 'sticky', top: 0, zIndex: 3, background: '#1a1a1a', borderBottom: '1px solid #333' }}>
+              {/* Corner — sticks to both top and left */}
+              <div style={{ width: LABEL_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 4, background: '#1a1a1a', borderRight: '1px solid #333' }} />
+              {Array.from({ length: stepsPerBar }, (_, step) => {
+                const beat       = Math.floor(step / 4) + 1
+                const sub        = step % 4
+                const isDownbeat = sub === 0
+                return (
+                  <div
+                    key={step}
+                    style={{
+                      width: CELL_W, flexShrink: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 10, color: isDownbeat ? '#ccc' : '#555',
+                      borderRight: `1px solid ${isDownbeat ? '#444' : '#2a2a2a'}`,
+                      boxSizing: 'border-box', fontWeight: isDownbeat ? 600 : 400,
+                    }}
+                  >
+                    {isDownbeat ? beat : sub === 2 ? '+' : ''}
+                  </div>
+                )
+              })}
+            </div>
 
-        {/* Right: grid */}
-        <div style={{ flex: 1, overflow: 'auto' }}>
-          {currentPattern ? (
-            <div style={{ display: 'inline-block', minWidth: '100%' }}>
-              {/* Column headers */}
-              <div style={{ display: 'flex', height: HEADER_H, borderBottom: '1px solid #333', background: '#1a1a1a', position: 'sticky', top: 0, zIndex: 2 }}>
-                {Array.from({ length: stepsPerBar }, (_, step) => {
-                  const beat       = Math.floor(step / 4) + 1
-                  const sub        = step % 4
-                  const isDownbeat = sub === 0
-                  return (
-                    <div
-                      key={step}
-                      style={{
-                        width: CELL_W, flexShrink: 0,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 10, color: isDownbeat ? '#ccc' : '#555',
-                        borderRight: `1px solid ${isDownbeat ? '#444' : '#2a2a2a'}`,
-                        boxSizing: 'border-box', fontWeight: isDownbeat ? 600 : 400,
-                      }}
-                    >
-                      {isDownbeat ? beat : sub === 2 ? '+' : ''}
-                    </div>
-                  )
-                })}
-              </div>
-
-              {/* Cell rows */}
-              {rows.map(pitch => (
+            {/* Content rows: sticky label + step cells */}
+            {rows.map(pitch => {
+              const label   = isDrum ? GM_DRUM_LABELS[pitch] : midiToNoteName(pitch)
+              const isBlack = !isDrum && IS_BLACK[pitch % 12]
+              const isC     = !isDrum && pitch % 12 === 0
+              return (
                 <div key={pitch} style={{ display: 'flex', height: CELL_H }}>
+                  {/* Sticky label */}
+                  <div style={{
+                    width: LABEL_W, flexShrink: 0,
+                    position: 'sticky', left: 0, zIndex: 1,
+                    display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+                    paddingRight: 8, fontSize: 10,
+                    color: isC ? '#fff' : isBlack ? '#aaa' : '#888',
+                    background: isC ? '#2a2a2a' : isBlack ? '#222' : '#1a1a1a',
+                    borderBottom: '1px solid #2a2a2a', borderRight: '1px solid #333',
+                    boxSizing: 'border-box', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>
+                    {label}
+                  </div>
+                  {/* Step cells */}
                   {Array.from({ length: stepsPerBar }, (_, step) => {
                     const on         = isCellOn(step, pitch)
                     const isDownbeat = step % 4 === 0
@@ -317,14 +309,14 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
                     )
                   })}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ padding: 40, color: '#555', fontSize: 13 }}>
-              No sequences yet. Click "+ New Sequence" to create one.
-            </div>
-          )}
-        </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div style={{ padding: 40, color: '#555', fontSize: 13 }}>
+            No sequences yet. Click "+ New Sequence" to create one.
+          </div>
+        )}
       </div>
     </div>
   )
