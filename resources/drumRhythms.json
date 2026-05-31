@@ -1,0 +1,90 @@
+[
+  {
+    "id": "8-beat",
+    "name": "8 Beat",
+    "timeSig": { "numerator": 4, "denominator": 4 },
+    "stepsPerBar": 16,
+    "cells": [
+      { "pitch": 42, "steps": [0, 2, 4, 6, 8, 10, 12, 14] },
+      { "pitch": 36, "steps": [0, 8] },
+      { "pitch": 38, "steps": [4, 12] }
+    ]
+  },
+  {
+    "id": "16-beat",
+    "name": "16 Beat",
+    "timeSig": { "numerator": 4, "denominator": 4 },
+    "stepsPerBar": 16,
+    "cells": [
+      { "pitch": 42, "steps": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] },
+      { "pitch": 36, "steps": [0, 8] },
+      { "pitch": 38, "steps": [4, 12] }
+    ]
+  },
+  {
+    "id": "shuffle",
+    "name": "Shuffle",
+    "timeSig": { "numerator": 4, "denominator": 4 },
+    "stepsPerBar": 16,
+    "cells": [
+      { "pitch": 42, "steps": [0, 3, 4, 7, 8, 11, 12, 15] },
+      { "pitch": 36, "steps": [0, 8] },
+      { "pitch": 38, "steps": [4, 12] }
+    ]
+  },
+  {
+    "id": "half-time",
+    "name": "Half-time",
+    "timeSig": { "numerator": 4, "denominator": 4 },
+    "stepsPerBar": 16,
+    "cells": [
+      { "pitch": 42, "steps": [0, 2, 4, 6, 8, 10, 12, 14] },
+      { "pitch": 36, "steps": [0, 4, 10] },
+      { "pitch": 38, "steps": [8] }
+    ]
+  },
+  {
+    "id": "bossa-nova",
+    "name": "Bossa Nova",
+    "timeSig": { "numerator": 4, "denominator": 4 },
+    "stepsPerBar": 16,
+    "cells": [
+      { "pitch": 42, "steps": [0, 4, 8, 12] },
+      { "pitch": 37, "steps": [2, 6, 10, 12, 14] },
+      { "pitch": 36, "steps": [0, 6, 12] }
+    ]
+  },
+  {
+    "id": "reggae",
+    "name": "Reggae",
+    "timeSig": { "numerator": 4, "denominator": 4 },
+    "stepsPerBar": 16,
+    "cells": [
+      { "pitch": 42, "steps": [2, 6, 10, 14] },
+      { "pitch": 36, "steps": [8] },
+      { "pitch": 38, "steps": [8] }
+    ]
+  },
+  {
+    "id": "waltz",
+    "name": "Waltz",
+    "timeSig": { "numerator": 3, "denominator": 4 },
+    "stepsPerBar": 12,
+    "cells": [
+      { "pitch": 42, "steps": [0, 4, 8] },
+      { "pitch": 36, "steps": [0] },
+      { "pitch": 38, "steps": [4, 8] }
+    ]
+  },
+  {
+    "id": "ballad-68",
+    "name": "Ballad",
+    "timeSig": { "numerator": 6, "denominator": 8 },
+    "stepsPerBar": 12,
+    "cells": [
+      { "pitch": 42, "steps": [0, 2, 4, 6, 8, 10] },
+      { "pitch": 36, "steps": [0, 6] },
+      { "pitch": 38, "steps": [4, 10] }
+    ]
+  }
+]

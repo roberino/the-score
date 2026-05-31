@@ -5,6 +5,20 @@ import type { SequencePattern } from '@shared/score'
 import { previewNote } from '../engine/notePreview'
 import { midiOutputEngine } from '../engine/midiOutputEngine'
 import { previewDrumHit } from '../engine/drumSamplerEngine'
+import drumRhythmsRaw from '../../../resources/drumRhythms.json'
+
+// ── Stock drum rhythms ────────────────────────────────────────────────────────
+
+interface DrumRhythmCell { pitch: number; steps: number[] }
+interface DrumRhythm {
+  id: string
+  name: string
+  timeSig: { numerator: number; denominator: number }
+  stepsPerBar: number
+  cells: DrumRhythmCell[]
+}
+
+const ALL_DRUM_RHYTHMS = drumRhythmsRaw as DrumRhythm[]
 
 // ── GM Percussion labels (MIDI notes 35–81) ───────────────────────────────────
 
@@ -125,7 +139,34 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
   // Drag-to-fill
   const dragRef = useRef<{ on: boolean } | null>(null)
 
+  // Stock rhythm picker
+  const [rhythmPickerOpen, setRhythmPickerOpen] = useState(false)
+  const [pendingRhythm, setPendingRhythm] = useState<DrumRhythm | null>(null)
+
+  const compatibleRhythms = ALL_DRUM_RHYTHMS.filter(
+    r => r.timeSig.numerator === timeSig.numerator && r.timeSig.denominator === timeSig.denominator
+  )
+
   const currentPattern = patternIdx >= 0 ? patterns[patternIdx] ?? null : null
+
+  const patternHasCells = currentPattern?.steps.some(col => col.length > 0) ?? false
+
+  function applyRhythm(rhythm: DrumRhythm): void {
+    if (!currentPattern) return
+    pushUndoSnapshot()
+    const cleared: SequencePattern = {
+      ...currentPattern,
+      steps: Array.from({ length: currentPattern.stepsPerBar }, () => []),
+    }
+    dispatch({ type: 'UPSERT_SEQUENCE_PATTERN', partId, pattern: cleared })
+    for (const cell of rhythm.cells) {
+      for (const step of cell.steps) {
+        dispatchSilent({ type: 'SET_SEQUENCE_CELL', partId, patternId: currentPattern.id, step, pitch: cell.pitch, on: true })
+      }
+    }
+    setPendingRhythm(null)
+    setRhythmPickerOpen(false)
+  }
 
   const handleCellMouseDown = useCallback((step: number, pitch: number, currentlyOn: boolean) => {
     if (!currentPattern) return
@@ -148,6 +189,15 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
     return () => document.removeEventListener('mouseup', up)
   }, [])
 
+  useEffect(() => {
+    if (!rhythmPickerOpen) return
+    const close = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-rhythm-picker]')) setRhythmPickerOpen(false)
+    }
+    const timer = setTimeout(() => document.addEventListener('mousedown', close), 0)
+    return () => { clearTimeout(timer); document.removeEventListener('mousedown', close) }
+  }, [rhythmPickerOpen])
+
   if (!part) return <div style={{ color: '#d4d4d4', padding: 20 }}>Part not found.</div>
 
   const rows = isDrum ? DRUM_NOTES : buildPianoRows(PIANO_LO, PIANO_HI)
@@ -166,7 +216,7 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
       style={{
         display: 'flex', flexDirection: 'column', height: '100%',
         background: '#1e1e1e', color: '#d4d4d4', overflow: 'hidden',
-        userSelect: 'none',
+        userSelect: 'none', position: 'relative',
       }}
     >
       {/* Header */}
@@ -237,7 +287,62 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
           }}
           style={btnStyle}
         >+ New Sequence</button>
+
+        {/* Load rhythm button — drum parts only, when compatible rhythms exist */}
+        {isDrum && compatibleRhythms.length > 0 && (
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setRhythmPickerOpen(o => !o)}
+              style={btnStyle}
+            >Load rhythm…</button>
+            {rhythmPickerOpen && (
+              <div
+                data-rhythm-picker=""
+                style={{
+                  position: 'absolute', top: '100%', right: 0, marginTop: 4,
+                  background: '#252526', border: '1px solid #444', borderRadius: 6,
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.4)', zIndex: 100,
+                  minWidth: 160, fontSize: 12, color: '#ccc', overflow: 'hidden',
+                }}
+              >
+                {compatibleRhythms.map(r => (
+                  <div
+                    key={r.id}
+                    onClick={() => {
+                      setRhythmPickerOpen(false)
+                      if (patternHasCells) { setPendingRhythm(r) } else { applyRhythm(r) }
+                    }}
+                    style={{ padding: '6px 14px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                  >
+                    {r.name}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Confirmation overlay — replace non-empty pattern */}
+      {pendingRhythm && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 200,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.55)',
+        }}>
+          <div style={{
+            background: '#252526', border: '1px solid #444', borderRadius: 8,
+            padding: '18px 24px', display: 'flex', flexDirection: 'column', gap: 14,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.5)', fontSize: 13, color: '#d4d4d4',
+          }}>
+            <span>Replace current pattern with <strong>{pendingRhythm.name}</strong>?</span>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setPendingRhythm(null)} style={cancelBtnStyle}>Cancel</button>
+              <button onClick={() => applyRhythm(pendingRhythm)} style={confirmBtnStyle}>Replace</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Grid area — single scroll container so labels and cells scroll together */}
       <div style={{ flex: 1, overflow: 'auto' }}>
@@ -331,4 +436,13 @@ const btnStyle: React.CSSProperties = {
 
 const disabledBtnStyle: React.CSSProperties = {
   ...btnStyle, color: '#444', cursor: 'not-allowed',
+}
+
+const cancelBtnStyle: React.CSSProperties = {
+  padding: '4px 14px', borderRadius: 4, border: '1px solid #555',
+  background: '#2d2d2d', color: '#ccc', fontSize: 12, cursor: 'pointer',
+}
+
+const confirmBtnStyle: React.CSSProperties = {
+  ...cancelBtnStyle, background: '#0e639c', border: '1px solid #0e639c', color: '#fff',
 }

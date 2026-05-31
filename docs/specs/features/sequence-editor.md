@@ -171,11 +171,11 @@ interface Part {
 
 Clicking a sequencer-mode bar in **Select** mode opens a small dropdown at the click position:
 
+- A header row shows "Assign sequence" and a **✕** close button.
 - Lists all patterns defined for this part, each showing its label (or "Sequence N" default).
 - The currently active pattern at that bar is marked with a checkmark.
-- **(empty)** is always available — assigns `patternId: null`, producing silence from that bar.
+- **(empty)** is always the default state (no assignment). Shown with a checkmark when the bar has no active pattern. Selecting it when a pattern is active sets `patternId: null` from that bar, producing silence.
 - **Edit patterns…** opens the Sequence Editor (§6).
-- **Clear assignment here** appears only when an assignment exists exactly at the clicked bar (not just inherited); removing it reverts the bar to whatever assignment precedes it.
 
 ---
 
@@ -241,14 +241,58 @@ Sequence parts are expanded to regular `<note>` elements: each active cell becom
 
 ## 10. Stock Drum Rhythms
 
-On a drum part, the user should have the ability to load a pre-configured sequence from a list of common rhythms below:
+### 10.1 Overview
 
-* 8 Beat - when the time signature is 4/4
-* 16 Beat - available when the time signature is  4/4
-* Waltz - available when the time signature is 3/4
-* Balad - available when the time signature is 6/8
+When editing a drum part in the Sequence Editor, the header toolbar shows a **Load rhythm…** button. Clicking it opens a dropdown listing all stock rhythms compatible with the score's current time signature. Rhythms whose required time signature does not match are omitted entirely.
 
-Stock rhythms should be stored in a json asset file.
+The button is visible only when:
+- The part is a drum part (MIDI channel 10), **and**
+- At least one stock rhythm is compatible with the current time signature.
+
+### 10.2 Load behaviour
+
+Selecting a stock rhythm populates the **current pattern's** cells with the preset's step data:
+
+- If the current pattern already has at least one active cell, a brief inline confirmation ("Replace current pattern with [name]? [Yes] [Cancel]") is shown before applying.
+- All existing cells are cleared first, then the preset cells are written.
+- The entire operation is a single undoable step (one undo snapshot, not one per cell).
+- The pattern's `stepsPerBar` is left unchanged; the preset's `stepsPerBar` always matches the current time signature, so no mismatch is possible.
+
+### 10.3 Available stock rhythms
+
+| Name | Time signature | Character |
+|---|---|---|
+| 8 Beat | 4/4 | Standard rock — kick on 1 & 3, snare on 2 & 4, 8th-note hi-hats |
+| 16 Beat | 4/4 | Active feel — 16th-note hi-hats throughout |
+| Shuffle | 4/4 | Swing-feel approximation at 16th-note resolution |
+| Half-time | 4/4 | Snare on beat 3 only — hip-hop / ballad feel |
+| Bossa Nova | 4/4 | Syncopated Latin pattern with rim-shot and closed hi-hat |
+| Reggae | 4/4 | One-drop feel with off-beat hi-hat emphasis |
+| Waltz | 3/4 | Classic 3-beat dance rhythm — kick on 1, hi-hat on all three beats |
+| Ballad | 6/8 | Lilting compound feel — kick on the two dotted-quarter beats |
+
+### 10.4 Data format
+
+Stock rhythms are stored in `resources/drumRhythms.json` as a top-level array. Each entry:
+
+```json
+{
+  "id": "8-beat",
+  "name": "8 Beat",
+  "timeSig": { "numerator": 4, "denominator": 4 },
+  "stepsPerBar": 16,
+  "cells": [
+    { "pitch": 42, "steps": [0, 2, 4, 6, 8, 10, 12, 14] },
+    { "pitch": 36, "steps": [0, 8] },
+    { "pitch": 38, "steps": [4, 12] }
+  ]
+}
+```
+
+- `pitch` — GM percussion MIDI note number (35–81).
+- `steps` — 0-based step indices within the bar.
+- `velocity` — omitted; defaults to **100** when applied.
+- `stepsPerBar` must equal `Math.round((timeSig.numerator / timeSig.denominator) × 16)`.
 
 ## 11. Deferred / Out of Scope
 
