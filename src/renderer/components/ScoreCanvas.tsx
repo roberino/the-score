@@ -3515,6 +3515,16 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
             }}
             onMouseDown={e => e.stopPropagation()}
           >
+            {/* Header with close button */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '5px 10px 5px 14px', borderBottom: '1px solid #333' }}>
+              <span style={{ fontSize: 11, color: '#888' }}>Assign sequence</span>
+              <button
+                onClick={() => setSeqAssignMenu(null)}
+                onMouseDown={e => e.stopPropagation()}
+                style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: 12, padding: '0 2px', lineHeight: 1 }}
+              >✕</button>
+            </div>
+
             {/* Open editor */}
             <div
               onClick={() => handleOpenEditor(activeAssign?.patternId ?? undefined)}
@@ -3561,10 +3571,6 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
               </>
             )}
 
-            <div style={{ borderTop: '1px solid #333', margin: '2px 0' }} />
-            <div onClick={() => setSeqAssignMenu(null)} style={{ ...seqMenuItemStyle, color: '#888' }}>
-              Cancel
-            </div>
           </div>
         )
       })()}
