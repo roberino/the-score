@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { useAppStore } from '../store/appStore'
 import type { Command } from '@shared/commands'
+import { INSTRUMENTS } from '@shared/instruments'
 import * as Tone from 'tone'
 import {
   computeLayout,
@@ -2143,6 +2144,8 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       ) {
         const part  = score.parts.find(p => p.id === l.partId)
         if (part?.inputMode === 'sequencer') continue
+        // Pedal marks only apply to keyboard-family instruments
+        if (INSTRUMENTS.find(i => i.midiProgram === part?.midiProgram)?.family !== 'keyboards') continue
         const staff = part?.staves.find(s => s.id === l.staffId)
         const measure = staff?.measures.find(m => m.id === l.measureId)
         if (!measure || !staff) break
