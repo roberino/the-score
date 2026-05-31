@@ -105,7 +105,8 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
 
   // Create first pattern if none exist
   useEffect(() => {
-    if (!part || patterns.length > 0) return
+    const currentPatterns = useAppStore.getState().score.parts.find(p => p.id === partId)?.sequencePatterns ?? []
+    if (currentPatterns.length > 0) return
     createNewPattern()
   }, [partId])
 

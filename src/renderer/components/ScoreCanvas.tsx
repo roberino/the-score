@@ -2491,7 +2491,8 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         if (
           l.showClef &&
           canvasX >= l.x && canvasX <= l.x + CLEF_HIT_WIDTH &&
-          canvasY >= l.staveTopY - 20 && canvasY <= l.staveTopY + STAVE_HEIGHT + 20
+          canvasY >= l.staveTopY - 20 && canvasY <= l.staveTopY + STAVE_HEIGHT + 20 &&
+          score.parts.find(p => p.id === l.partId)?.inputMode !== 'sequencer'
         ) {
           if (isPlaying) return
           const rect = canvas.getBoundingClientRect()
@@ -2515,6 +2516,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           canvasY >= l.staveTopY - 30 && canvasY <= l.staveTopY + STAVE_HEIGHT + 30
         ) {
           const part  = score.parts.find(p => p.id === l.partId)
+          if (part?.inputMode === 'sequencer') continue
           const staff = part?.staves.find(s => s.id === l.staffId)
           if (!staff) continue
 
@@ -2549,6 +2551,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           canvasY >= l.staveTopY - 30 && canvasY <= l.staveTopY + STAVE_HEIGHT + 30
         ) {
           const part  = score.parts.find(p => p.id === l.partId)
+          if (part?.inputMode === 'sequencer') continue
           const staff = part?.staves.find(s => s.id === l.staffId)
           if (!staff) continue
 
