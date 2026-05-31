@@ -1207,7 +1207,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           voiceId:   voice.id,
           event:     chord,
         })
-        if (soundOnInput) {
+        if (soundOnInput && audioMode !== 'midi-out') {
           const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
@@ -1258,13 +1258,17 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       chordTimerRef.current = null
       const buf = chordBufRef.current
       chordBufRef.current = []
+      // In midi-out mode the external device sounds the note itself; sending
+      // a MIDI preview would create feedback loops on hardware MIDI THRU chains.
+      // In builtin mode the app is the only audio source, so preview must play.
+      const skipMidiPreview = audioMode === 'midi-out'
       if (buf.length === 1) {
-        enterNoteRef.current(buf[0].noteName, buf[0].octave, buf[0].accidental as Accidental | undefined)
+        enterNoteRef.current(buf[0].noteName, buf[0].octave, buf[0].accidental as Accidental | undefined, skipMidiPreview)
       } else if (buf.length > 1) {
         enterChordRef.current(buf)
       }
     }, CHORD_WINDOW_MS)
-  }, [inputMode, setInputMode])
+  }, [inputMode, setInputMode, audioMode])
 
   // Virtual keyboard still uses direct (non-buffered) path so it feels instant
   const keyboardInputHandler = useCallback((input: NoteInput) => {
