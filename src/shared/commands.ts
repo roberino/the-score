@@ -475,10 +475,21 @@ export function applyCommand(score: Score, command: Command): Score {
       }
 
       case 'SET_SCORE_TIME': {
-        draft.timeSignature = command.time as any
+        const newSig = command.time
+        draft.timeSignature = newSig as any
+        const newStepsPerBar = Math.round((newSig.numerator / newSig.denominator) * 16)
         for (const part of draft.parts) {
           for (const staff of part.staves) {
-            spillOverFrom(staff.measures as any[], (staff.measures as any[])[0]?.id, command.time)
+            spillOverFrom(staff.measures as any[], (staff.measures as any[])[0]?.id, newSig)
+          }
+          // Resize sequencer patterns to match the new time signature
+          if ((part as any).inputMode === 'sequencer') {
+            for (const pattern of (part as any).sequencePatterns ?? []) {
+              if (pattern.stepsPerBar === newStepsPerBar) continue
+              const oldSteps: any[][] = pattern.steps
+              pattern.steps = Array.from({ length: newStepsPerBar }, (_, i) => oldSteps[i] ?? [])
+              pattern.stepsPerBar = newStepsPerBar
+            }
           }
         }
         break
