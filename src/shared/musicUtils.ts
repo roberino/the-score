@@ -666,28 +666,27 @@ export function buildSequenceSchedule(
 
   const result: SequenceScheduleEntry[] = []
 
-  // Build a map of measure index → transport start time using the playback sequence
-  const measureStartTimes = new Map<number, { startSec: number; measureDurSec: number }>()
+  // Build timing parallel to measureSequence (array not map — a measure can appear
+  // multiple times when there are repeats, so keying by measure index would collide).
+  const measureTimings: { startSec: number; measureDurSec: number }[] = []
   let t = 0
   for (const mIdx of measureSequence) {
     const bpm     = resolveDirectiveTempo(tempoStaff.measures, mIdx, baseBpm)
     const timeSig = resolveTimeSig(part.staves[0]?.measures ?? [], mIdx, baseTimeSig)
     const durSec  = (measureCapacityUnits(timeSig) / 16) * (60 / bpm)
-    measureStartTimes.set(mIdx, { startSec: t, measureDurSec: durSec })
+    measureTimings.push({ startSec: t, measureDurSec: durSec })
     t += durSec
   }
 
-  for (const mIdx of measureSequence) {
+  for (let seqPos = 0; seqPos < measureSequence.length; seqPos++) {
+    const mIdx      = measureSequence[seqPos]
     const assignment = activeAssignmentAt(assignments, mIdx)
     if (!assignment || assignment.patternId === null) continue
 
     const pattern = patterns.find(p => p.id === assignment.patternId)
     if (!pattern || pattern.stepsPerBar === 0) continue
 
-    const timing = measureStartTimes.get(mIdx)
-    if (!timing) continue
-
-    const { startSec, measureDurSec } = timing
+    const { startSec, measureDurSec } = measureTimings[seqPos]
     const stepDurSec = measureDurSec / pattern.stepsPerBar
 
     for (let step = 0; step < pattern.stepsPerBar; step++) {

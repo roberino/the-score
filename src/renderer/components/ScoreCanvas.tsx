@@ -2804,10 +2804,22 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
   const handleBarlineSelect = useCallback((
     measureId: string, partId: string, staffId: string, barline: BarlineType
   ) => {
-    dispatch({ type: 'SET_BARLINE', partId, staffId, measureId, barline })
+    // Find the measure index from the clicked part, then apply to all parts
+    const clickedPart  = score.parts.find(p => p.id === partId)
+    const clickedStaff = clickedPart?.staves.find(s => s.id === staffId)
+    const mIdx = clickedStaff?.measures.findIndex(m => m.id === measureId) ?? -1
+    if (mIdx === -1) return
+    for (const p of score.parts) {
+      const s = p.staves[0]
+      const m = s?.measures[mIdx]
+      if (!m) continue
+      const isLast = s!.measures[s!.measures.length - 1].id === m.id
+      if (isLast && barline !== 'final') continue
+      dispatch({ type: 'SET_BARLINE', partId: p.id, staffId: s!.id, measureId: m.id, barline })
+    }
     setPickerState(null)
     setSelectedBarline(null)
-  }, [dispatch, setSelectedBarline])
+  }, [score, dispatch, setSelectedBarline])
 
   // ── Key sig picker handlers ─────────────────────────────────────────────────
 
@@ -3478,7 +3490,6 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         const assignments  = (menuPart?.sequenceAssignments ?? []) as SequenceAssignment[]
         const mIdx         = seqAssignMenu.measureIndex
         const activeAssign = activeAssignmentAt(assignments, mIdx)
-        const exactAssign  = assignments.find(a => a.startMeasureIndex === mIdx)
 
         const handleAssign = (patternId: string | null) => {
           if (!menuPart) return
