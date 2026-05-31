@@ -38,7 +38,7 @@ export type Command =
   | { type: 'SET_TITLE';            title: string }
   | { type: 'SET_COMPOSER';         composer: string }
   | { type: 'SET_HEADING';          field: 'title' | 'subtitle' | 'composer' | 'arranger'; value: string }
-  | { type: 'ADD_PART';             name: string; shortName: string; clef: ClefType; midiProgram: number; transposeSemitones: number; midiChannel?: number; inputMode?: 'score' | 'sequencer' }
+  | { type: 'ADD_PART';             name: string; shortName: string; clef: ClefType; midiProgram: number; transposeSemitones: number; midiChannel?: number; inputMode?: 'score' | 'sequencer'; tabConfig?: TabConfig }
   | { type: 'DELETE_PART';          partId: string }
   | { type: 'MOVE_PART';            partId: string; direction: 'up' | 'down' }
   | { type: 'SET_PART_METADATA';    partId: string; name?: string; shortName?: string; midiProgram?: number; midiChannel?: number | null; transposeSemitones?: number; labelVisible?: boolean; volume?: number; muted?: boolean; showTab?: boolean; tabConfig?: TabConfig | null }
@@ -539,7 +539,8 @@ export function applyCommand(score: Score, command: Command): Score {
           volume:             0.8,
           muted:              false,
           labelVisible:       true,
-          ...(command.inputMode ? { inputMode: command.inputMode } : {}),
+          ...(command.inputMode  ? { inputMode:  command.inputMode  } : {}),
+          ...(command.tabConfig  ? { tabConfig:  command.tabConfig  } : {}),
         }
         if (autoGroupId) {
           newPart.groupId     = autoGroupId

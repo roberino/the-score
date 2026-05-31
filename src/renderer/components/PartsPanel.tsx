@@ -386,6 +386,7 @@ export function PartsPanel({ onClose }: PartsPanelProps): JSX.Element {
       transposeSemitones: inst.transposeSemitones,
       ...(inst.midiChannel !== undefined ? { midiChannel: inst.midiChannel } : {}),
       ...(inst.inputMode   !== undefined ? { inputMode:   inst.inputMode   } : {}),
+      ...(inst.tab         !== undefined ? { tabConfig:   inst.tab         } : {}),
     })
   }
 
