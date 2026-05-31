@@ -156,6 +156,7 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
     pushUndoSnapshot()
     const cleared: SequencePattern = {
       ...currentPattern,
+      label: rhythm.name,
       steps: Array.from({ length: currentPattern.stepsPerBar }, () => []),
     }
     dispatch({ type: 'UPSERT_SEQUENCE_PATTERN', partId, pattern: cleared })
