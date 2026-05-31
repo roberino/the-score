@@ -12,7 +12,7 @@
 import { produce } from 'immer'
 import { v4 as uuid } from 'uuid'
 import { createMeasure, createStaff } from './score'
-import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, PedalMark, SequencePattern, SequenceAssignment } from './score'
+import type { Score, NoteEvent, Note, Duration, ClefType, KeySignature, TimeSignature, BarlineType, Directive, Slur, Articulation, TextBox, Hairpin, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, PedalMark, SequencePattern, SequenceAssignment, TabConfig } from './score'
 import { measureCapacityUnits, eventDurationUnits, dottedUnits, DURATION_UNITS, resolveClef, resolveTimeSig, pitchToStep, stepToPitch, shiftPitchBySemitones, fillWithRests } from './musicUtils'
 
 // ── Command discriminated union ───────────────────────────────────────────────
@@ -41,7 +41,7 @@ export type Command =
   | { type: 'ADD_PART';             name: string; shortName: string; clef: ClefType; midiProgram: number; transposeSemitones: number; midiChannel?: number; inputMode?: 'score' | 'sequencer' }
   | { type: 'DELETE_PART';          partId: string }
   | { type: 'MOVE_PART';            partId: string; direction: 'up' | 'down' }
-  | { type: 'SET_PART_METADATA';    partId: string; name?: string; shortName?: string; midiProgram?: number; midiChannel?: number | null; transposeSemitones?: number; labelVisible?: boolean; volume?: number; muted?: boolean }
+  | { type: 'SET_PART_METADATA';    partId: string; name?: string; shortName?: string; midiProgram?: number; midiChannel?: number | null; transposeSemitones?: number; labelVisible?: boolean; volume?: number; muted?: boolean; showTab?: boolean; tabConfig?: TabConfig | null }
   | { type: 'SET_PART_GROUP';       partId: string; groupId: string | null; groupSymbol?: GroupSymbol }
   | { type: 'SET_SCORE_SHOW_LABELS'; visible: boolean }
   | { type: 'ADD_DIRECTIVE';         partId: string; staffId: string; measureId: string; directive: Directive }
@@ -580,6 +580,11 @@ export function applyCommand(score: Score, command: Command): Score {
         if (command.labelVisible       !== undefined) part.labelVisible       = command.labelVisible
         if (command.volume             !== undefined) part.volume             = command.volume
         if (command.muted              !== undefined) part.muted              = command.muted
+        if (command.showTab            !== undefined) part.showTab            = command.showTab
+        if (command.tabConfig          !== undefined) {
+          if (command.tabConfig === null) delete part.tabConfig
+          else part.tabConfig = command.tabConfig
+        }
         break
       }
 

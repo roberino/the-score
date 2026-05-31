@@ -6,6 +6,7 @@ import {
   computeLayout,
   computeSliceOffsets,
   computeSliceLayouts,
+  computeTotalHeight,
   renderScoreMulti,
   drawOverlay,
   type CanvasSlice,
@@ -649,10 +650,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
     const layouts = computeLayout(score, options)
     const sliceOffsets = computeSliceOffsets(layouts, options)
-    const lastLayout = layouts[layouts.length - 1]
-    const totalHeight = lastLayout
-      ? lastLayout.staveY + options.staveHeight + options.marginY
-      : options.marginY + options.staveHeight
+    const totalHeight = computeTotalHeight(layouts, options)
 
     // Sync canvas element count to slice count
     const existingCanvases = Array.from(canvasArea.childNodes)

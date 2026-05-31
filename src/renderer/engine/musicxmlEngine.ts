@@ -14,7 +14,9 @@ import type {
   Score, Part, Staff, Measure, Voice, NoteEvent, Note, Rest, Chord,
   Pitch, NoteName, Duration, Accidental, ClefType, BarlineType, Articulation,
   Directive, Slur, Hairpin, ScoreMetadata, TimeSignature, KeySignature, TupletInfo, DynamicLevel, Volta,
+  TabConfig,
 } from '@shared/score'
+import { pitchToMidi, pitchToTabPosition, chordToTabPositions } from '@shared/tabUtils'
 import { activeAssignmentAt } from '@shared/musicUtils'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -105,6 +107,37 @@ function transposeElement(transposeSemitones: number): string {
   return tag('transpose', `<diatonic>${diatonic}</diatonic><chromatic>${chromatic}</chromatic>`)
 }
 
+// ── Tab helpers ───────────────────────────────────────────────────────────────
+
+const MIDI_NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
+
+function midiToStepOctave(midi: number): { step: string; octave: number } {
+  const semi   = midi % 12
+  const octave = Math.floor(midi / 12) - 1
+  // Use enharmonic-neutral representation (sharps only) — good enough for tab tuning
+  const name = MIDI_NOTE_NAMES[semi]
+  return { step: name.replace('#',''), octave }  // e.g. C#4 → step=C, but MusicXML wants the sharp separately
+}
+
+/** Produce <staff-details> for a tab staff (first measure only). */
+function staffDetailsElement(tabConfig: TabConfig, lvl: number): string[] {
+  const { stringCount, openStrings } = tabConfig
+  const lines: string[] = [`${indent(lvl)}<staff-details>`]
+  lines.push(`${indent(lvl + 1)}<staff-lines>${stringCount}</staff-lines>`)
+  // MusicXML staff-tuning: line 1 = highest string. Our openStrings: index 0 = lowest.
+  for (let s = 0; s < stringCount; s++) {
+    const lineNum  = stringCount - s          // line 1 = highest (openStrings[stringCount-1])
+    const midi     = openStrings[s]
+    const { step, octave } = midiToStepOctave(midi)
+    lines.push(`${indent(lvl + 1)}<staff-tuning line="${lineNum}">`)
+    lines.push(`${indent(lvl + 2)}<tuning-step>${step}</tuning-step>`)
+    lines.push(`${indent(lvl + 2)}<tuning-octave>${octave}</tuning-octave>`)
+    lines.push(`${indent(lvl + 1)}</staff-tuning>`)
+  }
+  lines.push(`${indent(lvl)}</staff-details>`)
+  return lines
+}
+
 // ── Attributes block ──────────────────────────────────────────────────────────
 
 function attributesBlock(
@@ -116,6 +149,7 @@ function attributesBlock(
   scoreMode:   string,
   scoreTime:   TimeSignature,
   transposeSemitones: number,
+  tabConfig:   TabConfig | undefined,
   lvl:         number,
 ): string[] {
   const parts: string[] = []
@@ -152,8 +186,12 @@ function attributesBlock(
     parts.push(`${indent(lvl + 1)}${transposeElement(transposeSemitones)}`)
   }
 
-  if (parts.length === 0) return []
-  return [`${indent(lvl)}<attributes>`, ...parts, `${indent(lvl)}</attributes>`]
+  if (parts.length === 0 && !(isFirst && tabConfig)) return []
+
+  const result: string[] = [`${indent(lvl)}<attributes>`, ...parts]
+  if (isFirst && tabConfig) result.push(...staffDetailsElement(tabConfig, lvl + 1))
+  result.push(`${indent(lvl)}</attributes>`)
+  return result
 }
 
 // ── Directions ────────────────────────────────────────────────────────────────
@@ -278,6 +316,11 @@ function timeMod(actual: number, normal: number, duration: Duration, lvl: number
   ]
 }
 
+function tabTechnical(pos: { string: number; fret: number } | null | undefined, lvl: number): string {
+  if (!pos) return ''
+  return `${indent(lvl)}<notations><technical><string>${pos.string}</string><fret>${pos.fret}</fret></technical></notations>`
+}
+
 function noteLines(
   event: NoteEvent,
   beamState: BeamState,
@@ -286,6 +329,8 @@ function noteLines(
   tupletCtx?: TupletCtx,
   voiceNum = 1,
   prevLyricHyphen = false,
+  tabConfig?: TabConfig,
+  transposeSemitones = 0,
 ): string[] {
   const lines: string[] = []
   const tupletType: 'start' | 'stop' | undefined =
@@ -327,6 +372,11 @@ function noteLines(
     if (beamEl) lines.push(`${indent(lvl + 1)}${beamEl}`)
     if (tupletCtx) lines.push(...timeMod(tupletCtx.actual, tupletCtx.normal, n.duration, lvl + 1))
     if (notEl)  lines.push(`${indent(lvl + 1)}${notEl}`)
+    if (tabConfig) {
+      const midi = pitchToMidi(n.pitch.noteName, n.pitch.octave, n.pitch.accidental) - transposeSemitones
+      const tech = tabTechnical(pitchToTabPosition(midi, tabConfig), lvl + 1)
+      if (tech) lines.push(tech)
+    }
     if (n.lyric) {
       const isMidWord = n.lyric.endsWith('-')
       const text      = isMidWord ? n.lyric.slice(0, -1) : n.lyric
@@ -375,6 +425,12 @@ function noteLines(
       if (dotEls) lines.push(`${indent(lvl + 1)}${dotEls}`)
       if (accEl)  lines.push(`${indent(lvl + 1)}${accEl}`)
       if (notEl)  lines.push(`${indent(lvl + 1)}${notEl}`)
+      if (tabConfig) {
+        const midis = c.pitches.map(p => pitchToMidi(p.noteName, p.octave, p.accidental) - transposeSemitones)
+        const positions = chordToTabPositions(midis, tabConfig)
+        const tech = tabTechnical(positions[i], lvl + 1)
+        if (tech) lines.push(tech)
+      }
       if (i === 0 && (c as any).lyric) {
         const lyric     = (c as any).lyric as string
         const isMidWord = lyric.endsWith('-')
@@ -498,7 +554,8 @@ function partLines(score: Score, partIdx: number): string[] {
       lines.push(...barlineLines('heavy-light', prevMeasure?.barline === 'repeat-start' ? 'forward' : undefined, 'left', lvl + 1, ending))
     }
 
-    // Attributes (divisions, key, time, clef, transpose)
+    // Attributes (divisions, key, time, clef, transpose, tab staff-details)
+    const tabCfg = (part as any).showTab ? (part as any).tabConfig as TabConfig | undefined : undefined
     lines.push(...attributesBlock(
       measure, prevMeasure, isFirst,
       staff.clef,
@@ -506,6 +563,7 @@ function partLines(score: Score, partIdx: number): string[] {
       score.keySignature.mode,
       score.timeSignature,
       part.transposeSemitones,
+      tabCfg,
       lvl + 1,
     ))
 
@@ -644,7 +702,7 @@ function partLines(score: Score, partIdx: number): string[] {
           )
         }
         const prevHyphen = prevLyricHyphenByVoice.get(voiceNum) ?? false
-        lines.push(...noteLines(event, beamState, lvl + 1, slurMap, tupletCtxMap.get(event.id), voiceNum, prevHyphen))
+        lines.push(...noteLines(event, beamState, lvl + 1, slurMap, tupletCtxMap.get(event.id), voiceNum, prevHyphen, tabCfg, part.transposeSemitones))
         prevLyricHyphenByVoice.set(voiceNum, ((event as any).lyric as string | undefined)?.endsWith('-') ?? false)
         if (hairpinMaps.stops.has(event.id)) {
           lines.push(

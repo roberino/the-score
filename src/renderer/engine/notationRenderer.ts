@@ -25,7 +25,8 @@ import {
   type RenderContext
 } from 'vexflow'
 
-import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, SequencePattern } from '@shared/score'
+import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, SequencePattern, TabConfig } from '@shared/score'
+import { pitchToMidi, pitchToTabPosition, chordToTabPositions } from '@shared/tabUtils'
 import { resolveTimeSig, timeSigsEqual, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo, eventDurationUnits, activeAssignmentAt } from '@shared/musicUtils'
 
 // ── Duration mapping: our model → VexFlow key ────────────────────────────────
@@ -360,6 +361,9 @@ export interface MeasureLayout {
   measureIndex: number
   isLineStart: boolean
   showClef: boolean   // true when a clef symbol is rendered for this measure
+  systemRow: number   // which system row (line) this measure belongs to
+  tabStaveY?: number  // y of the top TAB string line (undefined when tab is off)
+  tabStringCount?: number
 }
 
 // VexFlow 5 default: spaceAboveStaffLn = 4, spacingBetweenLinesPx = 10
@@ -369,9 +373,18 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
   const layouts: MeasureLayout[] = []
   const { canvasWidth, staveHeight, marginX, marginY, measuresPerLine } = options
   const marginRight = options.marginRight ?? marginX
-  const totalParts  = score.parts.length
-  const rowHeight   = staveHeight * totalParts + 40
   const lineWidth   = canvasWidth - marginX - marginRight   // usable px per line
+
+  // Per-part heights (tab parts are taller than standard)
+  const partExtraH = score.parts.map(part => {
+    const tc = (part as any).tabConfig as TabConfig | undefined
+    if (!tc || !(part as any).showTab) return 0
+    return TAB_GAP_PX + (tc.stringCount - 1) * LINE_SPACING_PX + TAB_BOTTOM_MARGIN_PX
+  })
+  const partTotalH  = score.parts.map((_, i) => staveHeight + partExtraH[i])
+  const cumPartY: number[] = [0]
+  for (let i = 0; i < partTotalH.length - 1; i++) cumPartY.push(cumPartY[i] + partTotalH[i])
+  const rowHeight   = cumPartY[cumPartY.length - 1] + partTotalH[partTotalH.length - 1] + 40
 
   const firstPart  = score.parts[0]
   if (!firstPart) return layouts
@@ -534,7 +547,10 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
         const staffMeasure = staff.measures[m.mIdx]
         if (!staffMeasure) return
         const staffClef = resolveClef(staff.measures, m.mIdx, staff.clef)
-        const y = yBase + partIndex * staveHeight
+        const y = yBase + cumPartY[partIndex]
+        const staveTopY = y + VEXFLOW_HEADROOM_PX
+        const tc = (part as any).tabConfig as TabConfig | undefined
+        const hasTab = tc && (part as any).showTab
         layouts.push({
           measureId:          staffMeasure.id,
           partId:             part.id,
@@ -543,12 +559,17 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
           clef:               staffClef,
           transposeSemitones: part.transposeSemitones,
           x,
-          staveTopY:          y + VEXFLOW_HEADROOM_PX,
+          staveTopY,
           staveY:             y,
           width,
           measureIndex:       m.mIdx,
           isLineStart:        m.isLineStart,
           showClef:           m.showClefMap.get(staff.id) ?? m.isLineStart,
+          systemRow:          m.lineIndex,
+          ...(hasTab ? {
+            tabStaveY:      staveTopY + STAVE_HEIGHT_PX + TAB_GAP_PX,
+            tabStringCount: tc!.stringCount,
+          } : {}),
         })
       })
     })
@@ -597,6 +618,22 @@ export interface BarSelection {
 }
 
 /**
+ * Returns the total canvas height needed for the given layouts.
+ * Accounts for tab staves on the last row.
+ */
+export function computeTotalHeight(layouts: MeasureLayout[], options: RenderOptions): number {
+  if (!layouts.length) return options.marginY + options.staveHeight
+  let maxBottomY = 0
+  for (const l of layouts) {
+    const bottomY = l.tabStaveY !== undefined && l.tabStringCount !== undefined
+      ? l.tabStaveY + (l.tabStringCount - 1) * LINE_SPACING_PX + TAB_BOTTOM_MARGIN_PX
+      : l.staveY + options.staveHeight
+    if (bottomY > maxBottomY) maxBottomY = bottomY
+  }
+  return maxBottomY + options.marginY
+}
+
+/**
  * Given a pre-computed layout, return the Y offsets at which new canvas slices
  * should start so that no single slice exceeds the browser's canvas height limit.
  * Returns [0] when the whole score fits in one canvas.
@@ -607,23 +644,19 @@ export function computeSliceOffsets(
 ): number[] {
   if (!layouts.length) return [0]
 
-  const last = layouts[layouts.length - 1]
-  const totalHeight = last.staveY + options.staveHeight + options.marginY
+  const totalHeight = computeTotalHeight(layouts, options)
 
   const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1
   const maxSliceH = Math.floor(32767 / Math.max(1, dpr))
   if (totalHeight <= maxSliceH) return [0]
 
-  // Identify where each system row starts.  Within a row, consecutive staveY
-  // values are spaced by exactly options.staveHeight; between rows the gap is
-  // larger (staveHeight + 40).  We use strict-greater to distinguish them.
-  const sortedYs = [...new Set(layouts.map(l => l.staveY))].sort((a, b) => a - b)
-  const rowStartYs: number[] = []
-  let prevY = -Infinity
-  for (const y of sortedYs) {
-    if (y - prevY > options.staveHeight) rowStartYs.push(y)
-    prevY = y
+  // Use the systemRow field to identify row boundaries reliably (immune to variable part heights).
+  const rowStartMap = new Map<number, number>()   // systemRow → min staveY in that row
+  for (const l of layouts) {
+    const existing = rowStartMap.get(l.systemRow)
+    if (existing === undefined || l.staveY < existing) rowStartMap.set(l.systemRow, l.staveY)
   }
+  const rowStartYs = [...rowStartMap.values()].sort((a, b) => a - b)
 
   const offsets: number[] = [0]
   let sliceStartY = 0
@@ -662,10 +695,7 @@ export function renderScoreMulti(
   if (!score.parts[0] || !slices.length) return { notePositions, noteStartX, layouts: [], noteToMeasureKey }
 
   const layouts = precomputedLayouts ?? computeLayout(score, options)
-  const lastLayout   = layouts[layouts.length - 1]
-  const totalHeight  = lastLayout
-    ? lastLayout.staveY + options.staveHeight + options.marginY
-    : options.marginY + options.staveHeight
+  const totalHeight  = computeTotalHeight(layouts, options)
 
   for (let si = 0; si < slices.length; si++) {
     const slice      = slices[si]
@@ -705,7 +735,12 @@ export function computeSliceLayouts(
 ): MeasureLayout[] {
   return allLayouts
     .filter(l => l.staveY >= yOffset && l.staveY < nextOffset)
-    .map(l => ({ ...l, staveY: l.staveY - yOffset, staveTopY: l.staveTopY - yOffset }))
+    .map(l => ({
+      ...l,
+      staveY:    l.staveY    - yOffset,
+      staveTopY: l.staveTopY - yOffset,
+      ...(l.tabStaveY !== undefined ? { tabStaveY: l.tabStaveY - yOffset } : {}),
+    }))
 }
 
 /**
@@ -824,10 +859,7 @@ export function renderScore(
   selectedChordPitchInfo: SelectedChordPitchInfo | null = null
 ): RenderScoreResult {
   const layouts = computeLayout(score, options)
-  const lastLayout  = layouts[layouts.length - 1]
-  const totalHeight = lastLayout
-    ? lastLayout.staveY + options.staveHeight + options.marginY
-    : options.marginY + options.staveHeight
+  const totalHeight = computeTotalHeight(layouts, options)
   const slice: CanvasSlice = { canvas, yOffset: 0, height: totalHeight }
   const result = renderScoreMulti([slice], score, options, selectedChordPitchInfo, layouts)
   // For single-canvas use, draw overlays directly onto the same canvas
@@ -835,6 +867,118 @@ export function renderScore(
   drawOverlay(canvas, sliceLocalLayouts, score, result.notePositions, result.noteToMeasureKey,
     result.noteStartX, selectedNoteIds, cursor, selectedMeasureId, lyricCursorNoteId, null)
   return result
+}
+
+// ── Tab staff renderer ────────────────────────────────────────────────────────
+// Draws the tab staff for one measure using pre-computed note X positions.
+// All string lines, barlines, fret numbers, and the TAB label are drawn with
+// the native Canvas2D API so no VexFlow layout pass is needed.
+
+function drawTabMeasure(
+  nCtx: CanvasRenderingContext2D,
+  layout: MeasureLayout,
+  measure: Measure,
+  tabStaveY: number,
+  stringCount: number,
+  tabConfig: TabConfig,
+  transposeSemitones: number,
+  notePositions: Map<string, number>,
+): void {
+  const { x, width, isLineStart } = layout
+  const stringSpacing = LINE_SPACING_PX
+  const tabBottom     = tabStaveY + (stringCount - 1) * stringSpacing
+
+  nCtx.save()
+
+  // ── String lines ───────────────────────────────────────────────────────────
+  nCtx.strokeStyle = '#555'
+  nCtx.lineWidth   = 0.8
+  for (let s = 0; s < stringCount; s++) {
+    const lineY = tabStaveY + s * stringSpacing
+    nCtx.beginPath()
+    nCtx.moveTo(x, lineY)
+    nCtx.lineTo(x + width, lineY)
+    nCtx.stroke()
+  }
+
+  // ── Barlines ───────────────────────────────────────────────────────────────
+  const drawVBar = (bx: number, lw = 1) => {
+    nCtx.strokeStyle = '#555'
+    nCtx.lineWidth   = lw
+    nCtx.beginPath()
+    nCtx.moveTo(bx, tabStaveY)
+    nCtx.lineTo(bx, tabBottom)
+    nCtx.stroke()
+  }
+
+  drawVBar(x)  // left barline
+  const barline = measure.barline ?? 'single'
+  if (barline === 'final') {
+    drawVBar(x + width - 2, 1)
+    drawVBar(x + width,     3)
+  } else if (barline === 'double' || barline === 'repeat-end') {
+    drawVBar(x + width - 3, 1)
+    drawVBar(x + width,     1)
+  } else {
+    drawVBar(x + width, 1)
+  }
+
+  // ── TAB label (line-start measures only) ───────────────────────────────────
+  if (isLineStart) {
+    nCtx.font        = 'bold 10px sans-serif'
+    nCtx.fillStyle   = '#555'
+    nCtx.textAlign   = 'center'
+    nCtx.textBaseline = 'middle'
+    const labelX = x - 16
+    const midY   = tabStaveY + (stringCount - 1) * stringSpacing / 2
+    const letters = ['T', 'A', 'B']
+    const yStep   = Math.min(stringSpacing, 11)
+    const totalH  = (letters.length - 1) * yStep
+    letters.forEach((ch, i) => nCtx.fillText(ch, labelX, midY - totalH / 2 + i * yStep))
+  }
+
+  // ── Fret numbers ───────────────────────────────────────────────────────────
+  const events = measure.voices[0]?.events ?? []
+
+  nCtx.font          = '9px monospace'
+  nCtx.textAlign     = 'center'
+  nCtx.textBaseline  = 'middle'
+
+  for (const event of events) {
+    if (event.type === 'rest') continue
+    const noteX = notePositions.get(event.id)
+    if (noteX === undefined) continue
+
+    let positions: Array<{ string: number; fret: number } | null>
+
+    if (event.type === 'note') {
+      const midi = pitchToMidi(event.pitch.noteName, event.pitch.octave, event.pitch.accidental) - transposeSemitones
+      positions = [pitchToTabPosition(midi, tabConfig)]
+    } else {
+      // chord — map pitches to MIDI, subtract transposeSemitones
+      const midis = event.pitches.map(p =>
+        pitchToMidi(p.noteName, p.octave, p.accidental) - transposeSemitones
+      )
+      positions = chordToTabPositions(midis, tabConfig)
+    }
+
+    for (const pos of positions) {
+      if (!pos) continue
+      // pos.string: 1 = highest/thinnest string (top line of tab)
+      const lineIdx = pos.string - 1   // 0 = top string line
+      const lineY   = tabStaveY + lineIdx * stringSpacing
+      const txt     = String(pos.fret)
+      const tw      = nCtx.measureText(txt).width
+      const pad     = 2
+      // White background to erase the string line beneath the number
+      nCtx.fillStyle = '#ffffff'
+      nCtx.fillRect(noteX - tw / 2 - pad, lineY - 5.5, tw + pad * 2, 11)
+      nCtx.fillStyle = '#111'
+      nCtx.fillText(txt, noteX, lineY)
+    }
+  }
+
+  nCtx.restore()
 }
 
 // ── Render all measures from precomputed layouts ──────────────────────────────
@@ -1030,6 +1174,20 @@ function renderFromLayouts(
     // Note-attached dynamics below the stave
     if (staveNotes.length > 0) {
       drawNoteDynamics(ctx, staveNotes, events, pedalY)
+    }
+
+    // ── Tab staff ────────────────────────────────────────────────────────────
+    if (layout.tabStaveY !== undefined && layout.tabStringCount !== undefined) {
+      const nCtxTab: CanvasRenderingContext2D | null =
+        typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
+      const tabCfg = (part as any).tabConfig as TabConfig | undefined
+      if (nCtxTab && tabCfg) {
+        drawTabMeasure(
+          nCtxTab, layout, measure,
+          layout.tabStaveY, layout.tabStringCount, tabCfg,
+          part.transposeSemitones, notePositions,
+        )
+      }
     }
   }
 
@@ -1908,8 +2066,10 @@ function drawSequencerMeasureOverlay(
 
 // ── Cursor overlay ────────────────────────────────────────────────────────────
 
-const LINE_SPACING_PX       = 10
-export const STAVE_HEIGHT_PX = 4 * LINE_SPACING_PX
+export const LINE_SPACING_PX        = 10
+export const STAVE_HEIGHT_PX        = 4 * LINE_SPACING_PX
+export const TAB_GAP_PX             = 12   // gap between std-stave bottom and first tab string
+export const TAB_BOTTOM_MARGIN_PX   = 10   // space below last tab string
 
 // ── Below-stave layout constants ─────────────────────────────────────────────
 // Stack order from stave bottom: lyrics → note dynamics → pedal marks → MIDI events.

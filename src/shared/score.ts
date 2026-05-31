@@ -199,6 +199,12 @@ export interface SequenceAssignment {
 
 export type GroupSymbol = 'bracket' | 'brace'
 
+export interface TabConfig {
+  readonly stringCount:  number
+  readonly openStrings:  readonly number[]  // MIDI note of each open string, index 0 = lowest pitch
+  readonly fretCount:    number
+}
+
 export interface Part {
   readonly id: string
   readonly name: string              // e.g. "Violin I"
@@ -215,6 +221,8 @@ export interface Part {
   readonly inputMode?: 'score' | 'sequencer'  // defaults to 'score' when absent
   readonly sequencePatterns?: readonly SequencePattern[]
   readonly sequenceAssignments?: readonly SequenceAssignment[]
+  readonly showTab?:   boolean     // render tab staff below standard staff
+  readonly tabConfig?: TabConfig   // set when instrument supports tab
 }
 
 export interface ScoreMetadata {

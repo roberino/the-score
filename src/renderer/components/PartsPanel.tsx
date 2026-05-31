@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { INSTRUMENTS, INSTRUMENT_FAMILIES, FAMILY_LABELS, type InstrumentDef } from '@shared/instruments'
-import type { ClefType, GroupSymbol } from '@shared/score'
+import type { ClefType, GroupSymbol, TabConfig } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 
 // ── Instrument picker flyout ──────────────────────────────────────────────────
@@ -106,6 +106,8 @@ interface PartRowProps {
   labelVisible: boolean
   midiChannel: number
   inputMode: 'score' | 'sequencer'
+  showTab: boolean
+  tabConfig: TabConfig | undefined
   groupId?: string
   groupSymbol?: GroupSymbol
   availableGroups: GroupDef[]
@@ -114,7 +116,7 @@ interface PartRowProps {
   canDelete: boolean
 }
 
-function PartRow({ partId, name, shortName, labelVisible, midiChannel, inputMode, groupId, groupSymbol, availableGroups, isFirst, isLast, canDelete }: PartRowProps): JSX.Element {
+function PartRow({ partId, name, shortName, labelVisible, midiChannel, inputMode, showTab, tabConfig, groupId, groupSymbol, availableGroups, isFirst, isLast, canDelete }: PartRowProps): JSX.Element {
   const { dispatch } = useAppStore()
   const [expanded, setExpanded]           = useState(false)
   const [editName, setEditName]           = useState(name)
@@ -146,6 +148,8 @@ function PartRow({ partId, name, shortName, labelVisible, midiChannel, inputMode
       midiProgram:        inst.midiProgram,
       transposeSemitones: inst.transposeSemitones,
       ...(inst.midiChannel !== undefined ? { midiChannel: inst.midiChannel } : {}),
+      tabConfig:  inst.tab ?? null,   // null clears any existing tab config
+      showTab:    false,              // reset on instrument change; user opts in
     })
     if (inst.inputMode !== undefined) {
       dispatch({ type: 'SET_PART_INPUT_MODE', partId, mode: inst.inputMode })
@@ -248,6 +252,18 @@ function PartRow({ partId, name, shortName, labelVisible, midiChannel, inputMode
             />
             Show label on score
           </label>
+
+          {/* Tab notation (only for fretted instruments) */}
+          {tabConfig && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#bbb', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={showTab}
+                onChange={e => dispatch({ type: 'SET_PART_METADATA', partId, showTab: e.target.checked })}
+              />
+              Show tab notation
+            </label>
+          )}
 
           {/* Input mode */}
           <div>
@@ -410,6 +426,8 @@ export function PartsPanel({ onClose }: PartsPanelProps): JSX.Element {
             labelVisible={part.labelVisible}
             midiChannel={part.midiChannel ?? Math.min(idx + 1, 16)}
             inputMode={part.inputMode ?? 'score'}
+            showTab={(part as any).showTab ?? false}
+            tabConfig={(part as any).tabConfig as TabConfig | undefined}
             {...(part.groupId ? { groupId: part.groupId, groupSymbol: part.groupSymbol } : {})}
             availableGroups={availableGroups}
             isFirst={idx === 0}

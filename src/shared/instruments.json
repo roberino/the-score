@@ -64,7 +64,44 @@
       "midiProgram": 25,
       "transposeSemitones": 12,
       "icon": "guitar.svg",
-      "pitchRange": { "min": 40, "max": 77 }
+      "pitchRange": { "min": 40, "max": 77 },
+      "tab": { "stringCount": 6, "openStrings": [40, 45, 50, 55, 59, 64], "fretCount": 24 }
+    },
+    {
+      "id": "bass-guitar",
+      "name": "Bass Guitar",
+      "shortName": "Bass",
+      "family": "strings",
+      "defaultClef": "bass",
+      "midiProgram": 33,
+      "transposeSemitones": 12,
+      "icon": "guitar.svg",
+      "pitchRange": { "min": 28, "max": 55 },
+      "tab": { "stringCount": 4, "openStrings": [28, 33, 38, 43], "fretCount": 24 }
+    },
+    {
+      "id": "guitar-7string",
+      "name": "Guitar (7-string)",
+      "shortName": "Gtr.7",
+      "family": "strings",
+      "defaultClef": "treble",
+      "midiProgram": 25,
+      "transposeSemitones": 12,
+      "icon": "guitar.svg",
+      "pitchRange": { "min": 35, "max": 77 },
+      "tab": { "stringCount": 7, "openStrings": [35, 40, 45, 50, 55, 59, 64], "fretCount": 24 }
+    },
+    {
+      "id": "ukulele",
+      "name": "Ukulele",
+      "shortName": "Uke.",
+      "family": "strings",
+      "defaultClef": "treble",
+      "midiProgram": 24,
+      "transposeSemitones": 0,
+      "icon": "guitar.svg",
+      "pitchRange": { "min": 60, "max": 81 },
+      "tab": { "stringCount": 4, "openStrings": [67, 60, 64, 69], "fretCount": 15 }
     },
 
     {

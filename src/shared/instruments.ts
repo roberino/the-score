@@ -1,4 +1,4 @@
-import type { ClefType } from './score'
+import type { ClefType, TabConfig } from './score'
 import data from './instruments.json'
 
 export type InstrumentFamily = 'strings' | 'woodwinds' | 'brass' | 'keyboards' | 'percussion' | 'voices' | 'synths'
@@ -28,6 +28,8 @@ export interface InstrumentDef {
   readonly midiChannel?: number
   /** Default input mode for this instrument. */
   readonly inputMode?: 'score' | 'sequencer'
+  /** Tab config — present only for fretted string instruments. */
+  readonly tab?: TabConfig
 }
 
 export const INSTRUMENTS: readonly InstrumentDef[] = data.instruments as InstrumentDef[]
