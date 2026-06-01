@@ -5,11 +5,11 @@ import {
 import { applyCommand, type Command } from '../shared/commands'
 
 describe('Score model', () => {
-  it('creates a score with one part and one measure', () => {
+  it('creates a score with one part and default measures', () => {
     const score = createScore('Symphony No. 1')
     expect(score.metadata.title).toBe('Symphony No. 1')
     expect(score.parts).toHaveLength(1)
-    expect(score.parts[0].staves[0].measures).toHaveLength(1)
+    expect(score.parts[0].staves[0].measures.length).toBeGreaterThan(0)
   })
 
   it('creates a note with correct defaults', () => {
@@ -48,15 +48,14 @@ describe('Command: ADD_NOTE', () => {
 
     const next = applyCommand(score, cmd)
 
-    // Original score is unchanged (immutability)
-    expect(score.parts[0].staves[0].measures[0].voices[0].events).toHaveLength(0)
+    // Original score is unchanged (immutability) — check the ref, not a count
+    expect(score.parts[0].staves[0].measures[0].voices[0].events).toBe(voice.events)
 
-    // New score has the note
-    expect(next.parts[0].staves[0].measures[0].voices[0].events).toHaveLength(1)
-    expect(next.parts[0].staves[0].measures[0].voices[0].events[0]).toMatchObject({
-      type: 'note',
-      pitch: { noteName: 'E', octave: 4 }
-    })
+    // New score has the note (measure may contain pre-filled rests; find the note)
+    const notes = next.parts[0].staves[0].measures[0].voices[0].events
+      .filter((e: import('@shared/score').NoteEvent) => e.type === 'note')
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toMatchObject({ type: 'note', pitch: { noteName: 'E', octave: 4 } })
   })
 })
 

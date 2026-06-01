@@ -54,7 +54,7 @@ function midiNoteToInput(midiNote: number, velocity: number): NoteInput {
   return { noteName, octave, ...(accidental ? { accidental } : {}), velocity, source: 'midi' }
 }
 
-class MidiService {
+export class MidiService {
   private access:          MIDIAccess | null = null
   private handlers:        Set<NoteInputHandler> = new Set()
   private controlHandlers: Set<MidiControlHandler> = new Set()
