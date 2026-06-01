@@ -49,6 +49,67 @@ export function firstRestBeat(events: readonly NoteEvent[]): number {
   return beat
 }
 
+// Move the input cursor one event forward or backward within a staff's measure list.
+// Returns the new { measureId, beatPosition }, or null if already at the score boundary.
+export function moveCursorPosition(
+  measures: readonly Measure[],
+  cursorMeasureId: string,
+  cursorBeatPosition: number,
+  voiceIndex: number,
+  direction: 'prev' | 'next',
+  scoreTimeSig: TimeSignature,
+): { measureId: string; beatPosition: number } | null {
+  const mIdx = measures.findIndex(m => m.id === cursorMeasureId)
+  if (mIdx === -1) return null
+
+  const voiceEvents =
+    (measures[mIdx].voices[voiceIndex] ?? measures[mIdx].voices[0])?.events ?? []
+
+  if (direction === 'next') {
+    let acc = 0
+    for (const ev of voiceEvents) {
+      if (acc === cursorBeatPosition) {
+        const nextBeat = acc + eventDurationUnits(ev)
+        const timeSig  = resolveTimeSig(measures, mIdx, scoreTimeSig)
+        const capacity = measureCapacityUnits(timeSig)
+        if (nextBeat < capacity) {
+          return { measureId: cursorMeasureId, beatPosition: nextBeat }
+        }
+        const nextMeasure = measures[mIdx + 1]
+        if (!nextMeasure) return null
+        const nextVoiceEvents =
+          (nextMeasure.voices[voiceIndex] ?? nextMeasure.voices[0])?.events ?? []
+        return { measureId: nextMeasure.id, beatPosition: firstRestBeat(nextVoiceEvents) }
+      }
+      acc += eventDurationUnits(ev)
+      if (acc > cursorBeatPosition) break
+    }
+    return null
+  } else {
+    if (cursorBeatPosition === 0) {
+      if (mIdx === 0) return null
+      const prevMeasure = measures[mIdx - 1]
+      const prevVoiceEvents =
+        (prevMeasure.voices[voiceIndex] ?? prevMeasure.voices[0])?.events ?? []
+      let lastBeat = 0
+      let acc = 0
+      for (const ev of prevVoiceEvents) {
+        lastBeat = acc
+        acc += eventDurationUnits(ev)
+      }
+      return { measureId: prevMeasure.id, beatPosition: lastBeat }
+    }
+    let prevBeat = 0
+    let acc = 0
+    for (const ev of voiceEvents) {
+      if (acc >= cursorBeatPosition) break
+      prevBeat = acc
+      acc += eventDurationUnits(ev)
+    }
+    return { measureId: cursorMeasureId, beatPosition: prevBeat }
+  }
+}
+
 const FILL_REST_TABLE: { units: number; duration: Duration; dots: 0 | 1 | 2 }[] = [
   { units: 64, duration: 'whole',   dots: 0 },
   { units: 48, duration: 'half',    dots: 1 },

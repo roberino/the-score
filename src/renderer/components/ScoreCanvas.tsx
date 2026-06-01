@@ -43,6 +43,7 @@ import {
   buildPlaybackSequence,
   buildMeasureTimeline,
   firstRestBeat,
+  moveCursorPosition,
   activeAssignmentAt,
   type MeasureTimeEntry,
 } from '@shared/musicUtils'
@@ -1589,6 +1590,21 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     }
   }, [score, selectedNoteId, selectedNoteIds, setSelectedNote])
 
+  const moveCursorByEvent = useCallback((direction: 'prev' | 'next') => {
+    if (!cursorMeasureId) return
+    for (const part of score.parts) {
+      for (const staff of part.staves) {
+        if (!staff.measures.some(m => m.id === cursorMeasureId)) continue
+        const result = moveCursorPosition(
+          staff.measures, cursorMeasureId, cursorBeatPosition,
+          activeVoice, direction, score.timeSignature,
+        )
+        if (result) setCursor(result.measureId, result.beatPosition)
+        return
+      }
+    }
+  }, [score, cursorMeasureId, cursorBeatPosition, activeVoice, setCursor])
+
   // Locate a note event's part and staff (used for tie/slur dispatch)
   const findNoteLocation = useCallback((noteId: string): { partId: string; staffId: string } | null => {
     for (const part of score.parts) {
@@ -1900,6 +1916,10 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         if (e.key === 'ArrowDown') { e.preventDefault(); setPrimedAccidental('flat');  return }
         if (e.key === '0')         {                      setPrimedAccidental('natural'); return }
       }
+      if ((inputMode === 'note' || inputMode === 'rest') && !mod) {
+        if (e.key === 'ArrowLeft')  { e.preventDefault(); moveCursorByEvent('prev'); return }
+        if (e.key === 'ArrowRight') { e.preventDefault(); moveCursorByEvent('next'); return }
+      }
 
       // Mode shortcuts (no modifier, no shift)
       if (!mod && !e.shiftKey) {
@@ -1988,7 +2008,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
   }, [
     inputMode, score, selectedNoteId, selectedNoteIds, slurPendingId,
     enterNote, enterRest, deleteSelectedNotes, nudgeOctave,
-    moveSelectedNotes, navigateSelection, selectAllInMeasure,
+    moveSelectedNotes, navigateSelection, moveCursorByEvent, selectAllInMeasure,
     toggleTie, handleSlurKey,
     setInputMode, setSelectedDuration, toggleDot, resizeNote, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
     insertMeasure, deleteMeasure, selectedMeasureId, insertTuplet,

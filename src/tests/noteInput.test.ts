@@ -2,6 +2,7 @@
 //   duration arithmetic (guards note placement logic)
 //   score commands (ADD_NOTE) that the MIDI handler ultimately drives
 //   measure-full guard (remainingUnits controls whether a MIDI note is accepted)
+//   moveCursorPosition (arrow-key cursor navigation in note/rest mode)
 //
 // createScore() pre-fills each measure with whole-note rests. Tests that count
 // events filter by type ('note' vs 'rest') to stay independent of that detail.
@@ -10,6 +11,7 @@ import { describe, it, expect } from 'vitest'
 import {
   DURATION_UNITS, dottedUnits, measureCapacityUnits,
   remainingUnits, firstRestBeat, eventDurationUnits,
+  moveCursorPosition,
 } from '@shared/musicUtils'
 import { createScore, createNote, createRest, createMeasure, type Duration } from '@shared/score'
 import { applyCommand } from '@shared/commands'
@@ -197,5 +199,121 @@ describe('ADD_NOTE command', () => {
     })
     const notes = notesIn(next.parts[0].staves[0].measures[0].voices[0].events)
     expect(notes[0]).toMatchObject({ pitch: { noteName: 'C', accidental: 'sharp' } })
+  })
+})
+
+// ── moveCursorPosition — arrow-key cursor navigation ─────────────────────────
+
+const SIG_44 = { numerator: 4, denominator: 4 }
+const SIG_34 = { numerator: 3, denominator: 4 }
+
+/** Build a minimal Measure stub with one voice containing the given events. */
+function makeMeasureStub(id: string, events: import('@shared/score').NoteEvent[]): import('@shared/score').Measure {
+  return { id, number: 1, voices: [{ id: 'v1', events }] }
+}
+
+describe('moveCursorPosition — move right within a measure', () => {
+  it('advances from beat 0 to beat 16 (past a quarter note)', () => {
+    const measures = [makeMeasureStub('m1', [
+      createNote('C', 4, 'quarter'),
+      createNote('D', 4, 'quarter'),
+      createRest('half'),
+    ])]
+    expect(moveCursorPosition(measures, 'm1', 0, 0, 'next', SIG_44))
+      .toEqual({ measureId: 'm1', beatPosition: 16 })
+  })
+
+  it('advances over a dotted-quarter to the correct next beat', () => {
+    const dq = { ...createNote('C', 4, 'quarter'), dots: 1 as const }
+    const measures = [makeMeasureStub('m1', [dq, createRest('eighth')])]
+    expect(moveCursorPosition(measures, 'm1', 0, 0, 'next', SIG_44))
+      .toEqual({ measureId: 'm1', beatPosition: 24 })
+  })
+
+  it('from second-to-last event advances to start of last event', () => {
+    const measures = [makeMeasureStub('m1', [
+      createNote('C', 4, 'quarter'),  // beat 0
+      createNote('D', 4, 'quarter'),  // beat 16
+      createRest('half'),             // beat 32
+    ])]
+    expect(moveCursorPosition(measures, 'm1', 16, 0, 'next', SIG_44))
+      .toEqual({ measureId: 'm1', beatPosition: 32 })
+  })
+})
+
+describe('moveCursorPosition — move right across measure boundary', () => {
+  it('from last event of measure 1 jumps to beat 0 of measure 2', () => {
+    const measures = [
+      makeMeasureStub('m1', [createNote('C', 4, 'whole')]),
+      makeMeasureStub('m2', [createNote('D', 4, 'quarter'), createRest('half'), createRest('quarter')]),
+    ]
+    // beat 0 is start of the whole note; after it (64 units) = end of measure → jump to m2
+    expect(moveCursorPosition(measures, 'm1', 0, 0, 'next', SIG_44))
+      .toEqual({ measureId: 'm2', beatPosition: 16 })  // firstRestBeat of m2 = after the D note
+  })
+
+  it('returns null when at the last event of the last measure', () => {
+    const measures = [makeMeasureStub('m1', [createNote('C', 4, 'whole')])]
+    expect(moveCursorPosition(measures, 'm1', 0, 0, 'next', SIG_44)).toBeNull()
+  })
+})
+
+describe('moveCursorPosition — move left within a measure', () => {
+  it('moves back from beat 16 to beat 0', () => {
+    const measures = [makeMeasureStub('m1', [
+      createNote('C', 4, 'quarter'),
+      createNote('D', 4, 'quarter'),
+      createRest('half'),
+    ])]
+    expect(moveCursorPosition(measures, 'm1', 16, 0, 'prev', SIG_44))
+      .toEqual({ measureId: 'm1', beatPosition: 0 })
+  })
+
+  it('moves back from beat 32 to beat 16', () => {
+    const measures = [makeMeasureStub('m1', [
+      createNote('C', 4, 'quarter'),
+      createNote('D', 4, 'quarter'),
+      createRest('half'),
+    ])]
+    expect(moveCursorPosition(measures, 'm1', 32, 0, 'prev', SIG_44))
+      .toEqual({ measureId: 'm1', beatPosition: 16 })
+  })
+})
+
+describe('moveCursorPosition — move left across measure boundary', () => {
+  it('from beat 0 of measure 2 jumps to start of last event in measure 1', () => {
+    const measures = [
+      makeMeasureStub('m1', [
+        createNote('C', 4, 'quarter'),  // beat 0
+        createNote('D', 4, 'quarter'),  // beat 16
+        createRest('half'),             // beat 32
+      ]),
+      makeMeasureStub('m2', [createNote('E', 4, 'whole')]),
+    ]
+    expect(moveCursorPosition(measures, 'm2', 0, 0, 'prev', SIG_44))
+      .toEqual({ measureId: 'm1', beatPosition: 32 })
+  })
+
+  it('returns null when already at beat 0 of the first measure', () => {
+    const measures = [makeMeasureStub('m1', [createNote('C', 4, 'whole')])]
+    expect(moveCursorPosition(measures, 'm1', 0, 0, 'prev', SIG_44)).toBeNull()
+  })
+})
+
+describe('moveCursorPosition — edge cases', () => {
+  it('returns null for an unrecognised cursorMeasureId', () => {
+    const measures = [makeMeasureStub('m1', [createNote('C', 4, 'quarter')])]
+    expect(moveCursorPosition(measures, 'bogus', 0, 0, 'next', SIG_44)).toBeNull()
+  })
+
+  it('respects a 3/4 measure capacity when stepping right to the next measure', () => {
+    // 3/4 = 48 units. One dotted-half fills it. Stepping right should jump to next measure.
+    const dh = { ...createNote('C', 4, 'half'), dots: 1 as const }
+    const measures = [
+      makeMeasureStub('m1', [dh]),
+      makeMeasureStub('m2', [createRest('half'), createRest('quarter')]),
+    ]
+    expect(moveCursorPosition(measures, 'm1', 0, 0, 'next', SIG_34))
+      .toEqual({ measureId: 'm2', beatPosition: 0 })
   })
 })

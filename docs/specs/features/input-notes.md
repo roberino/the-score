@@ -73,6 +73,20 @@ After a note or rest is successfully entered, the cursor advances to the next be
 - If the measure is now full, advance to beat 0 of the next measure
 - If the last measure is full, do not advance (entry stops at the score boundary)
 
+### Cursor Navigation
+
+While in Note or Rest mode, the left and right arrow keys move the cursor without entering any note or rest:
+
+| Key | Effect |
+|-----|--------|
+| `←` (ArrowLeft) | Move cursor to the start of the previous event |
+| `→` (ArrowRight) | Move cursor to the start of the next event |
+
+- Moving **right** past the last event of a measure advances to the first event of the next measure
+- Moving **left** from the first event of a measure jumps to the last event of the previous measure
+- At the score boundary (first event of first measure / last event of last measure) the key has no effect
+- In Note mode, `ArrowLeft`/`ArrowRight` take priority over accidental priming (`↑`/`↓`)
+
 ---
 
 ## Note Input Mode
@@ -254,3 +268,5 @@ A **Sound** button in the toolbar's top row toggles `soundOnInput` in `appStore`
 8. In Select mode, clicking a note selects it (blue highlight); pressing `Delete` removes it
 9. Duration key `6` followed by `.` produces a dotted half note
 10. `Ctrl+Up` on a selected note raises it by one octave
+11. In Note or Rest mode, `ArrowRight` moves the cursor to the next event without entering a note; `ArrowLeft` moves it back
+12. Arrow cursor navigation wraps correctly across measure boundaries
