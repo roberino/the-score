@@ -51,16 +51,16 @@ describe('MidiService — port filtering', () => {
     await svc.connect()
   })
 
-  it('null (None) enables all ports — initial state after connect', () => {
-    expect(portA.onmidimessage).not.toBeNull()
-    expect(portB.onmidimessage).not.toBeNull()
+  it('null (None) silences all ports — initial state after connect', () => {
+    expect(portA.onmidimessage).toBeNull()
+    expect(portB.onmidimessage).toBeNull()
   })
 
-  it('selectInput(null) enables all ports after a specific selection', () => {
+  it('selectInput(null) silences all ports after a specific selection', () => {
     svc.selectInput('a')
     svc.selectInput(null)
-    expect(portA.onmidimessage).not.toBeNull()
-    expect(portB.onmidimessage).not.toBeNull()
+    expect(portA.onmidimessage).toBeNull()
+    expect(portB.onmidimessage).toBeNull()
   })
 
   it('selectInput(id) enables only the matching port', () => {
@@ -84,17 +84,18 @@ describe('MidiService — port filtering', () => {
     expect(portB.onmidimessage).toBeNull()
   })
 
-  it('output filter with null selectInput silences only the output-named port', () => {
-    // Null = no device filter: all ports are candidates, but the output port
-    // must still be excluded to prevent IAC loopback.
+  it('output filter with null selectInput (None): all ports remain silenced', () => {
+    // Null = no device selected: all ports stay silenced regardless of the output filter.
     svc.setOutputFilter('IAC Driver Bus 1')
-    expect(portA.onmidimessage).not.toBeNull()
+    expect(portA.onmidimessage).toBeNull()
     expect(portB.onmidimessage).toBeNull()
   })
 
-  it('clearing the output filter re-enables the previously silenced port', () => {
-    svc.setOutputFilter('IAC Driver Bus 1')
-    svc.setOutputFilter(null)
+  it('clearing the output filter re-enables the port when a device is selected', () => {
+    svc.selectInput('b')                       // portB ('IAC Driver Bus 1') selected
+    svc.setOutputFilter('IAC Driver Bus 1')    // output filter silences it
+    expect(portB.onmidimessage).toBeNull()
+    svc.setOutputFilter(null)                  // filter cleared — port should be active
     expect(portB.onmidimessage).not.toBeNull()
   })
 })
@@ -110,6 +111,7 @@ describe('MidiService — note-on dispatch', () => {
     port = { id: 'p', name: 'TestDevice', onmidimessage: null }
     stubMidi(makeMidiAccess([port]))
     await svc.connect()
+    svc.selectInput('p')
   })
 
   it('dispatches note-on to subscribed handlers', () => {
@@ -155,6 +157,7 @@ describe('MidiService — CC dispatch', () => {
     port = { id: 'p', name: 'TestDevice', onmidimessage: null }
     stubMidi(makeMidiAccess([port]))
     await svc.connect()
+    svc.selectInput('p')
   })
 
   it('routes CC to control handlers, not note handlers', () => {
@@ -187,6 +190,7 @@ describe('MidiService — MIDI note number to NoteInput', () => {
     port = { id: 'p', name: 'TestDevice', onmidimessage: null }
     stubMidi(makeMidiAccess([port]))
     await svc.connect()
+    svc.selectInput('p')
   })
 
   const cases: [number, { noteName: string; octave: number; accidental?: string }][] = [
@@ -222,6 +226,7 @@ describe('MidiService — subscription lifecycle', () => {
     port = { id: 'p', name: 'TestDevice', onmidimessage: null }
     stubMidi(makeMidiAccess([port]))
     await svc.connect()
+    svc.selectInput('p')
   })
 
   it('unsubscribing stops delivery', () => {

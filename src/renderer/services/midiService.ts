@@ -78,7 +78,7 @@ export class MidiService {
     }))
   }
 
-  // Restrict input to a single port; pass null to accept all ports.
+  // Restrict input to a single port; pass null to silence all ports (no device selected).
   selectInput(portId: string | null): void {
     this._selectedInputId = portId
     this.wireListeners()
@@ -148,8 +148,8 @@ export class MidiService {
         input.onmidimessage = null
         return
       }
-      // null = no filter (any device); non-null = restrict to the selected port.
-      if (this._selectedInputId !== null && input.id !== this._selectedInputId) {
+      // null = no device selected (silence all); non-null = restrict to selected port.
+      if (this._selectedInputId === null || input.id !== this._selectedInputId) {
         input.onmidimessage = null
         return
       }
