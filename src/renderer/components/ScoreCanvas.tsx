@@ -1247,15 +1247,20 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
   const chordTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Always-current refs so the timer callback gets the latest callbacks
-  const enterNoteRef  = useRef(enterNoteAtPitch)
-  const enterChordRef = useRef(enterChordAtPitch)
-  useEffect(() => { enterNoteRef.current  = enterNoteAtPitch  }, [enterNoteAtPitch])
-  useEffect(() => { enterChordRef.current = enterChordAtPitch }, [enterChordAtPitch])
+  const enterNoteRef         = useRef(enterNoteAtPitch)
+  const enterChordRef        = useRef(enterChordAtPitch)
+  const midiLearnListeningRef = useRef(midiLearnListening)
+  const setMidiLearnErrorRef  = useRef(setMidiLearnError)
+  useEffect(() => { enterNoteRef.current          = enterNoteAtPitch    }, [enterNoteAtPitch])
+  useEffect(() => { enterChordRef.current         = enterChordAtPitch   }, [enterChordAtPitch])
+  useEffect(() => { midiLearnListeningRef.current = midiLearnListening  }, [midiLearnListening])
+  useEffect(() => { setMidiLearnErrorRef.current  = setMidiLearnError   }, [setMidiLearnError])
 
   // MIDI handler — buffers notes for CHORD_WINDOW_MS then dispatches note or chord
   const midiInputHandler = useCallback((input: NoteInput) => {
-    if (midiLearnListening) {
-      setMidiLearnError("That note is used for note input. Use a CC control instead.")
+    // Check via ref so the handler is never stale with a previous learn-mode value.
+    if (midiLearnListeningRef.current) {
+      setMidiLearnErrorRef.current("That note is used for note input. Use a CC control instead.")
       return
     }
     if (inputMode === 'text') return
@@ -1276,7 +1281,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         enterChordRef.current(buf, forceBuiltinPreview)
       }
     }, CHORD_WINDOW_MS)
-  }, [inputMode, setInputMode, audioMode, midiLearnListening, setMidiLearnError])
+  }, [inputMode, setInputMode, audioMode])
 
   // Virtual keyboard still uses direct (non-buffered) path so it feels instant
   const keyboardInputHandler = useCallback((input: NoteInput) => {
