@@ -1189,29 +1189,34 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       for (const staff of part.staves) {
         const measure = staff.measures.find(m => m.id === cursorMeasureId)
         if (!measure) continue
-        const voice   = measure.voices[0]
-        const timeSig = measure.timeSignature ?? score.timeSignature
+        const mIdx          = staff.measures.findIndex(m => m.id === cursorMeasureId)
+        const existingVoice = measure.voices[activeVoice]
+        const voiceEvents   = existingVoice?.events ?? []
+        const timeSig = resolveTimeSig(staff.measures, mIdx, score.timeSignature)
         const dots    = isDotted ? 1 : 0 as 0 | 1
         const units   = dottedUnits(DURATION_UNITS[selectedDuration], dots)
-        if (remainingUnits(voice.events, timeSig) < units) {
+
+        const atCursor = existingVoice ? findEventAtBeat(voiceEvents, cursorBeatPosition) : null
+        if (atCursor?.event.type !== 'rest') {
           canvasAreaRef.current?.classList.add('cursor-reject')
           setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
           return
         }
+
         const pitches: Pitch[] = inputs
           .map(inp => ({ noteName: inp.noteName as NoteName, octave: inp.octave, accidental: (inp.accidental ?? null) as Accidental }))
           .sort((a, b) => (a.octave * 7 + 'CDEFGAB'.indexOf(a.noteName)) - (b.octave * 7 + 'CDEFGAB'.indexOf(b.noteName)))
         const chord: Chord = { id: uuid(), type: 'chord', pitches, duration: selectedDuration, dots, articulations: [] }
-        dispatch({
-          type: 'ADD_NOTE',
-          partId:    part.id,
-          staffId:   staff.id,
-          measureId: measure.id,
-          voiceId:   voice.id,
-          event:     chord,
-        })
+
+        const result = buildRestReplaceCommands(voiceEvents, atCursor.index, units, chord, part.id, staff.id, measure.id, existingVoice.id)
+        if (!result) {
+          canvasAreaRef.current?.classList.add('cursor-reject')
+          setTimeout(() => canvasAreaRef.current?.classList.remove('cursor-reject'), 200)
+          return
+        }
+        dispatchBatch(result.cmds)
+
         if (soundOnInput) {
-          const mIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const dyn   = resolveDirectiveDynamic(staff.measures, mIdx)
           const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? part.volume))
           const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
@@ -1225,9 +1230,8 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         const newBeat  = cursorBeatPosition + units
         const capacity = measureCapacityUnits(timeSig)
         if (newBeat >= capacity) {
-          const mIdx        = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const nextMeasure = staff.measures[mIdx + 1]
-          if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[0]?.events ?? []))
+          if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
           else             setCursor(null, 0)
         } else {
           setCursor(cursorMeasureId, newBeat)
@@ -1235,8 +1239,8 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         return
       }
     }
-  }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
-      dispatch, setLastEnteredPitch, setCursor, setInputMode, setSelectedMeasure,
+  }, [score, cursorMeasureId, cursorBeatPosition, activeVoice, selectedDuration, isDotted,
+      dispatch, dispatchBatch, setLastEnteredPitch, setCursor, setInputMode, setSelectedMeasure,
       soundOnInput, audioMode])
 
   // ── Chord assembly buffer for MIDI input ─────────────────────────────────────

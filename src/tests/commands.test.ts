@@ -2,6 +2,7 @@
 // P1: DELETE_NOTE — tie chain cleanup, slur removal
 // P2: RESIZE_NOTE, TOGGLE_TIE
 // P3: INSERT_MEASURE, REMOVE_MEASURE, CLEAR_MEASURES
+// MIDI chord entry: REPLACE_NOTE + DELETE_NOTE + ADD_NOTE sequence against a rest-filled measure
 
 import { describe, it, expect } from 'vitest'
 import { applyCommand } from '@shared/commands'
@@ -885,5 +886,83 @@ describe('REMOVE_CHORD_PITCH', () => {
     const score = makeScore([chord])
     removeChordPitch(score, 'c1', 0)
     expect((events(score)[0] as Chord).pitches).toHaveLength(3)
+  })
+})
+
+// ── MIDI chord entry — command sequence ───────────────────────────────────────
+//
+// enterChordAtPitch uses buildRestReplaceCommands which produces:
+//   REPLACE_NOTE (rest → chord) + DELETE_NOTE* (consumed rests) + ADD_NOTE* (remainder rests)
+// These tests verify that sequence against a rest-filled measure, which is the
+// state the measure is always in at the cursor position during normal note entry.
+
+function applyCommands(score: Score, cmds: Parameters<typeof applyCommand>[1][]): Score {
+  return cmds.reduce((s, cmd) => applyCommand(s, cmd), score)
+}
+
+/** Quarter chord: C4 + E4 + G4 */
+const CHORD_CEG: Chord = {
+  id: 'chord-1', type: 'chord',
+  pitches: [P_C4, P_E4, P_G4],
+  duration: 'quarter', dots: 0, articulations: [],
+}
+
+describe('MIDI chord entry — replacing a rest with a chord', () => {
+  it('replaces a whole rest with a quarter chord and fills remainder with dotted-half rest', () => {
+    // Measure starts with a single whole-note rest (standard fill for 4/4)
+    const wholeRest = createRest('whole')
+    const score = makeScore([wholeRest])
+    const next = applyCommands(score, [
+      { type: 'REPLACE_NOTE', partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID, noteId: wholeRest.id, event: CHORD_CEG },
+      // remainder: 64 - 16 = 48 units = dotted-half rest
+      { type: 'ADD_NOTE', partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID, event: { ...createRest('half'), dots: 1 as const }, index: 1 },
+    ])
+    const evs = events(next)
+    expect(evs).toHaveLength(2)
+    expect(evs[0].type).toBe('chord')
+    expect((evs[0] as Chord).pitches).toHaveLength(3)
+    expect((evs[0] as Chord).duration).toBe('quarter')
+    expect(evs[1].type).toBe('rest')
+    expect(evs[1].duration).toBe('half')
+    expect((evs[1] as any).dots).toBe(1)
+  })
+
+  it('replaces multiple rests when the chord duration spans more than one rest event', () => {
+    // Measure has two quarter rests; entering a half chord consumes both
+    const r1 = createRest('quarter')
+    const r2 = createRest('quarter')
+    const halfChord: Chord = { id: 'ch2', type: 'chord', pitches: [P_C4, P_G4], duration: 'half', dots: 0, articulations: [] }
+    const score = makeScore([r1, r2])
+    const next = applyCommands(score, [
+      { type: 'REPLACE_NOTE', partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID, noteId: r1.id, event: halfChord },
+      { type: 'DELETE_NOTE',  partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID, noteId: r2.id },
+    ])
+    const evs = events(next)
+    expect(evs).toHaveLength(1)
+    expect(evs[0].type).toBe('chord')
+    expect((evs[0] as Chord).pitches).toHaveLength(2)
+    expect((evs[0] as Chord).duration).toBe('half')
+  })
+
+  it('chord pitches are stored in the event (all MIDI notes preserved)', () => {
+    const wholeRest = createRest('whole')
+    const score = makeScore([wholeRest])
+    const next = applyCommand(score, {
+      type: 'REPLACE_NOTE', partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID,
+      noteId: wholeRest.id, event: CHORD_CEG,
+    })
+    const chord = events(next)[0] as Chord
+    expect(chord.pitches.map(p => p.noteName)).toEqual(['C', 'E', 'G'])
+    expect(chord.pitches.map(p => p.octave)).toEqual([4, 4, 4])
+  })
+
+  it('does not mutate the original score', () => {
+    const wholeRest = createRest('whole')
+    const score = makeScore([wholeRest])
+    applyCommand(score, {
+      type: 'REPLACE_NOTE', partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID,
+      noteId: wholeRest.id, event: CHORD_CEG,
+    })
+    expect(events(score)[0].type).toBe('rest')
   })
 })
