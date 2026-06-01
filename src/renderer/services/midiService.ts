@@ -148,8 +148,8 @@ class MidiService {
         input.onmidimessage = null
         return
       }
-      // Silence all ports until the user explicitly selects one (null = "None").
-      if (this._selectedInputId === null || input.id !== this._selectedInputId) {
+      // null = no filter (any device); non-null = restrict to the selected port.
+      if (this._selectedInputId !== null && input.id !== this._selectedInputId) {
         input.onmidimessage = null
         return
       }
