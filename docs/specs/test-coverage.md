@@ -216,7 +216,7 @@ Same pattern for `resolveKeySig`.
 |---|---|
 | **Suite** | `commands.test.ts` |
 | **Area** | `src/shared/commands.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Shrink cases:**
 
@@ -241,7 +241,7 @@ Same pattern for `resolveKeySig`.
 |---|---|
 | **Suite** | `commands.test.ts` |
 | **Area** | `src/shared/commands.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Cases:**
 
