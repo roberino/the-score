@@ -1,6 +1,8 @@
 // Tests for pure musicUtils functions.
 // P1: fillWithRests, shiftPitchBySemitones, closestOctave
 // P2: eventDurationUnits, resolveTimeSig, resolveKeySig, transposeKeyFifths, buildPlaybackSequence
+// P3: stepToPitch, pitchToStep, keyLabel, articulationPlaybackMods
+// P4: keyAccidental, eventToSeconds, buildFlatSchedule
 
 import { describe, it, expect } from 'vitest'
 import {
@@ -13,8 +15,15 @@ import {
   resolveKeySig,
   transposeKeyFifths,
   buildPlaybackSequence,
+  stepToPitch,
+  pitchToStep,
+  keyLabel,
+  articulationPlaybackMods,
+  keyAccidental,
+  eventToSeconds,
+  buildFlatSchedule,
 } from '@shared/musicUtils'
-import type { NoteName, Pitch, NoteEvent, TimeSignature, KeySignature, Measure, Volta } from '@shared/score'
+import type { NoteName, Pitch, NoteEvent, Note, TimeSignature, KeySignature, Measure, Volta, ClefType, Staff, Slur } from '@shared/score'
 import { createNote, createRest } from '@shared/score'
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -502,5 +511,319 @@ describe('buildPlaybackSequence — repeat and volta bracket ordering', () => {
       { id: 'v2', number: 2, startMeasureIndex: 3, endMeasureIndex: 3 },
     ]
     expect(buildPlaybackSequence(measures, voltas)).toEqual([0, 1, 2, 0, 3])
+  })
+})
+
+// ── stepToPitch / pitchToStep ─────────────────────────────────────────────────
+
+describe('stepToPitch — treble clef', () => {
+  it('step 0 (top line) → F5', () => {
+    expect(stepToPitch(0, 'treble')).toEqual({ noteName: 'F', octave: 5 })
+  })
+
+  it('step 4 (middle line) → B4', () => {
+    expect(stepToPitch(4, 'treble')).toEqual({ noteName: 'B', octave: 4 })
+  })
+
+  it('step 8 (bottom line) → E4', () => {
+    expect(stepToPitch(8, 'treble')).toEqual({ noteName: 'E', octave: 4 })
+  })
+
+  it('step 10 (reference: C4 first ledger below) → C4', () => {
+    expect(stepToPitch(10, 'treble')).toEqual({ noteName: 'C', octave: 4 })
+  })
+
+  it('step -2 (ledger line above: A5) → A5', () => {
+    expect(stepToPitch(-2, 'treble')).toEqual({ noteName: 'A', octave: 5 })
+  })
+})
+
+describe('stepToPitch — bass clef', () => {
+  it('step 0 (top line) → A3', () => {
+    expect(stepToPitch(0, 'bass')).toEqual({ noteName: 'A', octave: 3 })
+  })
+
+  it('step 4 (middle line) → D3', () => {
+    expect(stepToPitch(4, 'bass')).toEqual({ noteName: 'D', octave: 3 })
+  })
+})
+
+describe('stepToPitch — alto clef', () => {
+  it('step 4 (middle line) → C4 (reference position)', () => {
+    expect(stepToPitch(4, 'alto')).toEqual({ noteName: 'C', octave: 4 })
+  })
+})
+
+describe('pitchToStep — round-trip with stepToPitch', () => {
+  it.each(['treble', 'bass', 'alto'] as ClefType[])(
+    '%s clef: pitchToStep(stepToPitch(s)) === s for steps 0–12',
+    (clef) => {
+      for (let s = 0; s <= 12; s++) {
+        const pitch = stepToPitch(s, clef)
+        expect(pitchToStep(pitch, clef)).toBe(s)
+      }
+    }
+  )
+
+  it('treble: pitchToStep for known positions', () => {
+    expect(pitchToStep({ noteName: 'F', octave: 5 }, 'treble')).toBe(0)
+    expect(pitchToStep({ noteName: 'B', octave: 4 }, 'treble')).toBe(4)
+    expect(pitchToStep({ noteName: 'C', octave: 4 }, 'treble')).toBe(10)
+  })
+})
+
+// ── keyLabel ──────────────────────────────────────────────────────────────────
+
+describe('keyLabel — major keys', () => {
+  it.each([
+    [0,  'C maj'],
+    [1,  'G maj'],
+    [2,  'D maj'],
+    [3,  'A maj'],
+    [4,  'E maj'],
+    [5,  'B maj'],
+    [6,  'F# maj'],
+    [7,  'C# maj'],
+    [-1, 'F maj'],
+    [-2, 'Bb maj'],
+    [-3, 'Eb maj'],
+    [-4, 'Ab maj'],
+    [-5, 'Db maj'],
+    [-6, 'Gb maj'],
+    [-7, 'Cb maj'],
+  ] as [number, string][])(
+    'fifths=%i → "%s"',
+    (fifths, label) => {
+      expect(keyLabel({ fifths, mode: 'major' })).toBe(label)
+    }
+  )
+})
+
+describe('keyLabel — minor keys', () => {
+  it.each([
+    [0,  'A min'],
+    [1,  'E min'],
+    [2,  'B min'],
+    [3,  'F# min'],
+    [4,  'C# min'],
+    [5,  'G# min'],
+    [6,  'D# min'],
+    [-1, 'D min'],
+    [-2, 'G min'],
+    [-3, 'C min'],
+    [-4, 'F min'],
+    [-5, 'Bb min'],
+    [-6, 'Eb min'],
+    [-7, 'Ab min'],
+  ] as [number, string][])(
+    'fifths=%i → "%s"',
+    (fifths, label) => {
+      expect(keyLabel({ fifths, mode: 'minor' })).toBe(label)
+    }
+  )
+})
+
+// ── articulationPlaybackMods ──────────────────────────────────────────────────
+
+describe('articulationPlaybackMods', () => {
+  function noteWith(articulations: string[]): NoteEvent {
+    const note = createNote('C', 4, 'quarter')
+    return { ...note, articulations: articulations as any[] }
+  }
+
+  it('no articulations → identity factors', () => {
+    const mods = articulationPlaybackMods(noteWith([]))
+    expect(mods).toEqual({ durFactor: 1, volDbBonus: 0, velFactor: 1 })
+  })
+
+  it('staccato alone → durFactor ≈ 0.45', () => {
+    const mods = articulationPlaybackMods(noteWith(['staccato']))
+    expect(mods.durFactor).toBeCloseTo(0.45)
+    expect(mods.volDbBonus).toBe(0)
+    expect(mods.velFactor).toBe(1)
+  })
+
+  it('fermata alone → durFactor = 2.0', () => {
+    const mods = articulationPlaybackMods(noteWith(['fermata']))
+    expect(mods.durFactor).toBeCloseTo(2.0)
+    expect(mods.volDbBonus).toBe(0)
+    expect(mods.velFactor).toBe(1)
+  })
+
+  it('marcato alone → durFactor ≈ 0.85, volDbBonus = 4, velFactor ≈ 1.45', () => {
+    const mods = articulationPlaybackMods(noteWith(['marcato']))
+    expect(mods.durFactor).toBeCloseTo(0.85)
+    expect(mods.volDbBonus).toBe(4)
+    expect(mods.velFactor).toBeCloseTo(1.45)
+  })
+
+  it('accent alone → volDbBonus = 2, velFactor ≈ 1.30, durFactor unchanged', () => {
+    const mods = articulationPlaybackMods(noteWith(['accent']))
+    expect(mods.durFactor).toBe(1)
+    expect(mods.volDbBonus).toBe(2)
+    expect(mods.velFactor).toBeCloseTo(1.30)
+  })
+
+  it('staccato + accent → both factors applied', () => {
+    const mods = articulationPlaybackMods(noteWith(['staccato', 'accent']))
+    expect(mods.durFactor).toBeCloseTo(0.45)
+    expect(mods.volDbBonus).toBe(2)
+    expect(mods.velFactor).toBeCloseTo(1.30)
+  })
+
+  it('tenuto alone → no change (identity factors)', () => {
+    const mods = articulationPlaybackMods(noteWith(['tenuto']))
+    expect(mods.durFactor).toBe(1)
+    expect(mods.volDbBonus).toBe(0)
+    expect(mods.velFactor).toBe(1)
+  })
+})
+
+// ── keyAccidental ─────────────────────────────────────────────────────────────
+
+describe('keyAccidental', () => {
+  it('C major (0 fifths) → null for all diatonic notes', () => {
+    for (const name of ['C', 'D', 'E', 'F', 'G', 'A', 'B'] as NoteName[]) {
+      expect(keyAccidental(name, 0)).toBeNull()
+    }
+  })
+
+  it('G major (1 sharp) → F is sharp, others null', () => {
+    expect(keyAccidental('F', 1)).toBe('sharp')
+    expect(keyAccidental('C', 1)).toBeNull()
+    expect(keyAccidental('G', 1)).toBeNull()
+  })
+
+  it('D major (2 sharps) → F and C are sharp', () => {
+    expect(keyAccidental('F', 2)).toBe('sharp')
+    expect(keyAccidental('C', 2)).toBe('sharp')
+    expect(keyAccidental('G', 2)).toBeNull()
+  })
+
+  it('F major (1 flat) → B is flat, others null', () => {
+    expect(keyAccidental('B', -1)).toBe('flat')
+    expect(keyAccidental('E', -1)).toBeNull()
+    expect(keyAccidental('F', -1)).toBeNull()
+  })
+
+  it('Bb major (2 flats) → B and E are flat', () => {
+    expect(keyAccidental('B', -2)).toBe('flat')
+    expect(keyAccidental('E', -2)).toBe('flat')
+    expect(keyAccidental('A', -2)).toBeNull()
+  })
+})
+
+// ── eventToSeconds ────────────────────────────────────────────────────────────
+
+describe('eventToSeconds', () => {
+  it('quarter at 120 BPM → 0.5 s', () => {
+    const ev = createRest('quarter')
+    expect(eventToSeconds(ev, 120)).toBeCloseTo(0.5)
+  })
+
+  it('dotted quarter at 120 BPM → 0.75 s', () => {
+    const ev = { ...createRest('quarter'), dots: 1 as const }
+    expect(eventToSeconds(ev, 120)).toBeCloseTo(0.75)
+  })
+
+  it('whole note at 120 BPM → 2.0 s', () => {
+    const ev = createRest('whole')
+    expect(eventToSeconds(ev, 120)).toBeCloseTo(2.0)
+  })
+
+  it('triplet eighth (actual=3, normal=2) at 60 BPM → ≈ 0.333 s', () => {
+    const ev = { ...createRest('eighth'), tuplet: { id: 't1', actual: 3, normal: 2 } }
+    expect(eventToSeconds(ev, 60)).toBeCloseTo(1 / 3, 4)
+  })
+
+  it('eighth at 120 BPM → 0.25 s', () => {
+    const ev = createRest('eighth')
+    expect(eventToSeconds(ev, 120)).toBeCloseTo(0.25)
+  })
+})
+
+// ── buildFlatSchedule ─────────────────────────────────────────────────────────
+
+/** Minimal Staff wrapping a single measure with the given voice events. */
+function makeStaff(events: NoteEvent[]): Staff {
+  return {
+    id: 'staff-1',
+    clef: 'treble',
+    measures: [{
+      id: 'm1', number: 1, barline: 'final',
+      voices: [{ id: 'v1', events }],
+    }],
+  }
+}
+
+function tiedNote(id: string, tieStart: boolean, tieEnd: boolean): Note {
+  return { ...createNote('C', 4, 'quarter'), id, tieStart, tieEnd }
+}
+
+const SIG_44_SCHED: TimeSignature = { numerator: 4, denominator: 4 }
+
+describe('buildFlatSchedule — tie merging', () => {
+  it('two tied quarter notes → first entry gets merged duration, second is skipped', () => {
+    const n1 = tiedNote('n1', true,  false)
+    const n2 = tiedNote('n2', false, true)
+    const staff = makeStaff([n1, n2])
+    const result = buildFlatSchedule(staff, [0], staff, 120, SIG_44_SCHED)
+    expect(result[0].playDurSec).toBeCloseTo(1.0)  // 2 × 0.5 s merged
+    expect(result[1].skip).toBe(true)
+    expect(result[0].skip).toBe(false)
+  })
+
+  it('three-note tie chain → first entry has fully merged duration, rest are skipped', () => {
+    const n1 = tiedNote('n1', true,  false)
+    const n2 = tiedNote('n2', true,  true)
+    const n3 = tiedNote('n3', false, true)
+    const staff = makeStaff([n1, n2, n3])
+    const result = buildFlatSchedule(staff, [0], staff, 120, SIG_44_SCHED)
+    expect(result[0].playDurSec).toBeCloseTo(1.5)  // 3 × 0.5 s
+    expect(result[1].skip).toBe(true)
+    expect(result[2].skip).toBe(true)
+  })
+
+  it('untied notes are not merged and not skipped', () => {
+    const n1 = tiedNote('n1', false, false)
+    const n2 = tiedNote('n2', false, false)
+    const staff = makeStaff([n1, n2])
+    const result = buildFlatSchedule(staff, [0], staff, 120, SIG_44_SCHED)
+    expect(result[0].playDurSec).toBeCloseTo(0.5)
+    expect(result[0].skip).toBe(false)
+    expect(result[1].skip).toBe(false)
+  })
+})
+
+describe('buildFlatSchedule — slur legato', () => {
+  it('slurred pair → first entry has legatoUntilSec, second does not', () => {
+    const n1 = { ...createNote('C', 4, 'quarter'), id: 'n1' }
+    const n2 = { ...createNote('E', 4, 'quarter'), id: 'n2' }
+    const staff = makeStaff([n1, n2])
+    const slurs: Slur[] = [{ id: 'sl1', fromNoteId: 'n1', toNoteId: 'n2' }]
+    const result = buildFlatSchedule(staff, [0], staff, 120, SIG_44_SCHED, slurs)
+    expect(result[0].legatoUntilSec).not.toBeNull()
+    expect(result[0].legatoUntilSec).toBeCloseTo(0.5 + 0.06)  // nextStart + 60 ms overlap
+    expect(result[1].legatoUntilSec).toBeNull()
+  })
+
+  it('non-slurred notes → no legato', () => {
+    const n1 = { ...createNote('C', 4, 'quarter'), id: 'n1' }
+    const n2 = { ...createNote('E', 4, 'quarter'), id: 'n2' }
+    const staff = makeStaff([n1, n2])
+    const result = buildFlatSchedule(staff, [0], staff, 120, SIG_44_SCHED)
+    expect(result[0].legatoUntilSec).toBeNull()
+    expect(result[1].legatoUntilSec).toBeNull()
+  })
+})
+
+describe('buildFlatSchedule — timing', () => {
+  it('start times are cumulative within a measure', () => {
+    const n1 = createNote('C', 4, 'quarter')
+    const n2 = createNote('E', 4, 'quarter')
+    const staff = makeStaff([n1, n2])
+    const result = buildFlatSchedule(staff, [0], staff, 120, SIG_44_SCHED)
+    expect(result[0].startSec).toBeCloseTo(0)
+    expect(result[1].startSec).toBeCloseTo(0.5)
   })
 })

@@ -287,7 +287,7 @@ Important logic; lower chance of subtle bugs but covers significant surface area
 |---|---|
 | **Suite** | `commands.test.ts` |
 | **Area** | `src/shared/commands.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Cases:**
 
@@ -306,7 +306,7 @@ Important logic; lower chance of subtle bugs but covers significant surface area
 |---|---|
 | **Suite** | `musicUtils.test.ts` |
 | **Area** | `src/shared/musicUtils.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Cases:**
 
@@ -326,7 +326,7 @@ Important logic; lower chance of subtle bugs but covers significant surface area
 |---|---|
 | **Suite** | `musicUtils.test.ts` |
 | **Area** | `src/shared/musicUtils.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Cases:**
 
@@ -342,7 +342,7 @@ Important logic; lower chance of subtle bugs but covers significant surface area
 |---|---|
 | **Suite** | `musicUtils.test.ts` |
 | **Area** | `src/shared/musicUtils.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Cases:**
 
@@ -364,7 +364,7 @@ Important logic; lower chance of subtle bugs but covers significant surface area
 |---|---|
 | **Suite** | `commands.test.ts` |
 | **Area** | `src/shared/commands.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Cases:**
 
@@ -384,7 +384,7 @@ Useful coverage; smaller risk of subtle bugs or lower impact if wrong.
 |---|---|
 | **Suite** | `musicUtils.test.ts` |
 | **Area** | `src/shared/musicUtils.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Cases:** G major (1 sharp) → F is sharp; F major (1 flat) → B is flat; C major → all naturals; D major (2 sharps) → F and C are sharp.
 
@@ -396,7 +396,7 @@ Useful coverage; smaller risk of subtle bugs or lower impact if wrong.
 |---|---|
 | **Suite** | `musicUtils.test.ts` |
 | **Area** | `src/shared/musicUtils.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Cases:** Quarter at 120 BPM → 0.5 s; dotted quarter → 0.75 s; triplet eighth → 0.333 s; whole note → 2.0 s.
 
@@ -408,7 +408,7 @@ Useful coverage; smaller risk of subtle bugs or lower impact if wrong.
 |---|---|
 | **Suite** | `commands.test.ts` |
 | **Area** | `src/shared/commands.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Cases:**
 
@@ -425,7 +425,7 @@ Useful coverage; smaller risk of subtle bugs or lower impact if wrong.
 |---|---|
 | **Suite** | `commands.test.ts` |
 | **Area** | `src/shared/commands.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Cases:**
 
@@ -442,7 +442,7 @@ Useful coverage; smaller risk of subtle bugs or lower impact if wrong.
 |---|---|
 | **Suite** | `musicUtils.test.ts` |
 | **Area** | `src/shared/musicUtils.ts` |
-| **Status** | `not started` |
+| **Status** | `done` |
 
 **Cases:**
 

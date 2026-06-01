@@ -1,9 +1,11 @@
-// Tests for score command reducers — P1 coverage for DELETE_NOTE.
-// DELETE_NOTE must clean up tie chain flags and remove referencing slurs.
+// Tests for score command reducers.
+// P1: DELETE_NOTE — tie chain cleanup, slur removal
+// P2: RESIZE_NOTE, TOGGLE_TIE
+// P3: INSERT_MEASURE, REMOVE_MEASURE, CLEAR_MEASURES
 
 import { describe, it, expect } from 'vitest'
 import { applyCommand } from '@shared/commands'
-import type { Score, Note, NoteEvent, Slur, Duration } from '@shared/score'
+import type { Score, Note, NoteEvent, Slur, Duration, TimeSignature, KeySignature, Chord, Pitch, Articulation } from '@shared/score'
 import { createRest } from '@shared/score'
 
 // ── Score fixture helpers ─────────────────────────────────────────────────────
@@ -477,5 +479,411 @@ describe('TOGGLE_TIE — cross-measure', () => {
     const next = toggleTie(score, 'n1')
     expect((events(next)[0] as Note).tieStart).toBe(false)
     expect((eventsM2(next)[0] as Note).tieEnd).toBe(false)
+  })
+})
+
+// ── INSERT_MEASURE / REMOVE_MEASURE helpers ───────────────────────────────────
+
+function makeMeasure(id: string, number: number, barline: string, events: NoteEvent[] = []) {
+  return { id, number, barline, voices: [{ id: 'v1', events }] }
+}
+
+function makeMultiMeasureScore(measureCount: number): Score {
+  const now = '2024-01-01T00:00:00.000Z'
+  const measures = Array.from({ length: measureCount }, (_, i) =>
+    makeMeasure(`m${i + 1}`, i + 1, i === measureCount - 1 ? 'final' : 'single')
+  )
+  return {
+    id: 'score-1',
+    metadata: {
+      title: '', subtitle: '', composer: '', arranger: '',
+      lyricist: '', copyright: '', createdAt: now, updatedAt: now,
+    },
+    parts: [{
+      id: PART_ID, name: 'Piano', shortName: 'Pno.',
+      midiProgram: 0, transposeSemitones: 0,
+      staves: [{ id: STAFF_ID, clef: 'treble', measures }],
+      volume: 0.8, muted: false, labelVisible: true,
+    }],
+    keySignature:  { fifths: 0, mode: 'major' },
+    timeSignature: { numerator: 4, denominator: 4 },
+    tempo: 120, showPartLabels: true, textBoxes: [], version: 1,
+  }
+}
+
+function measures(score: Score) {
+  return score.parts[0].staves[0].measures as any[]
+}
+
+function insertMeasure(score: Score, afterMeasureIndex: number) {
+  return applyCommand(score, { type: 'INSERT_MEASURE', afterMeasureIndex })
+}
+
+function removeMeasure(score: Score, measureIndex: number) {
+  return applyCommand(score, { type: 'REMOVE_MEASURE', measureIndex })
+}
+
+// ── INSERT_MEASURE ────────────────────────────────────────────────────────────
+
+describe('INSERT_MEASURE — barline and numbering', () => {
+  it('inserts a new measure after the given index', () => {
+    const score = makeMultiMeasureScore(3)
+    const next = insertMeasure(score, 1)
+    expect(measures(next)).toHaveLength(4)
+  })
+
+  it('insert in middle: old measure at index keeps its barline, new measure is single', () => {
+    // 3-measure score: m1(single) m2(single) m3(final)
+    // insert after index 1 → [m1, m2, NEW, m3]
+    const score = makeMultiMeasureScore(3)
+    const next = insertMeasure(score, 1)
+    const ms = measures(next)
+    expect(ms[1].barline).toBe('single')
+    expect(ms[2].barline).toBe('single')
+  })
+
+  it('insert at end: old last measure gets single barline, new measure gets final', () => {
+    const score = makeMultiMeasureScore(2)
+    const next = insertMeasure(score, 1)
+    const ms = measures(next)
+    expect(ms[1].barline).toBe('single')
+    expect(ms[2].barline).toBe('final')
+  })
+
+  it('renumbers measures correctly after insertion', () => {
+    const score = makeMultiMeasureScore(3)
+    const next = insertMeasure(score, 0)
+    const ms = measures(next)
+    expect(ms.map((m: any) => m.number)).toEqual([1, 2, 3, 4])
+  })
+
+  it('inserts into all staves of all parts simultaneously', () => {
+    const now = '2024-01-01T00:00:00.000Z'
+    const score: Score = {
+      id: 'score-multi',
+      metadata: {
+        title: '', subtitle: '', composer: '', arranger: '',
+        lyricist: '', copyright: '', createdAt: now, updatedAt: now,
+      },
+      parts: [
+        {
+          id: 'p1', name: 'Flute', shortName: 'Fl.',
+          midiProgram: 0, transposeSemitones: 0,
+          staves: [{ id: 's1', clef: 'treble', measures: [
+            makeMeasure('m1', 1, 'single'),
+            makeMeasure('m2', 2, 'final'),
+          ]}],
+          volume: 0.8, muted: false, labelVisible: true,
+        },
+        {
+          id: 'p2', name: 'Cello', shortName: 'Vc.',
+          midiProgram: 42, transposeSemitones: 0,
+          staves: [{ id: 's2', clef: 'bass', measures: [
+            makeMeasure('m3', 1, 'single'),
+            makeMeasure('m4', 2, 'final'),
+          ]}],
+          volume: 0.8, muted: false, labelVisible: true,
+        },
+      ],
+      keySignature:  { fifths: 0, mode: 'major' },
+      timeSignature: { numerator: 4, denominator: 4 },
+      tempo: 120, showPartLabels: true, textBoxes: [], version: 1,
+    }
+    const next = insertMeasure(score, 0)
+    expect((next.parts[0].staves[0].measures as any[]).length).toBe(3)
+    expect((next.parts[1].staves[0].measures as any[]).length).toBe(3)
+  })
+})
+
+// ── REMOVE_MEASURE ────────────────────────────────────────────────────────────
+
+describe('REMOVE_MEASURE — barline and numbering', () => {
+  it('removes the measure at the given index', () => {
+    const score = makeMultiMeasureScore(3)
+    const next = removeMeasure(score, 1)
+    expect(measures(next)).toHaveLength(2)
+  })
+
+  it('remove middle measure: renumbers remaining measures', () => {
+    const score = makeMultiMeasureScore(4)
+    const next = removeMeasure(score, 1)
+    const ms = measures(next)
+    expect(ms.map((m: any) => m.number)).toEqual([1, 2, 3])
+  })
+
+  it('remove last measure: new last measure gets final barline', () => {
+    const score = makeMultiMeasureScore(3)
+    const next = removeMeasure(score, 2)
+    const ms = measures(next)
+    expect(ms).toHaveLength(2)
+    expect(ms[ms.length - 1].barline).toBe('final')
+  })
+
+  it('blocked when only 1 measure remains', () => {
+    const score = makeMultiMeasureScore(1)
+    const next = removeMeasure(score, 0)
+    expect(measures(next)).toHaveLength(1)
+  })
+
+  it('remove non-final middle measure: last measure still has final barline', () => {
+    const score = makeMultiMeasureScore(3)
+    const next = removeMeasure(score, 0)
+    const ms = measures(next)
+    expect(ms[ms.length - 1].barline).toBe('final')
+  })
+})
+
+// ── CLEAR_MEASURES ────────────────────────────────────────────────────────────
+
+describe('CLEAR_MEASURES — fillWithRests integration', () => {
+  function makeScoreWithNotes(notes: NoteEvent[], timeSig?: TimeSignature): Score {
+    const now = '2024-01-01T00:00:00.000Z'
+    const measure: any = {
+      id: MEASURE_ID, number: 1, barline: 'final',
+      voices: [{ id: VOICE_ID, events: notes }],
+    }
+    if (timeSig) measure.timeSignature = timeSig
+    return {
+      id: 'score-1',
+      metadata: {
+        title: '', subtitle: '', composer: '', arranger: '',
+        lyricist: '', copyright: '', createdAt: now, updatedAt: now,
+      },
+      parts: [{
+        id: PART_ID, name: 'Piano', shortName: 'Pno.',
+        midiProgram: 0, transposeSemitones: 0,
+        staves: [{ id: STAFF_ID, clef: 'treble', measures: [measure] }],
+        volume: 0.8, muted: false, labelVisible: true,
+      }],
+      keySignature:  { fifths: 0, mode: 'major' },
+      timeSignature: { numerator: 4, denominator: 4 },
+      tempo: 120, showPartLabels: true, textBoxes: [], version: 1,
+    }
+  }
+
+  function clearMeasure(score: Score) {
+    return applyCommand(score, {
+      type: 'CLEAR_MEASURES',
+      targets: [{ partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID }],
+    })
+  }
+
+  it('replaces notes with rests for a 4/4 measure (64 units → whole rest)', () => {
+    const note = { id: 'n1', type: 'note' as const, pitch: { noteName: 'C' as const, octave: 4, accidental: null }, duration: 'quarter' as const, dots: 0, tieStart: false, tieEnd: false, beamStart: false, beamEnd: false, articulations: [] }
+    const score = makeScoreWithNotes([note])
+    const next = clearMeasure(score)
+    const evs = (next.parts[0].staves[0].measures[0] as any).voices[0].events
+    expect(evs).toHaveLength(1)
+    expect(evs[0].type).toBe('rest')
+    expect(evs[0].duration).toBe('whole')
+    expect(evs[0].dots).toBe(0)
+  })
+
+  it('uses per-measure time sig override: 3/4 measure → dotted-half rest (48 units)', () => {
+    const score = makeScoreWithNotes([], { numerator: 3, denominator: 4 })
+    const next = clearMeasure(score)
+    const evs = (next.parts[0].staves[0].measures[0] as any).voices[0].events
+    expect(evs).toHaveLength(1)
+    expect(evs[0].type).toBe('rest')
+    expect(evs[0].duration).toBe('half')
+    expect(evs[0].dots).toBe(1)
+  })
+
+  it('is idempotent: clearing an already-cleared measure gives the same rests', () => {
+    const score = makeScoreWithNotes([])
+    const once = clearMeasure(score)
+    const twice = clearMeasure(once)
+    const evs1 = (once.parts[0].staves[0].measures[0] as any).voices[0].events
+    const evs2 = (twice.parts[0].staves[0].measures[0] as any).voices[0].events
+    expect(evs2).toHaveLength(evs1.length)
+    expect(evs2[0].duration).toBe(evs1[0].duration)
+    expect(evs2[0].dots).toBe(evs1[0].dots)
+  })
+})
+
+// ── SET_KEY / CLEAR_KEY helpers ───────────────────────────────────────────────
+
+function makeNoteWithAccidental(id: string, noteName: import('@shared/score').NoteName, accidental: import('@shared/score').Accidental): Note {
+  return { ...makeNote(id), pitch: { noteName, octave: 4, accidental } }
+}
+
+/** Two-measure score: m1 events in measure 1, m2 events in measure 2. */
+function makeTwoMeasureScoreForKey(m1Events: NoteEvent[], m2Events: NoteEvent[]): Score {
+  const now = '2024-01-01T00:00:00.000Z'
+  return {
+    id: 'score-1',
+    metadata: {
+      title: '', subtitle: '', composer: '', arranger: '',
+      lyricist: '', copyright: '', createdAt: now, updatedAt: now,
+    },
+    parts: [{
+      id: PART_ID, name: 'Piano', shortName: 'Pno.',
+      midiProgram: 0, transposeSemitones: 0,
+      staves: [{
+        id: STAFF_ID, clef: 'treble',
+        measures: [
+          { id: MEASURE_ID,   number: 1, barline: 'single', voices: [{ id: VOICE_ID, events: m1Events }] },
+          { id: MEASURE_ID_2, number: 2, barline: 'final',  voices: [{ id: VOICE_ID, events: m2Events }] },
+        ],
+      }],
+      volume: 0.8, muted: false, labelVisible: true,
+    }],
+    keySignature:  { fifths: 0, mode: 'major' },
+    timeSignature: { numerator: 4, denominator: 4 },
+    tempo: 120, showPartLabels: true, textBoxes: [], version: 1,
+  }
+}
+
+function setKey(score: Score, measureId: string, key: KeySignature) {
+  return applyCommand(score, { type: 'SET_KEY', partId: PART_ID, staffId: STAFF_ID, measureId, key })
+}
+
+function clearKey(score: Score, measureId: string) {
+  return applyCommand(score, { type: 'CLEAR_KEY', partId: PART_ID, staffId: STAFF_ID, measureId })
+}
+
+function noteAccidental(score: Score, measureId: string, noteIdx: number) {
+  const staff = score.parts[0].staves[0]
+  const measure = (staff.measures as any[]).find((m: any) => m.id === measureId)
+  return (measure.voices[0].events[noteIdx] as Note).pitch.accidental
+}
+
+// ── SET_KEY ───────────────────────────────────────────────────────────────────
+
+describe('SET_KEY — accidental stripping', () => {
+  it('F# in measure 1 is stripped when key changes to G major on measure 1', () => {
+    const fSharp = makeNoteWithAccidental('n1', 'F', 'sharp')
+    const score = makeTwoMeasureScoreForKey([fSharp], [])
+    const next = setKey(score, MEASURE_ID, { fifths: 1, mode: 'major' })
+    expect(noteAccidental(next, MEASURE_ID, 0)).toBeNull()
+  })
+
+  it('F# in a later measure is also stripped (forward propagation)', () => {
+    const fSharp = makeNoteWithAccidental('n1', 'F', 'sharp')
+    const score = makeTwoMeasureScoreForKey([], [fSharp])
+    const next = setKey(score, MEASURE_ID, { fifths: 1, mode: 'major' })
+    expect(noteAccidental(next, MEASURE_ID_2, 0)).toBeNull()
+  })
+
+  it('note before the change measure is not stripped', () => {
+    const fSharp = makeNoteWithAccidental('n1', 'F', 'sharp')
+    const score = makeTwoMeasureScoreForKey([fSharp], [])
+    // Change key on measure 2 — measure 1 note is before the change point
+    const next = setKey(score, MEASURE_ID_2, { fifths: 1, mode: 'major' })
+    expect(noteAccidental(next, MEASURE_ID, 0)).toBe('sharp')
+  })
+
+  it('different accidental (C# in G major key) is not stripped', () => {
+    const cSharp = makeNoteWithAccidental('n1', 'C', 'sharp')
+    const score = makeTwoMeasureScoreForKey([cSharp], [])
+    // G major only implies F#; C# should remain
+    const next = setKey(score, MEASURE_ID, { fifths: 1, mode: 'major' })
+    expect(noteAccidental(next, MEASURE_ID, 0)).toBe('sharp')
+  })
+
+  it('does not mutate the original score', () => {
+    const fSharp = makeNoteWithAccidental('n1', 'F', 'sharp')
+    const score = makeTwoMeasureScoreForKey([fSharp], [])
+    setKey(score, MEASURE_ID, { fifths: 1, mode: 'major' })
+    expect(noteAccidental(score, MEASURE_ID, 0)).toBe('sharp')
+  })
+})
+
+// ── CLEAR_KEY ─────────────────────────────────────────────────────────────────
+
+describe('CLEAR_KEY', () => {
+  it('removes the per-measure key signature', () => {
+    const score = makeTwoMeasureScoreForKey([], [])
+    const withKey = setKey(score, MEASURE_ID, { fifths: 1, mode: 'major' })
+    const staff = withKey.parts[0].staves[0]
+    expect((staff.measures[0] as any).keySignature).toBeDefined()
+
+    const cleared = clearKey(withKey, MEASURE_ID)
+    const clearedStaff = cleared.parts[0].staves[0]
+    expect((clearedStaff.measures[0] as any).keySignature).toBeUndefined()
+  })
+
+  it('strips accidentals forward based on inherited (score-level) key after clearing', () => {
+    // Score-level key is G major (1 sharp). Measure 1 has a per-measure D major override (2 sharps).
+    // After CLEAR_KEY on measure 1, the inherited key is G major → F# notes forward should be stripped.
+    const fSharp = makeNoteWithAccidental('n1', 'F', 'sharp')
+    const score = makeTwoMeasureScoreForKey([], [fSharp])
+    // Give score G major as the base key
+    const scoreGMajor: Score = { ...score, keySignature: { fifths: 1, mode: 'major' } }
+    // Apply D major on measure 1
+    const withDMajor = setKey(scoreGMajor, MEASURE_ID, { fifths: 2, mode: 'major' })
+    // Clear returns to G major: G major implies F#, so the F# in measure 2 is stripped
+    const cleared = clearKey(withDMajor, MEASURE_ID)
+    expect(noteAccidental(cleared, MEASURE_ID_2, 0)).toBeNull()
+  })
+})
+
+// ── REMOVE_CHORD_PITCH helpers ────────────────────────────────────────────────
+
+function makeChord(
+  id: string,
+  pitches: Pitch[],
+  overrides: Partial<Omit<Chord, 'id' | 'type' | 'pitches'>> = {},
+): Chord {
+  return {
+    id,
+    type: 'chord',
+    pitches,
+    duration: 'quarter',
+    dots: 0,
+    articulations: [],
+    ...overrides,
+  }
+}
+
+function removeChordPitch(score: Score, noteId: string, pitchIndex: number) {
+  return applyCommand(score, {
+    type: 'REMOVE_CHORD_PITCH',
+    partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID,
+    noteId,
+    pitchIndex,
+  })
+}
+
+const P_C4: Pitch = { noteName: 'C', octave: 4, accidental: null }
+const P_E4: Pitch = { noteName: 'E', octave: 4, accidental: null }
+const P_G4: Pitch = { noteName: 'G', octave: 4, accidental: null }
+
+// ── REMOVE_CHORD_PITCH ────────────────────────────────────────────────────────
+
+describe('REMOVE_CHORD_PITCH', () => {
+  it('removes one pitch from a 3-pitch chord, leaving a 2-pitch chord', () => {
+    const chord = makeChord('c1', [P_C4, P_E4, P_G4])
+    const next = removeChordPitch(makeScore([chord]), 'c1', 2)  // remove G
+    const ev = events(next)[0] as Chord
+    expect(ev.type).toBe('chord')
+    expect(ev.pitches).toHaveLength(2)
+    expect(ev.pitches[0]).toEqual(P_C4)
+    expect(ev.pitches[1]).toEqual(P_E4)
+  })
+
+  it('removing one pitch from a 2-pitch chord collapses to a plain Note', () => {
+    const chord = makeChord('c1', [P_C4, P_E4])
+    const next = removeChordPitch(makeScore([chord]), 'c1', 1)  // remove E
+    const ev = events(next)[0]
+    expect(ev.type).toBe('note')
+    expect((ev as Note).pitch).toEqual(P_C4)
+  })
+
+  it('collapsed Note preserves id, duration, dots from the original Chord', () => {
+    const chord = makeChord('chord-id', [P_C4, P_E4], { duration: 'half', dots: 1, articulations: ['staccato'] as any })
+    const next = removeChordPitch(makeScore([chord]), 'chord-id', 0)
+    const ev = events(next)[0] as Note
+    expect(ev.id).toBe('chord-id')
+    expect(ev.duration).toBe('half')
+    expect(ev.dots).toBe(1)
+    expect((ev as any).articulations).toContain('staccato')
+  })
+
+  it('does not mutate the original score', () => {
+    const chord = makeChord('c1', [P_C4, P_E4, P_G4])
+    const score = makeScore([chord])
+    removeChordPitch(score, 'c1', 0)
+    expect((events(score)[0] as Chord).pitches).toHaveLength(3)
   })
 })
