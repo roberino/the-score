@@ -1252,13 +1252,17 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
   const enterChordRef        = useRef(enterChordAtPitch)
   const midiLearnListeningRef = useRef(midiLearnListening)
   const setMidiLearnErrorRef  = useRef(setMidiLearnError)
+  const isPlayingRef          = useRef(isPlaying)
   useEffect(() => { enterNoteRef.current          = enterNoteAtPitch    }, [enterNoteAtPitch])
   useEffect(() => { enterChordRef.current         = enterChordAtPitch   }, [enterChordAtPitch])
   useEffect(() => { midiLearnListeningRef.current = midiLearnListening  }, [midiLearnListening])
   useEffect(() => { setMidiLearnErrorRef.current  = setMidiLearnError   }, [setMidiLearnError])
+  useEffect(() => { isPlayingRef.current          = isPlaying           }, [isPlaying])
 
   // MIDI handler — buffers notes for CHORD_WINDOW_MS then dispatches note or chord
   const midiInputHandler = useCallback((input: NoteInput) => {
+    // Ignore MIDI input during playback — checked via ref to avoid stale closure.
+    if (isPlayingRef.current) return
     // Check via ref so the handler is never stale with a previous learn-mode value.
     if (midiLearnListeningRef.current) {
       setMidiLearnErrorRef.current("That note is used for note input. Use a CC control instead.")
@@ -1271,6 +1275,8 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     if (chordTimerRef.current !== null) clearTimeout(chordTimerRef.current)
     chordTimerRef.current = setTimeout(() => {
       chordTimerRef.current = null
+      // Guard again: playback may have started within the chord-buffer window.
+      if (isPlayingRef.current) { chordBufRef.current = []; return }
       const buf = chordBufRef.current
       chordBufRef.current = []
       // In midi-out mode, force internal audio for the preview so hardware MIDI THRU
