@@ -93,7 +93,45 @@ When a MIDI message matching a stored binding arrives on the MIDI input path:
 
 ---
 
-## 2. Future controllable functions (non-exhaustive candidates)
+## 2. Note Input Mode
+
+### 2.1 Overview
+
+Controls what happens when a note is entered at a cursor position that already contains a note event. Applies to virtual keyboard and external MIDI input only.
+
+A toggle button placed next to the voice buttons (V1/V2) switches between the two modes.
+
+### 2.2 Overwrite mode (default)
+
+The event at the cursor is replaced entirely.
+
+| Behaviour | Detail |
+|---|---|
+| **Duration** | The currently selected duration is applied to the new note. |
+| **Remainder** | Any unused beats in the measure are filled with rests. |
+| **Rejection** | Input is rejected if the selected duration exceeds the available space at the cursor. |
+| **Cursor** | Advances to the start of the next rest after entry. |
+
+At a rest, overwrite mode is the only valid behaviour and the cursor advances as normal.
+
+### 2.3 Chord mode
+
+A new pitch is added to the note at the cursor, extending it into (or further building) a chord. The note's existing duration is preserved.
+
+| Behaviour | Detail |
+|---|---|
+| **Duration** | Inherited from the existing note; the selected duration is ignored. |
+| **Remainder** | Unchanged — no new time is consumed. |
+| **Rejection** | Input is ignored if the pitch is already present in the chord. |
+| **Cursor** | Stays on the same beat, ready for additional pitches. |
+
+If the cursor is on a **rest**, chord mode falls back to overwrite behaviour (a rest has no pitches to extend).
+
+### 2.4 Relationship to simultaneous MIDI chord entry
+
+Simultaneously-played MIDI notes (within the 50 ms detection window) are always entered as a chord regardless of the current input mode — the window fires before the mode toggle is consulted. Chord mode enables *sequential* chord building: the user plays or clicks one pitch at a time to accumulate pitches on a single beat.
+
+## 3. Future controllable functions (non-exhaustive candidates)
 
 The following are **out of scope for the initial release** but should be kept in mind when designing the binding registry:
 

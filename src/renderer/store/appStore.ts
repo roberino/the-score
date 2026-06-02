@@ -85,6 +85,7 @@ export interface AppState {
   isDotted: boolean
   primedAccidental: Accidental | null
   activeVoice: 0 | 1
+  noteInputMode: 'overwrite' | 'chord'
   lyricCursorNoteId: string | null
   cursorMeasureId: string | null
   cursorBeatPosition: number          // in 64th-note units
@@ -160,6 +161,7 @@ export interface AppState {
   clearResizeError: () => void
   setPrimedAccidental: (acc: Accidental | null) => void
   setActiveVoice: (voice: 0 | 1) => void
+  setNoteInputMode: (mode: 'overwrite' | 'chord') => void
   setLyricCursor: (noteId: string | null) => void
   setCursor: (measureId: string | null, beatPosition: number) => void
   setLastEnteredPitch: (pitch: Pitch | null) => void
@@ -208,6 +210,7 @@ export const useAppStore = create<AppState>()(
     isDotted: false,
     primedAccidental: null,
     activeVoice: 0,
+    noteInputMode: 'overwrite',
     lyricCursorNoteId: null,
     cursorMeasureId: (_initialScore.parts[0]?.staves[0]?.measures[0]?.id as string | undefined) ?? null,
     cursorBeatPosition: 0,
@@ -725,6 +728,7 @@ export const useAppStore = create<AppState>()(
 
     clearResizeError: () => set(s => { s.resizeError = null }),
     setPrimedAccidental: (acc) => set(s => { s.primedAccidental = acc }),
+    setNoteInputMode: (mode) => set(s => { s.noteInputMode = mode }),
     setActiveVoice: (voice) => {
       set(s => { s.activeVoice = voice })
       const { inputMode } = get()

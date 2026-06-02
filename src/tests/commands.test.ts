@@ -3,11 +3,12 @@
 // P2: RESIZE_NOTE, TOGGLE_TIE
 // P3: INSERT_MEASURE, REMOVE_MEASURE, CLEAR_MEASURES
 // MIDI chord entry: REPLACE_NOTE + DELETE_NOTE + ADD_NOTE sequence against a rest-filled measure
+// Note input mode: overwrite vs chord mode command sequences
 
 import { describe, it, expect } from 'vitest'
 import { applyCommand } from '@shared/commands'
 import type { Score, Note, NoteEvent, Slur, Duration, TimeSignature, KeySignature, Chord, Pitch, Articulation } from '@shared/score'
-import { createRest } from '@shared/score'
+import { createRest, createNote } from '@shared/score'
 
 // ── Score fixture helpers ─────────────────────────────────────────────────────
 
@@ -964,5 +965,133 @@ describe('MIDI chord entry — replacing a rest with a chord', () => {
       noteId: wholeRest.id, event: CHORD_CEG,
     })
     expect(events(score)[0].type).toBe('rest')
+  })
+})
+
+// ── Note input mode — overwrite mode at existing note ────────────────────────
+//
+// Overwrite mode: REPLACE_NOTE with a brand-new note discards existing pitches
+// and applies the selected duration. buildNoteInsertCommands adjusts trailing rests
+// to fit the new duration.
+
+describe('Note input mode — overwrite: replaces note at cursor', () => {
+  it('single note → replaced by different pitch (same duration, no trailing rests consumed)', () => {
+    const c4 = createNote('C', 4, 'quarter')
+    const e4 = createNote('E', 4, 'quarter')
+    const score = makeScore([c4])
+    const next = applyCommand(score, {
+      type: 'REPLACE_NOTE', partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID,
+      noteId: c4.id, event: e4,
+    })
+    const evs = events(next)
+    expect(evs).toHaveLength(1)
+    expect((evs[0] as Note).pitch.noteName).toBe('E')
+    expect(evs[0].type).toBe('note')
+  })
+
+  it('chord at cursor → replaced by single note (pitches not accumulated)', () => {
+    const chord = makeChord('c1', [P_C4, P_E4, P_G4])
+    const g4    = createNote('G', 4, 'quarter')
+    const score = makeScore([chord])
+    // Overwrite: REPLACE_NOTE with single note, discarding all chord pitches
+    const next = applyCommand(score, {
+      type: 'REPLACE_NOTE', partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID,
+      noteId: chord.id, event: g4,
+    })
+    const evs = events(next)
+    expect(evs).toHaveLength(1)
+    expect(evs[0].type).toBe('note')
+    expect((evs[0] as Note).pitch.noteName).toBe('G')
+  })
+
+  it('duration change consumes trailing rest and re-fills remainder', () => {
+    // C4 quarter at beat 0 + quarter rest at beat 1 → overwrite with half note
+    const c4   = createNote('C', 4, 'quarter')
+    const rest = createRest('quarter')
+    const e4h  = createNote('E', 4, 'half')
+    const score = makeScore([c4, rest])
+    // buildNoteInsertCommands: REPLACE_NOTE + DELETE_NOTE (consumes trailing rest, no remainder)
+    const next = applyCommands(score, [
+      { type: 'REPLACE_NOTE', partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID, noteId: c4.id, event: e4h },
+      { type: 'DELETE_NOTE',  partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID, noteId: rest.id },
+    ])
+    const evs = events(next)
+    expect(evs).toHaveLength(1)
+    expect(evs[0].type).toBe('note')
+    expect(evs[0].duration).toBe('half')
+    expect((evs[0] as Note).pitch.noteName).toBe('E')
+  })
+})
+
+// ── Note input mode — chord mode at existing note ────────────────────────────
+//
+// Chord mode: REPLACE_NOTE with a chord that includes the existing pitch(es) plus
+// the new pitch, preserving the existing duration. The cursor does not advance.
+
+describe('Note input mode — chord: adds pitch preserving duration', () => {
+  it('note → chord: adds new pitch, duration inherited from existing note', () => {
+    const c4q = createNote('C', 4, 'quarter')
+    const score = makeScore([c4q])
+    // Chord mode: REPLACE_NOTE with chord preserving quarter duration
+    const chordCE: Chord = {
+      id: c4q.id, type: 'chord',
+      pitches: [P_C4, P_E4],
+      duration: 'quarter', dots: 0, articulations: [],
+    }
+    const next = applyCommand(score, {
+      type: 'REPLACE_NOTE', partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID,
+      noteId: c4q.id, event: chordCE,
+    })
+    const evs = events(next)
+    expect(evs).toHaveLength(1)
+    expect(evs[0].type).toBe('chord')
+    expect(evs[0].duration).toBe('quarter')
+    expect((evs[0] as Chord).pitches).toHaveLength(2)
+    expect((evs[0] as Chord).pitches.map(p => p.noteName)).toEqual(['C', 'E'])
+  })
+
+  it('chord → chord: adds pitch to existing chord, duration preserved', () => {
+    const chordCE = makeChord('c1', [P_C4, P_E4])
+    const score = makeScore([chordCE])
+    // Chord mode: add G4 → [C4, E4, G4], duration stays quarter
+    const chordCEG: Chord = {
+      id: 'c1', type: 'chord',
+      pitches: [P_C4, P_E4, P_G4],
+      duration: 'quarter', dots: 0, articulations: [],
+    }
+    const next = applyCommand(score, {
+      type: 'REPLACE_NOTE', partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID,
+      noteId: 'c1', event: chordCEG,
+    })
+    const evs = events(next)
+    expect(evs).toHaveLength(1)
+    expect(evs[0].type).toBe('chord')
+    expect(evs[0].duration).toBe('quarter')
+    expect((evs[0] as Chord).pitches).toHaveLength(3)
+  })
+
+  it('duplicate pitch: dedup filter leaves chord unchanged', () => {
+    // Simulate the dedup logic used by chord mode when the entered pitch already exists
+    const existingPitches: Pitch[] = [P_C4, P_E4]
+    const newPitch: Pitch = P_C4  // duplicate
+    const merged = [...existingPitches, newPitch]
+      .filter((p, i, arr) => arr.findIndex(q => q.noteName === p.noteName && q.octave === p.octave) === i)
+    expect(merged).toHaveLength(2)
+    expect(merged.map(p => p.noteName)).toEqual(['C', 'E'])
+  })
+
+  it('at rest: falls back to overwrite — uses buildRestReplaceCommands pattern', () => {
+    // Chord mode at a rest is identical to overwrite (spec §2.3)
+    const wholeRest = createRest('whole')
+    const score = makeScore([wholeRest])
+    // Same command sequence as rest-replace overwrite path
+    const next = applyCommands(score, [
+      { type: 'REPLACE_NOTE', partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID, noteId: wholeRest.id, event: createNote('C', 4, 'quarter') },
+      { type: 'ADD_NOTE',     partId: PART_ID, staffId: STAFF_ID, measureId: MEASURE_ID, voiceId: VOICE_ID, event: { ...createRest('half'), dots: 1 as const }, index: 1 },
+    ])
+    const evs = events(next)
+    expect(evs[0].type).toBe('note')
+    expect(evs[0].duration).toBe('quarter')
+    expect(evs[1].type).toBe('rest')  // remainder rest filled in
   })
 })

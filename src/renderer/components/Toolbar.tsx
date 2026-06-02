@@ -68,6 +68,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     selectedDuration,
     isDotted, toggleDot, resizeNote,
     activeVoice, setActiveVoice,
+    noteInputMode, setNoteInputMode,
     score, cursorMeasureId, dispatch,
     keyboardVisible, toggleKeyboard,
     soundOnInput, toggleSoundOnInput,
@@ -523,6 +524,31 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
               </button>
             ))}
           </div>
+
+          {/* Note input mode toggle — visible in note mode only */}
+          {inputMode === 'note' && (
+            <button
+              onClick={() => setNoteInputMode(noteInputMode === 'overwrite' ? 'chord' : 'overwrite')}
+              title={
+                noteInputMode === 'overwrite'
+                  ? 'Overwrite mode: replaces note at cursor. Click to switch to Chord mode.'
+                  : 'Chord mode: adds pitch to existing note. Click to switch to Overwrite mode.'
+              }
+              style={{
+                padding: '2px 8px',
+                fontSize: 11,
+                borderRadius: 3,
+                border: 'none',
+                cursor: 'pointer',
+                background: noteInputMode === 'chord' ? '#0e639c' : '#1e1e1e',
+                color: noteInputMode === 'chord' ? '#fff' : '#9d9d9d',
+                transition: 'background 0.1s',
+                marginRight: 4,
+              }}
+            >
+              {noteInputMode === 'overwrite' ? 'Overwrite' : 'Chord'}
+            </button>
+          )}
 
           <div style={{ width: 1, height: 20, background: '#3e3e3e', marginRight: 4 }} />
 
