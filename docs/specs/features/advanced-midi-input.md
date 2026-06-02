@@ -31,15 +31,13 @@ The app captures whichever arrives first during the listening window. CC is pref
 
 Duration order: whole ↔ half ↔ quarter ↔ eighth ↔ 16th ↔ 32nd ↔ 64th (wraps at both ends).
 
-**Direction from CC value:**
+**Direction detection:**
 
-| CC value | Direction |
-|---|---|
-| 65–127 | Forward (whole → 64th) |
-| 1–63 | Backward (64th → whole) |
-| 64 | Dead zone — no change |
+The app uses a hybrid strategy to support both absolute knobs/sliders and relative encoders:
 
-This convention matches the standard relative-encoder protocol used by most MIDI controllers (knobs, jog wheels): clockwise sends values above 64, counter-clockwise sends values below 64. Absolute sliders also work — above the midpoint steps forward, below it steps backward.
+1. **Delta (absolute encoders / physical knobs)**: if the incoming CC value differs from the previous value on the same control, the direction is taken from the sign of the change — increasing = forward, decreasing = backward. This is correct for knobs like those on the AKAI MPK Mini that send their absolute position (0–127).
+
+2. **Midpoint heuristic (relative encoders / first message)**: if the value equals the previous value, or no previous value exists, direction is inferred from the midpoint — values above 64 = forward, values below 64 = backward. Value 64 is a dead zone with no effect. This matches the standard relative-encoder protocol (CW sends 65+, CCW sends 63-) used by most dedicated encoder wheels.
 
 The design must allow additional functions to be added to the mappable list without architectural changes (e.g. a registry or config table of `{ id, label, action }`).
 
