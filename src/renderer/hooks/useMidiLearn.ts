@@ -44,7 +44,7 @@ export function useMidiLearn(): void {
             // Map CC value (0–127) to one of 7 durations by dividing the range into
             // equal bands. Whole = low end, 64th = high end, matching the natural
             // feel of a physical knob (fully left = longest, fully right = shortest).
-            const idx = Math.min(DURATION_CYCLE.length - 1, Math.floor(input.value * DURATION_CYCLE.length / 128))
+            const idx = Math.min(DURATION_CYCLE.length - 1, Math.floor((127 - input.value) * DURATION_CYCLE.length / 128))
             setDurationRef.current(DURATION_CYCLE[idx])
           }
           return

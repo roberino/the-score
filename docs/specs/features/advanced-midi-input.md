@@ -33,15 +33,15 @@ The 0–127 range is divided into 7 equal bands:
 
 | CC range | Duration |
 |---|---|
-| 0–17 | Whole |
-| 18–35 | Half |
-| 36–53 | Quarter |
+| 0–17 | 64th |
+| 18–35 | 32nd |
+| 36–53 | 16th |
 | 54–71 | Eighth |
-| 72–89 | 16th |
-| 90–107 | 32nd |
-| 108–127 | 64th |
+| 72–89 | Quarter |
+| 90–107 | Half |
+| 108–127 | Whole |
 
-This maps naturally to a physical knob: fully left = longest duration, fully right = shortest. The knob position always reflects the selected duration with no state to track.
+This maps naturally to a physical knob: fully left = shortest duration, fully right = longest. The knob position always reflects the selected duration with no state to track.
 
 The design must allow additional functions to be added to the mappable list without architectural changes (e.g. a registry or config table of `{ id, label, action }`).
 
