@@ -884,14 +884,21 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         }
 
         if (atCursor?.event.type === 'note' || atCursor?.event.type === 'chord') {
-          const existingEvent = atCursor.event
-          const isSamePitch   = existingEvent.type === 'note' &&
+          const existingEvent   = atCursor.event
+          const existingPitches = existingEvent.type === 'chord'
+            ? existingEvent.pitches
+            : [(existingEvent as Note).pitch]
+          const isSamePitch = existingEvent.type === 'note' &&
             existingEvent.pitch.noteName === noteName &&
             existingEvent.pitch.octave   === octave
+          const isDuplicate = existingPitches.some(p => p.noteName === noteName && p.octave === octave)
 
           let newEvent: NoteEvent
           if (isSamePitch) {
             newEvent = { ...(existingEvent as Note), duration: selectedDuration, dots } as Note
+          } else if (isDuplicate) {
+            // Pitch already present in chord — no-op
+            return
           } else {
             const newPitch: Pitch = { noteName, octave, accidental: accidental ?? null }
             if (existingEvent.type === 'chord') {
@@ -1205,6 +1212,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
         const newPitches: Pitch[] = inputs
           .map(inp => ({ noteName: inp.noteName as NoteName, octave: inp.octave, accidental: (inp.accidental ?? null) as Accidental }))
+          .filter((p, i, arr) => arr.findIndex(q => q.noteName === p.noteName && q.octave === p.octave) === i)
           .sort((a, b) => (a.octave * 7 + 'CDEFGAB'.indexOf(a.noteName)) - (b.octave * 7 + 'CDEFGAB'.indexOf(b.noteName)))
 
         // Handle note/chord at cursor position
@@ -1369,6 +1377,15 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
   useMidiInput(midiInputHandler)
   useMidiLearn()
+
+  // Cancel any pending chord buffer timer on unmount so a stale timeout can't
+  // fire against a freshly remounted component (relevant in React StrictMode dev).
+  useEffect(() => {
+    return () => {
+      if (chordTimerRef.current !== null) clearTimeout(chordTimerRef.current)
+      chordBufRef.current = []
+    }
+  }, [])
 
   const enterRest = useCallback(() => {
     if (!cursorMeasureId) return
