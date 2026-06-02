@@ -13,6 +13,7 @@ export interface NoteInput {
   octave:      number
   accidental?: 'sharp' | 'flat' | 'natural'
   velocity:    number   // 0–127
+  channel?:    number   // MIDI channel 0–15; present for hardware MIDI events
   source?:     'midi' | 'keyboard'
 }
 
@@ -47,11 +48,19 @@ const CHROMATIC: { noteName: NoteName; accidental?: 'sharp' }[] = [
   { noteName: 'B' },
 ]
 
-function midiNoteToInput(midiNote: number, velocity: number): NoteInput {
+function midiNoteToInput(midiNote: number, velocity: number, channel: number): NoteInput {
   const octave       = Math.floor(midiNote / 12) - 1
   const noteInOctave = midiNote % 12
   const { noteName, accidental } = CHROMATIC[noteInOctave] ?? { noteName: 'C' }
-  return { noteName, octave, ...(accidental ? { accidental } : {}), velocity, source: 'midi' }
+  return { noteName, octave, ...(accidental ? { accidental } : {}), velocity, channel, source: 'midi' }
+}
+
+/** Reverse of midiNoteToInput — converts a NoteInput back to a MIDI note number. */
+export function noteInputToMidi(input: Pick<NoteInput, 'noteName' | 'octave' | 'accidental'>): number {
+  const STEP: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }
+  const base = (input.octave + 1) * 12 + (STEP[input.noteName] ?? 0)
+  const acc  = input.accidental === 'sharp' ? 1 : input.accidental === 'flat' ? -1 : 0
+  return base + acc
 }
 
 export class MidiService {
@@ -172,7 +181,7 @@ export class MidiService {
 
     const isNoteOn = msgType === 0x90 && data2 > 0
     if (!isNoteOn) return
-    const input = midiNoteToInput(data1, data2)
+    const input = midiNoteToInput(data1, data2, channel)
     this.handlers.forEach(h => h(input))
   }
 }

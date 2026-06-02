@@ -35,28 +35,10 @@ function normalizeMeasureRests(score: Score): Score {
 
 export type InputMode = 'select' | 'note' | 'rest' | 'text' | 'lyric' | 'midi'
 
-export type MidiLearnFunctionId = 'durationCycle' | 'cursorMove' | 'delete' | 'dotToggle'
-
-export interface MidiLearnBinding {
-  type:    'cc' | 'note'
-  channel: number
-  number:  number  // CC number (for 'cc') or MIDI note (for 'note')
-}
-
-export type MidiLearnFunctionType = 'Range' | 'Directional' | 'Trigger'
-
-export interface MidiLearnFunctionDef {
-  id:    MidiLearnFunctionId
-  label: string
-  type:  MidiLearnFunctionType
-}
-
-export const MIDI_LEARN_FUNCTIONS: MidiLearnFunctionDef[] = [
-  { id: 'durationCycle', label: 'Duration select',  type: 'Range'       },
-  { id: 'cursorMove',    label: 'Cursor movement',  type: 'Directional' },
-  { id: 'delete',        label: 'Delete',           type: 'Trigger'     },
-  { id: 'dotToggle',     label: 'Dot toggle',       type: 'Trigger'     },
-]
+export type { MidiLearnFunctionId, MidiLearnBinding, MidiLearnFunctionType, MidiLearnFunctionDef } from './midiLearnDefs'
+export { MIDI_LEARN_FUNCTIONS } from './midiLearnDefs'
+import { MIDI_LEARN_FUNCTIONS } from './midiLearnDefs'
+import type { MidiLearnFunctionId, MidiLearnBinding } from './midiLearnDefs'
 
 function loadMidiLearnBindings(): Partial<Record<MidiLearnFunctionId, MidiLearnBinding>> {
   const result: Partial<Record<MidiLearnFunctionId, MidiLearnBinding>> = {}

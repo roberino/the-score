@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
-import { useAppStore } from '../store/appStore'
+import { useAppStore, MIDI_LEARN_FUNCTIONS } from '../store/appStore'
 import type { Command } from '@shared/commands'
 import { INSTRUMENTS } from '@shared/instruments'
 import * as Tone from 'tone'
@@ -49,6 +49,7 @@ import {
 } from '@shared/musicUtils'
 import { pitchToHz } from '../engine/audioEngine'
 import { previewNote } from '../engine/notePreview'
+import { noteInputToMidi } from '../services/midiService'
 import { pitchToMidi, midiOutputEngine } from '../engine/midiOutputEngine'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
@@ -583,7 +584,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     lyricCursorNoteId, setLyricCursor,
     isPlaying,
     barSelection, setBarSelection, deleteSelectedBars,
-    midiLearnListening, setMidiLearnError,
+    midiLearnListening, midiLearnBindings, setMidiLearnError,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -1328,14 +1329,16 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
   const chordTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Always-current refs so the timer callback gets the latest callbacks
-  const enterNoteRef         = useRef(enterNoteAtPitch)
-  const enterChordRef        = useRef(enterChordAtPitch)
+  const enterNoteRef          = useRef(enterNoteAtPitch)
+  const enterChordRef         = useRef(enterChordAtPitch)
   const midiLearnListeningRef = useRef(midiLearnListening)
+  const midiLearnBindingsRef  = useRef(midiLearnBindings)
   const setMidiLearnErrorRef  = useRef(setMidiLearnError)
   const isPlayingRef          = useRef(isPlaying)
   useEffect(() => { enterNoteRef.current          = enterNoteAtPitch    }, [enterNoteAtPitch])
   useEffect(() => { enterChordRef.current         = enterChordAtPitch   }, [enterChordAtPitch])
   useEffect(() => { midiLearnListeningRef.current = midiLearnListening  }, [midiLearnListening])
+  useEffect(() => { midiLearnBindingsRef.current  = midiLearnBindings   }, [midiLearnBindings])
   useEffect(() => { setMidiLearnErrorRef.current  = setMidiLearnError   }, [setMidiLearnError])
   useEffect(() => { isPlayingRef.current          = isPlaying           }, [isPlaying])
 
@@ -1343,10 +1346,26 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
   const midiInputHandler = useCallback((input: NoteInput) => {
     // Ignore MIDI input during playback — checked via ref to avoid stale closure.
     if (isPlayingRef.current) return
-    // Check via ref so the handler is never stale with a previous learn-mode value.
-    if (midiLearnListeningRef.current) {
-      setMidiLearnErrorRef.current(midiLearnListeningRef.current, "That note is used for note input. Use a CC control instead.")
+
+    const listening = midiLearnListeningRef.current
+    if (listening) {
+      const fnDef = MIDI_LEARN_FUNCTIONS.find(f => f.id === listening)
+      if (fnDef?.acceptsKeyBinding) return  // useMidiLearn handles capture; don't enter note
+      // Range functions can't use key events — show error
+      setMidiLearnErrorRef.current(listening, "This function requires a CC control (knob or slider).")
       return
+    }
+
+    // Runtime: if the incoming note is bound to any key-learn function, block note input
+    // in note/rest mode and let useMidiLearn's subscriber dispatch the action instead.
+    if (inputMode === 'note' || inputMode === 'rest') {
+      const midiNote = noteInputToMidi(input)
+      const channel  = input.channel ?? 0
+      const bindings = midiLearnBindingsRef.current
+      const isBound  = Object.values(bindings).some(
+        b => b?.type === 'note' && b.number === midiNote && b.channel === channel,
+      )
+      if (isBound) return
     }
     if (inputMode === 'text') return
     if (inputMode !== 'note') setInputMode('note')

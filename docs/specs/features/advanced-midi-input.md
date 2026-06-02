@@ -16,24 +16,26 @@ MIDI learn lets users assign physical MIDI controls (knobs, pedals, joysticks, p
 
 Both of the following message types may be learned:
 
-| Type | Trigger condition |
-|---|---|
-| **Note-on** | Velocity > 0 on any MIDI channel |
-| **CC (continuous controller)** | Any CC value > 0 on any MIDI channel |
+| Type | Trigger condition | Accepted for |
+|---|---|---|
+| **Note-on** | Velocity > 0 on any MIDI channel | Trigger and Directional functions only |
+| **CC (continuous controller)** | Any CC value > 0 on any MIDI channel | All function types |
 
-The app captures whichever arrives first during the listening window. CC is preferable when the user has a choice, because note-on messages can conflict with note input (see §1.7).
+The app captures whichever qualifying message arrives first. Note-on events are only accepted by function types that are compatible with a single on/off signal (Trigger and Directional); Range functions require CC.
+
+When a note-on event is bound to a function, that specific pitch and channel is **blocked from note input** in note and rest modes, preventing it from accidentally entering notes while also acting as a control.
 
 ### 1.3 Function types
 
-Functions are categorised by how the CC value is interpreted at runtime:
+Functions are categorised by how the input value is interpreted at runtime:
 
-| Type | How CC value is used | Example function |
-|---|---|---|
-| **Range** | Value (0–127) maps to one of N fixed options | Duration select |
-| **Directional** | Value > 64 = forward/right; value < 64 = backward/left; value 64 = no-op | Cursor movement |
-| **Trigger** | Any value > 0 fires the action once | Delete, Dot toggle |
+| Type | How value is used | Accepts CC | Accepts key |
+|---|---|---|---|
+| **Range** | CC value (0–127) maps to one of N fixed options | ✓ | ✗ |
+| **Directional** | Value > 64 = forward; value < 64 = backward; value 64 = no-op. For key events, any note-on fires the assigned direction once. | ✓ | ✓ |
+| **Trigger** | Any value > 0 fires the action once | ✓ | ✓ |
 
-The function registry must be extensible — new functions can be added without structural changes to the dispatch or UI code (e.g. a config table of `{ id, label, type, action }`).
+The function registry must be extensible — new functions can be added without structural changes to the dispatch or UI code (e.g. a config table of `{ id, label, type, acceptsKeyBinding, action }`).
 
 ### 1.4 Controllable functions
 
@@ -53,25 +55,37 @@ Maps the CC value (0–127) to one of the 7 note durations by dividing the range
 
 Persistence key: `midiLearn_durationCycle` (existing, unchanged).
 
-#### Cursor movement *(Directional)*
+#### Cursor left *(Directional)*
 
-Moves the input cursor one event left or right, identical to the ArrowLeft / ArrowRight behaviour in note/rest mode.
+Moves the input cursor one event to the left (previous event), identical to the ArrowLeft behaviour in note/rest mode.
 
-- **Value > 64** → move right (next event)
-- **Value < 64** → move left (previous event)
-- **Value = 64** → dead zone, no movement
+- **CC value > 64** → move left (consistent with the Directional convention; the higher value acts as the "active" signal for this direction)
+- **CC value < 64** → no-op for this binding
+- **CC value = 64** → dead zone, no movement
+- **Key event** → move left once per note-on
 
-Active only when the input mode is **note** or **rest**. At a measure boundary the cursor wraps to the adjacent measure (first or last event), consistent with the keyboard implementation. At the score boundaries (start or end) the action is silently ignored.
+Active only when the input mode is **note** or **rest**. At the first event of the first measure the action is silently ignored. The bound key is blocked from note input in note and rest modes.
 
-Each CC message moves exactly one step regardless of how far the joystick is held; continuous movement while the control is held results from the stream of repeated messages the hardware sends.
+Persistence key: `midiLearn_cursorLeft`.
 
-Persistence key: `midiLearn_cursorMove`.
+#### Cursor right *(Directional)*
+
+Moves the input cursor one event to the right (next event), identical to the ArrowRight behaviour in note/rest mode.
+
+- **CC value > 64** → move right
+- **CC value < 64** → no-op for this binding
+- **CC value = 64** → dead zone, no movement
+- **Key event** → move right once per note-on
+
+Active only when the input mode is **note** or **rest**. At the last event of the last measure the action is silently ignored. The bound key is blocked from note input in note and rest modes.
+
+Persistence key: `midiLearn_cursorRight`.
 
 #### Delete *(Trigger)*
 
 Replaces the note or chord at the cursor position with a rest of the same duration, identical to the Delete/Backspace key behaviour in note/rest mode. If the cursor is already on a rest the action is a no-op.
 
-Active only when the input mode is **note** or **rest**.
+Active only when the input mode is **note** or **rest**. If bound to a key, that key is blocked from note input in note and rest modes.
 
 Persistence key: `midiLearn_delete`.
 
@@ -79,7 +93,7 @@ Persistence key: `midiLearn_delete`.
 
 Toggles the dotted-duration flag on or off, identical to the `.` key shortcut.
 
-Active in **note**, **rest**, and **select** modes.
+Active in **note**, **rest**, and **select** modes. If bound to a key, that key is blocked from note input in note and rest modes.
 
 Persistence key: `midiLearn_dotToggle`.
 
@@ -134,17 +148,17 @@ Only one function can be in the **Listening** state at a time. Clicking a Learn 
 
 ### 1.7 Conflict detection
 
-Two types of conflict are checked in order:
+Conflicts are checked in order when a message arrives during listening:
 
-**Note-on conflict** — if the captured message is a note-on whose pitch is handled by the note entry path:
-- Inline row error: *"That note is used for note input. Use a CC control instead."*
+**Function type mismatch** — if the captured message is a note-on and the function does not accept key bindings (i.e. Range functions):
+- Inline row error: *"This function requires a CC control (knob or slider). Use a note for Trigger or Directional functions."*
 - Remain in Listening.
 
-**Cross-function CC conflict** — if the captured CC number is already bound to a different function:
-- Inline row error: *"CC [n] is already assigned to [Function name]. Clear that binding first."*
+**Cross-function conflict** — if the captured CC number or MIDI note is already bound to a different function on the same channel:
+- Inline row error: *"[CC n / Note n] is already assigned to "[Function name]". Clear that binding first."*
 - Remain in Listening.
 
-CC messages that don't conflict with note input or other functions are always accepted.
+CC messages on unbound controls, and note-on messages for key-bindable functions on unbound pitches, are always accepted.
 
 ### 1.8 Persistence
 

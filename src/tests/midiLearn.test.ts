@@ -1,10 +1,14 @@
-// Tests for the MIDI learn CC-value → duration mapping.
-//
-// The 0–127 range is divided into 7 equal bands, one per duration.
-// Fully right (127) = whole note, fully left (0) = 64th note.
+// Tests for MIDI learn:
+//   CC-value → duration mapping (range control)
+//   Key-binding eligibility (acceptsKeyBinding flag per function)
+//   Note-input blocking logic for bound keys
 
 import { describe, it, expect } from 'vitest'
 import { ccValueToDuration } from '@shared/musicUtils'
+import { MIDI_LEARN_FUNCTIONS } from '@renderer/store/midiLearnDefs'
+import { noteInputToMidi } from '@renderer/services/midiService'
+import type { NoteInput } from '@renderer/services/midiService'
+import type { MidiLearnBinding } from '@renderer/store/midiLearnDefs'
 
 // ── Extremes ──────────────────────────────────────────────────────────────────
 
@@ -95,5 +99,92 @@ describe('ccValueToDuration — full coverage', () => {
       expect(rank).toBeGreaterThanOrEqual(prevRank)
       prevRank = rank
     }
+  })
+})
+
+// ── Key-binding eligibility ───────────────────────────────────────────────────
+
+describe('MIDI_LEARN_FUNCTIONS — acceptsKeyBinding flag', () => {
+  it('durationCycle does not accept key bindings (Range type)', () => {
+    const fn = MIDI_LEARN_FUNCTIONS.find(f => f.id === 'durationCycle')!
+    expect(fn.acceptsKeyBinding).toBe(false)
+  })
+
+  it('cursorLeft accepts key bindings (Directional type)', () => {
+    expect(MIDI_LEARN_FUNCTIONS.find(f => f.id === 'cursorLeft')!.acceptsKeyBinding).toBe(true)
+  })
+
+  it('cursorRight accepts key bindings (Directional type)', () => {
+    expect(MIDI_LEARN_FUNCTIONS.find(f => f.id === 'cursorRight')!.acceptsKeyBinding).toBe(true)
+  })
+
+  it('delete accepts key bindings (Trigger type)', () => {
+    expect(MIDI_LEARN_FUNCTIONS.find(f => f.id === 'delete')!.acceptsKeyBinding).toBe(true)
+  })
+
+  it('dotToggle accepts key bindings (Trigger type)', () => {
+    expect(MIDI_LEARN_FUNCTIONS.find(f => f.id === 'dotToggle')!.acceptsKeyBinding).toBe(true)
+  })
+
+  it('all Trigger and Directional functions accept key bindings', () => {
+    const nonRange = MIDI_LEARN_FUNCTIONS.filter(f => f.type !== 'Range')
+    expect(nonRange.every(f => f.acceptsKeyBinding)).toBe(true)
+  })
+
+  it('all Range functions reject key bindings', () => {
+    const range = MIDI_LEARN_FUNCTIONS.filter(f => f.type === 'Range')
+    expect(range.every(f => !f.acceptsKeyBinding)).toBe(true)
+  })
+})
+
+// ── Key-binding blocking logic ────────────────────────────────────────────────
+
+describe('Key-binding blocking — note-input guard', () => {
+  function isBound(
+    input: NoteInput,
+    bindings: Partial<Record<string, MidiLearnBinding>>,
+  ): boolean {
+    const midiNote = noteInputToMidi(input)
+    const channel  = input.channel ?? 0
+    return Object.values(bindings).some(
+      b => b?.type === 'note' && b.number === midiNote && b.channel === channel,
+    )
+  }
+
+  const C4: NoteInput = { noteName: 'C', octave: 4, velocity: 80, channel: 0 }
+  const D4: NoteInput = { noteName: 'D', octave: 4, velocity: 80, channel: 0 }
+
+  it('blocks a note that is bound to a function on the same channel', () => {
+    const bindings = { delete: { type: 'note' as const, channel: 0, number: 60 } }
+    expect(isBound(C4, bindings)).toBe(true)
+  })
+
+  it('passes through a note that is not bound', () => {
+    const bindings = { delete: { type: 'note' as const, channel: 0, number: 60 } }
+    expect(isBound(D4, bindings)).toBe(false)
+  })
+
+  it('passes through when the binding is CC type (not a key binding)', () => {
+    const bindings = { delete: { type: 'cc' as const, channel: 0, number: 60 } }
+    expect(isBound(C4, bindings)).toBe(false)
+  })
+
+  it('passes through when the channel does not match', () => {
+    const bindings = { delete: { type: 'note' as const, channel: 1, number: 60 } }
+    const inputCh0: NoteInput = { ...C4, channel: 0 }
+    expect(isBound(inputCh0, bindings)).toBe(false)
+  })
+
+  it('blocks when multiple functions have bindings and one matches', () => {
+    const bindings = {
+      delete:    { type: 'note' as const, channel: 0, number: 62 },
+      dotToggle: { type: 'note' as const, channel: 0, number: 60 },
+    }
+    expect(isBound(C4, bindings)).toBe(true)
+    expect(isBound(D4, bindings)).toBe(true)
+  })
+
+  it('empty bindings: nothing is blocked', () => {
+    expect(isBound(C4, {})).toBe(false)
   })
 })

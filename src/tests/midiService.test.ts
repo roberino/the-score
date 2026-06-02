@@ -4,7 +4,7 @@
 // are fully isolated from each other and from the browser environment.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { MidiService, type NoteInput, type MidiControlInput } from '@renderer/services/midiService'
+import { MidiService, noteInputToMidi, type NoteInput, type MidiControlInput } from '@renderer/services/midiService'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -246,5 +246,69 @@ describe('MidiService — subscription lifecycle', () => {
     fireMessage(port, [0x90, 60, 80])
     expect(a).toHaveLength(1)
     expect(b).toHaveLength(1)
+  })
+})
+
+// ── NoteInput includes channel ────────────────────────────────────────────────
+
+describe('MidiService — NoteInput channel field', () => {
+  let svc:  MidiService
+  let port: MockPort
+
+  beforeEach(async () => {
+    svc  = new MidiService()
+    port = { id: 'p', name: 'TestDevice', onmidimessage: null }
+    stubMidi(makeMidiAccess([port]))
+    await svc.connect()
+    svc.selectInput('p')
+  })
+
+  it('includes the MIDI channel in delivered NoteInput', () => {
+    const received: NoteInput[] = []
+    svc.subscribe(n => received.push(n))
+    fireMessage(port, [0x91, 60, 80])  // note-on channel 1 (status 0x91)
+    expect(received[0].channel).toBe(1)
+  })
+
+  it('channel 0 for status byte 0x90', () => {
+    const received: NoteInput[] = []
+    svc.subscribe(n => received.push(n))
+    fireMessage(port, [0x90, 60, 80])
+    expect(received[0].channel).toBe(0)
+  })
+})
+
+// ── noteInputToMidi — round-trip conversion ───────────────────────────────────
+
+describe('noteInputToMidi — converts NoteInput back to MIDI note number', () => {
+  const cases: [NoteInput, number][] = [
+    [{ noteName: 'C', octave: 4,  velocity: 64 },                   60],
+    [{ noteName: 'C', octave: 4,  velocity: 64, accidental: 'sharp' }, 61],
+    [{ noteName: 'D', octave: 4,  velocity: 64 },                   62],
+    [{ noteName: 'E', octave: 4,  velocity: 64 },                   64],
+    [{ noteName: 'G', octave: 4,  velocity: 64, accidental: 'sharp' }, 68],
+    [{ noteName: 'A', octave: 0,  velocity: 64 },                   21],
+    [{ noteName: 'C', octave: 5,  velocity: 64 },                   72],
+    [{ noteName: 'B', octave: -1, velocity: 64 },                   11],
+  ]
+
+  it.each(cases)('noteInputToMidi(%o) = %i', (input, expected) => {
+    expect(noteInputToMidi(input)).toBe(expected)
+  })
+
+  it('is the inverse of midiNoteToInput for all sharps (0–127)', async () => {
+    // Fire every note through the service and verify round-trip
+    const svc  = new MidiService()
+    const port = { id: 'p', name: 'T', onmidimessage: null as ((e: { data: Uint8Array }) => void) | null }
+    stubMidi(makeMidiAccess([port]))
+    await svc.connect()
+    svc.selectInput('p')
+    for (let n = 0; n <= 127; n++) {
+      const received: NoteInput[] = []
+      svc.subscribe(ni => received.push(ni))
+      fireMessage(port, [0x90, n, 64])
+      expect(noteInputToMidi(received[0])).toBe(n)
+      svc['handlers'].clear()
+    }
   })
 })
