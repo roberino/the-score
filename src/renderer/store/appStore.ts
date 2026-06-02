@@ -1,9 +1,9 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import { createScore, type Score, type Pitch, type Duration, type Accidental, type HairpinType, type Hairpin, type DynamicLevel, type Volta } from '@shared/score'
+import { createScore, createRest, type Score, type Pitch, type Duration, type Accidental, type HairpinType, type Hairpin, type DynamicLevel, type Volta } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import { applyCommand, type Command } from '@shared/commands'
-import { measureCapacityUnits, resolveTimeSig, dottedUnits, DURATION_UNITS, buildPlaybackSequence, buildMeasureTimeline, firstRestBeat, fillWithRests, eventDurationUnits, DURATION_CYCLE } from '@shared/musicUtils'
+import { measureCapacityUnits, resolveTimeSig, dottedUnits, DURATION_UNITS, buildPlaybackSequence, buildMeasureTimeline, firstRestBeat, fillWithRests, eventDurationUnits, DURATION_CYCLE, moveCursorPosition } from '@shared/musicUtils'
 import { produce } from 'immer'
 import type { PlaybackController } from '../engine/audioEngine'
 import { playScoreWithSampler } from '../engine/samplerEngine'
@@ -35,7 +35,7 @@ function normalizeMeasureRests(score: Score): Score {
 
 export type InputMode = 'select' | 'note' | 'rest' | 'text' | 'lyric' | 'midi'
 
-export type MidiLearnFunctionId = 'durationCycle'
+export type MidiLearnFunctionId = 'durationCycle' | 'cursorMove' | 'delete' | 'dotToggle'
 
 export interface MidiLearnBinding {
   type:    'cc' | 'note'
@@ -43,13 +43,30 @@ export interface MidiLearnBinding {
   number:  number  // CC number (for 'cc') or MIDI note (for 'note')
 }
 
+export type MidiLearnFunctionType = 'Range' | 'Directional' | 'Trigger'
+
+export interface MidiLearnFunctionDef {
+  id:    MidiLearnFunctionId
+  label: string
+  type:  MidiLearnFunctionType
+}
+
+export const MIDI_LEARN_FUNCTIONS: MidiLearnFunctionDef[] = [
+  { id: 'durationCycle', label: 'Duration select',  type: 'Range'       },
+  { id: 'cursorMove',    label: 'Cursor movement',  type: 'Directional' },
+  { id: 'delete',        label: 'Delete',           type: 'Trigger'     },
+  { id: 'dotToggle',     label: 'Dot toggle',       type: 'Trigger'     },
+]
 
 function loadMidiLearnBindings(): Partial<Record<MidiLearnFunctionId, MidiLearnBinding>> {
-  try {
-    const raw = localStorage.getItem('midiLearn_durationCycle')
-    if (raw) return { durationCycle: JSON.parse(raw) as MidiLearnBinding }
-  } catch { /* ignore */ }
-  return {}
+  const result: Partial<Record<MidiLearnFunctionId, MidiLearnBinding>> = {}
+  for (const fn of MIDI_LEARN_FUNCTIONS) {
+    try {
+      const raw = localStorage.getItem(`midiLearn_${fn.id}`)
+      if (raw) result[fn.id] = JSON.parse(raw) as MidiLearnBinding
+    } catch { /* ignore */ }
+  }
+  return result
 }
 
 export interface BarSelection {
@@ -105,7 +122,7 @@ export interface AppState {
   // MIDI learn
   midiLearnListening: MidiLearnFunctionId | null
   midiLearnBindings:  Partial<Record<MidiLearnFunctionId, MidiLearnBinding>>
-  midiLearnError:     string | null
+  midiLearnErrors:    Partial<Record<MidiLearnFunctionId, string>>
 
   // Playback
   isPlaying: boolean
@@ -182,8 +199,10 @@ export interface AppState {
   startMidiLearnListening: (fnId: MidiLearnFunctionId) => void
   stopMidiLearnListening:  () => void
   setMidiLearnBinding:     (fnId: MidiLearnFunctionId, binding: MidiLearnBinding | null) => void
-  setMidiLearnError:       (msg: string | null) => void
+  setMidiLearnError:       (fnId: MidiLearnFunctionId, msg: string | null) => void
   cycleDuration:           () => void
+  moveCursorByDirection:   (direction: 'prev' | 'next') => void
+  deleteAtCursor:          () => void
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -226,7 +245,7 @@ export const useAppStore = create<AppState>()(
 
     midiLearnListening: null,
     midiLearnBindings:  loadMidiLearnBindings(),
-    midiLearnError:     null,
+    midiLearnErrors:    {},
 
     isPlaying: false,
     playbackManualStop: false,
@@ -785,9 +804,15 @@ export const useAppStore = create<AppState>()(
       else       { localStorage.removeItem('midiInputDeviceId'); localStorage.removeItem('midiInputDeviceName') }
     },
 
-    startMidiLearnListening: (fnId) => set(s => { s.midiLearnListening = fnId }),
-    stopMidiLearnListening:  () => set(s => { s.midiLearnListening = null }),
-    setMidiLearnError:       (msg) => set(s => { s.midiLearnError = msg }),
+    startMidiLearnListening: (fnId) => set(s => {
+      s.midiLearnListening = fnId
+      delete s.midiLearnErrors[fnId]
+    }),
+    stopMidiLearnListening: () => set(s => { s.midiLearnListening = null }),
+    setMidiLearnError: (fnId, msg) => set(s => {
+      if (msg) s.midiLearnErrors[fnId] = msg
+      else     delete s.midiLearnErrors[fnId]
+    }),
 
     setMidiLearnBinding: (fnId, binding) => {
       set(s => {
@@ -803,6 +828,53 @@ export const useAppStore = create<AppState>()(
       const idx  = DURATION_CYCLE.indexOf(selectedDuration)
       const next = DURATION_CYCLE[(idx + 1) % DURATION_CYCLE.length]
       set(s => { s.selectedDuration = next })
+    },
+
+    moveCursorByDirection: (direction) => {
+      const { score, cursorMeasureId, cursorBeatPosition, activeVoice } = get()
+      if (!cursorMeasureId) return
+      for (const part of score.parts) {
+        for (const staff of part.staves) {
+          if (!staff.measures.some(m => m.id === cursorMeasureId)) continue
+          const result = moveCursorPosition(
+            staff.measures, cursorMeasureId, cursorBeatPosition,
+            activeVoice, direction, score.timeSignature,
+          )
+          if (result) get().setCursor(result.measureId, result.beatPosition)
+          return
+        }
+      }
+    },
+
+    deleteAtCursor: () => {
+      const { score, cursorMeasureId, cursorBeatPosition, activeVoice } = get()
+      if (!cursorMeasureId) return
+      for (const part of score.parts) {
+        for (const staff of part.staves) {
+          const mIdx = staff.measures.findIndex(m => m.id === cursorMeasureId)
+          if (mIdx === -1) continue
+          const measure = staff.measures[mIdx]
+          const voice   = measure.voices[activeVoice]
+          if (!voice) return
+          let acc = 0
+          for (const ev of voice.events) {
+            if (acc === cursorBeatPosition) {
+              if (ev.type === 'rest') return
+              const rest = { ...createRest(ev.duration), dots: ev.dots }
+              get().dispatch({
+                type: 'REPLACE_NOTE',
+                partId: part.id, staffId: staff.id,
+                measureId: measure.id, voiceId: voice.id,
+                noteId: ev.id, event: rest,
+              })
+              return
+            }
+            acc += eventDurationUnits(ev)
+            if (acc > cursorBeatPosition) return
+          }
+          return
+        }
+      }
     },
 
     insertMeasure: () => {

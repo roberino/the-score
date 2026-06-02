@@ -1345,7 +1345,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     if (isPlayingRef.current) return
     // Check via ref so the handler is never stale with a previous learn-mode value.
     if (midiLearnListeningRef.current) {
-      setMidiLearnErrorRef.current("That note is used for note input. Use a CC control instead.")
+      setMidiLearnErrorRef.current(midiLearnListeningRef.current, "That note is used for note input. Use a CC control instead.")
       return
     }
     if (inputMode === 'text') return
