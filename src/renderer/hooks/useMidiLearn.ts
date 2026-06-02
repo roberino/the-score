@@ -41,7 +41,13 @@ export function useMidiLearn(): void {
       const bindings = bindingsRef.current
       for (const [fnId, binding] of Object.entries(bindings) as [MidiLearnFunctionId, MidiLearnBinding][]) {
         if (binding.type === 'cc' && binding.channel === input.channel && binding.number === input.number) {
-          if (fnId === 'durationCycle') cycleRef.current()
+          if (fnId === 'durationCycle') {
+            // value > 64 → forward; value < 64 → backward; value = 64 → dead zone (no-op).
+            // Matches relative-encoder convention (65 = CW, 63 = CCW) and also works
+            // with absolute sliders (above/below centre = forward/backward).
+            if (input.value === 64) return
+            cycleRef.current(input.value > 64 ? 'forward' : 'backward')
+          }
           return
         }
       }

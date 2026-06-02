@@ -27,9 +27,19 @@ The app captures whichever arrives first during the listening window. CC is pref
 
 | Function | Behaviour when triggered |
 |---|---|
-| **Duration cycle** | Cycles forward through the note duration list, wrapping from 64th back to whole. |
+| **Duration cycle** | Steps forward or backward through the note duration list based on the CC value. |
 
-Duration order (cycling): whole → half → quarter → eighth → 16th → 32nd → 64th → *(wrap)* → whole.
+Duration order: whole ↔ half ↔ quarter ↔ eighth ↔ 16th ↔ 32nd ↔ 64th (wraps at both ends).
+
+**Direction from CC value:**
+
+| CC value | Direction |
+|---|---|
+| 65–127 | Forward (whole → 64th) |
+| 1–63 | Backward (64th → whole) |
+| 64 | Dead zone — no change |
+
+This convention matches the standard relative-encoder protocol used by most MIDI controllers (knobs, jog wheels): clockwise sends values above 64, counter-clockwise sends values below 64. Absolute sliders also work — above the midpoint steps forward, below it steps backward.
 
 The design must allow additional functions to be added to the mappable list without architectural changes (e.g. a registry or config table of `{ id, label, action }`).
 

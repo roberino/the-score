@@ -184,7 +184,7 @@ export interface AppState {
   stopMidiLearnListening:  () => void
   setMidiLearnBinding:     (fnId: MidiLearnFunctionId, binding: MidiLearnBinding | null) => void
   setMidiLearnError:       (msg: string | null) => void
-  cycleDuration:           () => void
+  cycleDuration:           (direction: 'forward' | 'backward') => void
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -799,10 +799,13 @@ export const useAppStore = create<AppState>()(
       else         localStorage.removeItem(`midiLearn_${fnId}`)
     },
 
-    cycleDuration: () => {
+    cycleDuration: (direction) => {
       const { selectedDuration } = get()
       const idx  = DURATION_CYCLE.indexOf(selectedDuration)
-      const next = DURATION_CYCLE[(idx + 1) % DURATION_CYCLE.length]
+      const len  = DURATION_CYCLE.length
+      const next = direction === 'forward'
+        ? DURATION_CYCLE[(idx + 1) % len]
+        : DURATION_CYCLE[(idx - 1 + len) % len]
       set(s => { s.selectedDuration = next })
     },
 
