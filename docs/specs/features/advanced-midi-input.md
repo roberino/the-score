@@ -10,7 +10,7 @@ Some MIDI keyboards contain additional controls which could be used to make note
 
 ### 1.1 Purpose
 
-MIDI learn lets users assign a physical MIDI control (knob, pedal, pad, etc.) to an in-app function. The app "listens" for an incoming MIDI message and stores the binding. Initially one function is in scope (duration cycle), but the design must support additional functions without structural changes.
+MIDI learn lets users assign physical MIDI controls (knobs, pedals, joysticks, pads, etc.) to in-app functions. The user opens a dialogue from the toolbar, picks a function, then touches the physical control to bind it. Each function is bound independently; any number can be assigned at once.
 
 ### 1.2 Supported MIDI message types
 
@@ -21,15 +21,25 @@ Both of the following message types may be learned:
 | **Note-on** | Velocity > 0 on any MIDI channel |
 | **CC (continuous controller)** | Any CC value > 0 on any MIDI channel |
 
-The app captures whichever arrives first during the listening window. CC is preferable when the user has a choice, because note-on messages can conflict with note input (see §1.6).
+The app captures whichever arrives first during the listening window. CC is preferable when the user has a choice, because note-on messages can conflict with note input (see §1.7).
 
-### 1.3 Controllable functions
+### 1.3 Function types
 
-| Function | Behaviour when triggered |
-|---|---|
-| **Duration select** | Maps the CC value (0–127) directly to one of the 7 durations. |
+Functions are categorised by how the CC value is interpreted at runtime:
 
-The 0–127 range is divided into 7 equal bands:
+| Type | How CC value is used | Example function |
+|---|---|---|
+| **Range** | Value (0–127) maps to one of N fixed options | Duration select |
+| **Directional** | Value > 64 = forward/right; value < 64 = backward/left; value 64 = no-op | Cursor movement |
+| **Trigger** | Any value > 0 fires the action once | Delete, Dot toggle |
+
+The function registry must be extensible — new functions can be added without structural changes to the dispatch or UI code (e.g. a config table of `{ id, label, type, action }`).
+
+### 1.4 Controllable functions
+
+#### Duration select *(Range — already implemented)*
+
+Maps the CC value (0–127) to one of the 7 note durations by dividing the range into equal bands. Fully right (127) = whole note, fully left (0) = 64th note.
 
 | CC range | Duration |
 |---|---|
@@ -41,52 +51,104 @@ The 0–127 range is divided into 7 equal bands:
 | 90–107 | Half |
 | 108–127 | Whole |
 
-This maps naturally to a physical knob: fully left = shortest duration, fully right = longest. The knob position always reflects the selected duration with no state to track.
+Persistence key: `midiLearn_durationCycle` (existing, unchanged).
 
-The design must allow additional functions to be added to the mappable list without architectural changes (e.g. a registry or config table of `{ id, label, action }`).
+#### Cursor movement *(Directional)*
 
-### 1.4 UI — learn button
+Moves the input cursor one event left or right, identical to the ArrowLeft / ArrowRight behaviour in note/rest mode.
 
-The MIDI learn button is placed in the toolbar, inline with the duration selector.
+- **Value > 64** → move right (next event)
+- **Value < 64** → move left (previous event)
+- **Value = 64** → dead zone, no movement
 
-**States:**
+Active only when the input mode is **note** or **rest**. At a measure boundary the cursor wraps to the adjacent measure (first or last event), consistent with the keyboard implementation. At the score boundaries (start or end) the action is silently ignored.
 
-| State | Visual | Description |
-|---|---|---|
-| **Unassigned** | MIDI icon, neutral | No binding set. Click to enter listening mode. |
-| **Listening** | MIDI icon, pulsing highlight | App is waiting for a MIDI message. Click again to cancel. |
-| **Assigned** | MIDI icon, active/coloured | A binding is stored. Tooltip shows the assigned control (e.g. "CC 64, Ch 1"). Click to clear the binding. |
+Each CC message moves exactly one step regardless of how far the joystick is held; continuous movement while the control is held results from the stream of repeated messages the hardware sends.
 
-Clicking the button cycles through these states:
-- Unassigned → Listening
-- Listening → Unassigned (cancel)
-- Assigned → Unassigned (clear)
+Persistence key: `midiLearn_cursorMove`.
 
-There is no separate "clear" control; the button itself is the toggle.
+#### Delete *(Trigger)*
 
-### 1.5 Learn flow
+Replaces the note or chord at the cursor position with a rest of the same duration, identical to the Delete/Backspace key behaviour in note/rest mode. If the cursor is already on a rest the action is a no-op.
 
-1. User clicks the learn button → state transitions to **Listening**.
-2. App listens for the next qualifying MIDI message (note-on or CC, see §1.2) on any channel.
-3. On receipt of a qualifying message:
-   - Run conflict check (§1.6).
-   - If no conflict: store the binding, transition to **Assigned**, persist to storage (§1.7).
-   - If conflict: show error (§1.6), remain in **Listening** state.
-4. If no MIDI message is received within **10 seconds**, the app auto-cancels and returns to the previous state (Unassigned or Assigned).
+Active only when the input mode is **note** or **rest**.
+
+Persistence key: `midiLearn_delete`.
+
+#### Dot toggle *(Trigger)*
+
+Toggles the dotted-duration flag on or off, identical to the `.` key shortcut.
+
+Active in **note**, **rest**, and **select** modes.
+
+Persistence key: `midiLearn_dotToggle`.
+
+### 1.5 UI — toolbar button and dialogue
+
+#### Toolbar button
+
+A single compact **MIDI** button remains in the toolbar, inline with the duration selector. It opens and closes the MIDI learn dialogue. Its visual state reflects the aggregate binding state across all functions:
+
+| State | Visual |
+|---|---|
+| No functions assigned, dialogue closed | Neutral (dim) |
+| One or more functions assigned, dialogue closed | Active/coloured, badge showing count of assigned functions |
+| Any function currently listening, dialogue closed | Pulsing highlight |
+| Dialogue open | Button highlighted (same as "open picker" convention elsewhere) |
+
+#### MIDI learn dialogue
+
+A floating popup panel (same style as other pickers in the app). It lists every controllable function as a row and stays open while the user assigns controls.
+
+**Row layout** (per function):
+
+```
+[ Function name ]  [ Type ]  [ Binding / status ]  [ Learn button ]
+```
+
+- **Function name**: e.g. "Duration select", "Cursor movement"
+- **Type**: small badge — Range / Directional / Trigger
+- **Binding / status**: one of:
+  - *Unassigned* — no binding set
+  - *CC 7, Ch 1* — bound control identifier
+  - *Listening…* — pulsing, app waiting for a MIDI message
+- **Learn button** cycles through states for that row:
+  - Unassigned → starts listening for this function
+  - Listening → cancels (returns to Unassigned)
+  - Assigned → clears the binding (returns to Unassigned)
+
+Only one function can be in the **Listening** state at a time. Clicking a Learn button on a different row while another is listening first cancels the current listener, then starts a new one.
+
+**Closing the dialogue**: Escape key or a dedicated ✕ close button in the panel header. Closing does not affect any assignments.
+
+### 1.6 Learn flow (per function row)
+
+1. User clicks the row's Learn button → that row transitions to **Listening**.
+2. App listens for the next qualifying MIDI message on any channel.
+3. On receipt:
+   - Run conflict checks (§1.7).
+   - If no conflicts: store the binding, row transitions to **Assigned**, persist (§1.8).
+   - If conflict: show inline error on the row (§1.7), remain **Listening**.
+4. If no message arrives within **10 seconds**, auto-cancel and return to previous state.
 5. During listening, the normal MIDI note-input path is suspended so the incoming message is captured rather than entered as a note.
 
-### 1.6 Conflict detection
+### 1.7 Conflict detection
 
-If the user attempts to learn a **note-on** message whose pitch would also be a valid note input (i.e. is a standard MIDI pitch handled by the note entry path), the assignment is **rejected**:
+Two types of conflict are checked in order:
 
-- Show a brief inline error near the learn button: *"That note is used for note input. Use a CC control or a note outside the input range."*
-- Remain in Listening state so the user can try a different control.
+**Note-on conflict** — if the captured message is a note-on whose pitch is handled by the note entry path:
+- Inline row error: *"That note is used for note input. Use a CC control instead."*
+- Remain in Listening.
 
-CC messages never conflict with note input and are always accepted.
+**Cross-function CC conflict** — if the captured CC number is already bound to a different function:
+- Inline row error: *"CC [n] is already assigned to [Function name]. Clear that binding first."*
+- Remain in Listening.
 
-### 1.7 Persistence
+CC messages that don't conflict with note input or other functions are always accepted.
 
-Learned assignments are saved to `localStorage` under a key namespaced per function (e.g. `midiLearn_durationCycle`). The stored value captures enough information to re-identify the message:
+### 1.8 Persistence
+
+Each function's binding is saved to `localStorage` under its own key (see §1.4). The stored value captures enough information to re-identify the message:
 
 ```json
 { "type": "cc", "channel": 1, "number": 64 }
@@ -94,14 +156,14 @@ Learned assignments are saved to `localStorage` under a key namespaced per funct
 { "type": "note", "channel": 1, "note": 36 }
 ```
 
-Assignments are restored on app launch. If the saved assignment can no longer be validated (e.g. corrupt entry), it is silently cleared.
+Bindings are restored on app launch. A corrupt or unrecognisable entry is silently cleared.
 
-### 1.8 Runtime dispatch
+### 1.9 Runtime dispatch
 
-When a MIDI message matching a stored binding arrives on the MIDI input path:
-- The message is consumed by the binding and does **not** propagate to note input.
-- The associated action is invoked (e.g. advance the selected duration).
+When a MIDI message matching a stored binding arrives:
+- The message is consumed and does **not** propagate to note input.
 - The binding check runs before the note-input handler so a matched control never enters a note.
+- The function's action is invoked according to its type (§1.3), using the CC value where relevant.
 
 ---
 
@@ -145,10 +207,8 @@ Simultaneously-played MIDI notes (within the 50 ms detection window) are always 
 
 ## 3. Future controllable functions (non-exhaustive candidates)
 
-The following are **out of scope for the initial release** but should be kept in mind when designing the binding registry:
+The following are out of scope for the current release but should be kept in mind when maintaining the function registry:
 
-- Octave up / octave down
 - Rest entry
 - Playback start / stop
-- Dot toggle
 - Voice selection
