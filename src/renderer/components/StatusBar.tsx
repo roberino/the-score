@@ -1,5 +1,7 @@
+import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { DURATION_LABELS } from '@shared/musicUtils'
+import { midiService } from '../services/midiService'
 
 const ACCIDENTAL_LABEL: Record<string, string> = {
   sharp: '♯',
@@ -7,11 +9,39 @@ const ACCIDENTAL_LABEL: Record<string, string> = {
   natural: '♮',
 }
 
+const MIDI_EVENT_TTL_MS = 2000
+
+function useMidiEventDisplay(): string | null {
+  const [label, setLabel] = useState<string | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const show = (text: string) => {
+    if (timerRef.current !== null) clearTimeout(timerRef.current)
+    setLabel(text)
+    timerRef.current = setTimeout(() => setLabel(null), MIDI_EVENT_TTL_MS)
+  }
+
+  useEffect(() => {
+    const unsubNote = midiService.subscribe(input => {
+      const acc = input.accidental === 'sharp' ? '♯' : input.accidental === 'flat' ? '♭' : ''
+      show(`${input.noteName}${acc}${input.octave}  vel ${input.velocity}`)
+    })
+    const unsubCC = midiService.subscribeControl(input => {
+      show(`CC ${input.number}  val ${input.value}  ch ${input.channel + 1}`)
+    })
+    return () => { unsubNote(); unsubCC() }
+  }, [])
+
+  return label
+}
+
 export function StatusBar(): JSX.Element {
   const {
     score, filePath, isDirty, zoom, inputMode,
     selectedDuration, isDotted, primedAccidental,
   } = useAppStore()
+
+  const midiEvent = useMidiEventDisplay()
 
   const partCount    = score.parts.length
   const measureCount = score.parts[0]?.staves[0]?.measures.length ?? 0
@@ -42,6 +72,15 @@ export function StatusBar(): JSX.Element {
       <span>♩= {score.tempo} BPM</span>
 
       <div style={{ flex: 1 }} />
+
+      {midiEvent && (
+        <>
+          <span style={{ opacity: 0.75, fontFamily: 'monospace', letterSpacing: '0.03em' }}>
+            MIDI {midiEvent}
+          </span>
+          <Sep />
+        </>
+      )}
 
       {showNoteInfo && (
         <>
