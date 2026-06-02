@@ -692,6 +692,18 @@ export const DURATION_LABELS: Record<Duration, string> = {
   'whole':   'Whole',
 }
 
+// Ordered shortest → longest, used for MIDI CC range mapping and cycling.
+export const DURATION_CYCLE: Duration[] = ['whole', 'half', 'quarter', 'eighth', '16th', '32nd', '64th']
+
+/**
+ * Maps a MIDI CC value (0–127) to a duration by dividing the range into
+ * 7 equal bands. Fully right (127) = whole, fully left (0) = 64th.
+ */
+export function ccValueToDuration(value: number): Duration {
+  const idx = Math.min(DURATION_CYCLE.length - 1, Math.floor((127 - value) * DURATION_CYCLE.length / 128))
+  return DURATION_CYCLE[idx]
+}
+
 // ── Sequence scheduling ───────────────────────────────────────────────────────
 
 export interface SequenceScheduleEntry {

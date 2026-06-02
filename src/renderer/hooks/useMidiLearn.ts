@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react'
-import { useAppStore, DURATION_CYCLE } from '../store/appStore'
+import { useAppStore } from '../store/appStore'
 import { midiService } from '../services/midiService'
 import type { MidiLearnFunctionId, MidiLearnBinding } from '../store/appStore'
 import type { MidiControlInput } from '../services/midiService'
+import { ccValueToDuration } from '@shared/musicUtils'
 
 const LEARN_TIMEOUT_MS = 10_000
 
@@ -41,11 +42,7 @@ export function useMidiLearn(): void {
       for (const [fnId, binding] of Object.entries(bindings) as [MidiLearnFunctionId, MidiLearnBinding][]) {
         if (binding.type === 'cc' && binding.channel === input.channel && binding.number === input.number) {
           if (fnId === 'durationCycle') {
-            // Map CC value (0–127) to one of 7 durations by dividing the range into
-            // equal bands. Whole = low end, 64th = high end, matching the natural
-            // feel of a physical knob (fully left = longest, fully right = shortest).
-            const idx = Math.min(DURATION_CYCLE.length - 1, Math.floor((127 - input.value) * DURATION_CYCLE.length / 128))
-            setDurationRef.current(DURATION_CYCLE[idx])
+            setDurationRef.current(ccValueToDuration(input.value))
           }
           return
         }

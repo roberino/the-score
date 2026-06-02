@@ -3,7 +3,7 @@ import { immer } from 'zustand/middleware/immer'
 import { createScore, type Score, type Pitch, type Duration, type Accidental, type HairpinType, type Hairpin, type DynamicLevel, type Volta } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import { applyCommand, type Command } from '@shared/commands'
-import { measureCapacityUnits, resolveTimeSig, dottedUnits, DURATION_UNITS, buildPlaybackSequence, buildMeasureTimeline, firstRestBeat, fillWithRests, eventDurationUnits } from '@shared/musicUtils'
+import { measureCapacityUnits, resolveTimeSig, dottedUnits, DURATION_UNITS, buildPlaybackSequence, buildMeasureTimeline, firstRestBeat, fillWithRests, eventDurationUnits, DURATION_CYCLE } from '@shared/musicUtils'
 import { produce } from 'immer'
 import type { PlaybackController } from '../engine/audioEngine'
 import { playScoreWithSampler } from '../engine/samplerEngine'
@@ -43,7 +43,6 @@ export interface MidiLearnBinding {
   number:  number  // CC number (for 'cc') or MIDI note (for 'note')
 }
 
-export const DURATION_CYCLE: Duration[] = ['whole', 'half', 'quarter', 'eighth', '16th', '32nd', '64th']
 
 function loadMidiLearnBindings(): Partial<Record<MidiLearnFunctionId, MidiLearnBinding>> {
   try {
