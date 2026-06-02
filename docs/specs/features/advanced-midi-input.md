@@ -27,17 +27,21 @@ The app captures whichever arrives first during the listening window. CC is pref
 
 | Function | Behaviour when triggered |
 |---|---|
-| **Duration cycle** | Steps forward or backward through the note duration list based on the CC value. |
+| **Duration select** | Maps the CC value (0–127) directly to one of the 7 durations. |
 
-Duration order: whole ↔ half ↔ quarter ↔ eighth ↔ 16th ↔ 32nd ↔ 64th (wraps at both ends).
+The 0–127 range is divided into 7 equal bands:
 
-**Direction detection:**
+| CC range | Duration |
+|---|---|
+| 0–17 | Whole |
+| 18–35 | Half |
+| 36–53 | Quarter |
+| 54–71 | Eighth |
+| 72–89 | 16th |
+| 90–107 | 32nd |
+| 108–127 | 64th |
 
-The app uses a hybrid strategy to support both absolute knobs/sliders and relative encoders:
-
-1. **Delta (absolute encoders / physical knobs)**: if the incoming CC value differs from the previous value on the same control, the direction is taken from the sign of the change — increasing = forward, decreasing = backward. This is correct for knobs like those on the AKAI MPK Mini that send their absolute position (0–127).
-
-2. **Midpoint heuristic (relative encoders / first message)**: if the value equals the previous value, or no previous value exists, direction is inferred from the midpoint — values above 64 = forward, values below 64 = backward. Value 64 is a dead zone with no effect. This matches the standard relative-encoder protocol (CW sends 65+, CCW sends 63-) used by most dedicated encoder wheels.
+This maps naturally to a physical knob: fully left = longest duration, fully right = shortest. The knob position always reflects the selected duration with no state to track.
 
 The design must allow additional functions to be added to the mappable list without architectural changes (e.g. a registry or config table of `{ id, label, action }`).
 
