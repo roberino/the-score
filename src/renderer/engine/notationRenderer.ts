@@ -559,7 +559,7 @@ export function computeLayout(score: Score, options: RenderOptions): MeasureLayo
     const showTimeSig_mid = sigChanged
     const showClef_start    = true
     const showKeySig_start  = effectiveKey.fifths !== 0
-    const showTimeSig_start = !timeSigsEqual(effectiveSig, score.timeSignature) || mIdx === 0
+    const showTimeSig_start = mIdx === 0 || !timeSigsEqual(effectiveSig, prevSig!)
 
     let width_mid   = MIN_STAVE_WIDTH
     let width_start = MIN_STAVE_WIDTH

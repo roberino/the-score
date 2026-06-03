@@ -2925,7 +2925,8 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           setContextMenuTab('volta')
           setSelectionMenuPos({ x: event.clientX, y: event.clientY })
         } else if (!inRange && event.shiftKey && clickedMeasureIndex > barSelection.endMeasureIndex) {
-          // Phase 1 extend forward: widen range, reset part filter to all
+          // Phase 1 extend forward: widen range — clear single-measure selection
+          setSelectedMeasure(null)
           setBarSelection({
             startMeasureIndex: barSelection.startMeasureIndex,
             endMeasureIndex: clickedMeasureIndex,
@@ -2934,15 +2935,17 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           setContextMenuTab('volta')
           setSelectionMenuPos({ x: event.clientX, y: event.clientY })
         } else {
-          // Start a new bar selection
+          // Start a new single-measure selection
           clearSelection()
+          setSelectedMeasure(layout.measureId)
           setBarSelection({ startMeasureIndex: clickedMeasureIndex, endMeasureIndex: clickedMeasureIndex, partIds: null })
           setContextMenuTab('volta')
           setSelectionMenuPos({ x: event.clientX, y: event.clientY })
         }
       } else {
-        // No existing bar selection: start one
+        // No existing bar selection: start a new single-measure selection
         clearSelection()
+        setSelectedMeasure(layout.measureId)
         setBarSelection({ startMeasureIndex: clickedMeasureIndex, endMeasureIndex: clickedMeasureIndex, partIds: null })
         setContextMenuTab('volta')
         setSelectionMenuPos({ x: event.clientX, y: event.clientY })
