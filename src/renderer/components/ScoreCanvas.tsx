@@ -36,6 +36,7 @@ import {
   resolveTimeSig,
   timeSigsEqual,
   resolveKeySig,
+  keyLabel,
   resolveDirectiveDynamic,
   resolveDirectiveMidiProgram,
   eventDurationUnits,
@@ -549,7 +550,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
   const [pedalMarkPickerState, setPedalMarkPickerState] = useState<PedalMarkPickerState | null>(null)
   const [editingHeading, setEditingHeading] = useState<HeadingFieldBound | null>(null)
   const [slurPendingId, setSlurPendingId] = useState<string | null>(null)
-  const [contextMenuTab, setContextMenuTab] = useState<'articulations' | 'volta' | 'transpose'>('articulations')
+  const [contextMenuTab, setContextMenuTab] = useState<'articulations' | 'volta' | 'transpose' | 'signatures'>('articulations')
   const [transposeDir, setTransposeDir]     = useState<'up' | 'down'>('up')
   const [transposeAmt, setTransposeAmt]     = useState(1)
   const [menuDragOffset, setMenuDragOffset] = useState({ x: 0, y: 0 })
@@ -2935,19 +2936,19 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           setContextMenuTab('volta')
           setSelectionMenuPos({ x: event.clientX, y: event.clientY })
         } else {
-          // Start a new single-measure selection
+          // Start a new single-measure selection — open Signatures tab
           clearSelection()
           setSelectedMeasure(layout.measureId)
           setBarSelection({ startMeasureIndex: clickedMeasureIndex, endMeasureIndex: clickedMeasureIndex, partIds: null })
-          setContextMenuTab('volta')
+          setContextMenuTab('signatures')
           setSelectionMenuPos({ x: event.clientX, y: event.clientY })
         }
       } else {
-        // No existing bar selection: start a new single-measure selection
+        // No existing bar selection: start a new single-measure selection — open Signatures tab
         clearSelection()
         setSelectedMeasure(layout.measureId)
         setBarSelection({ startMeasureIndex: clickedMeasureIndex, endMeasureIndex: clickedMeasureIndex, partIds: null })
-        setContextMenuTab('volta')
+        setContextMenuTab('signatures')
         setSelectionMenuPos({ x: event.clientX, y: event.clientY })
       }
     }
@@ -3003,6 +3004,20 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     const s = keySigPickerState
     if (!s) return
     dispatch({ type: 'SET_KEY', partId: s.partId, staffId: s.staffId, measureId: s.measureId, key })
+    setKeySigPickerState(null)
+  }, [keySigPickerState, dispatch])
+
+  const handleTimeSigReset = useCallback(() => {
+    const s = timeSigPickerState
+    if (!s?.measureId || !s.partId || !s.staffId) return
+    dispatch({ type: 'CLEAR_TIME', partId: s.partId, staffId: s.staffId, measureId: s.measureId })
+    setTimeSigPickerState(null)
+  }, [timeSigPickerState, dispatch])
+
+  const handleKeySigReset = useCallback(() => {
+    const s = keySigPickerState
+    if (!s) return
+    dispatch({ type: 'CLEAR_KEY', partId: s.partId, staffId: s.staffId, measureId: s.measureId })
     setKeySigPickerState(null)
   }, [keySigPickerState, dispatch])
 
@@ -3203,24 +3218,34 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           onSelect={handleBarlineSelect}
         />
       )}
-      {timeSigPickerState && (
-        <TimeSignaturePicker
-          current={timeSigPickerState.current}
-          screenX={timeSigPickerState.screenX}
-          screenY={timeSigPickerState.screenY}
-          onClose={closeTimeSigPicker}
-          onSelect={handleTimeSigSelect}
-        />
-      )}
-      {keySigPickerState && (
-        <CircleOfFifths
-          current={keySigPickerState.current}
-          screenX={keySigPickerState.screenX}
-          screenY={keySigPickerState.screenY}
-          onClose={closeKeySigPicker}
-          onSelect={handleKeySigSelect}
-        />
-      )}
+      {timeSigPickerState && (() => {
+        const hasOverride = timeSigPickerState.measureId
+          ? score.parts.some(p => p.staves.some(s => s.measures.some(m => m.id === timeSigPickerState.measureId && m.timeSignature !== undefined)))
+          : false
+        return (
+          <TimeSignaturePicker
+            current={timeSigPickerState.current}
+            screenX={timeSigPickerState.screenX}
+            screenY={timeSigPickerState.screenY}
+            onClose={closeTimeSigPicker}
+            onSelect={handleTimeSigSelect}
+            {...(hasOverride ? { onReset: handleTimeSigReset } : {})}
+          />
+        )
+      })()}
+      {keySigPickerState && (() => {
+        const hasOverride = score.parts.some(p => p.staves.some(s => s.measures.some(m => m.id === keySigPickerState.measureId && m.keySignature !== undefined)))
+        return (
+          <CircleOfFifths
+            current={keySigPickerState.current}
+            screenX={keySigPickerState.screenX}
+            screenY={keySigPickerState.screenY}
+            onClose={closeKeySigPicker}
+            onSelect={handleKeySigSelect}
+            {...(hasOverride ? { onReset: handleKeySigReset } : {})}
+          />
+        )
+      })()}
       {clefPickerState && (
         <ClefPicker
           current={clefPickerState.current}
@@ -3375,10 +3400,30 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           { label: 'M6', semitones: 9 }, { label: 'm7', semitones: 10 },
           { label: 'M7', semitones: 11 }, { label: 'P8', semitones: 12 },
         ]
+        const isSingleBar = isBar && barSelection!.startMeasureIndex === barSelection!.endMeasureIndex
+        // Resolve measure context for the Signatures tab (single-bar selections only)
+        const sigMeasureCtx = isSingleBar ? (() => {
+          const mIdx = barSelection!.startMeasureIndex
+          for (const part of score.parts) {
+            for (const staff of part.staves) {
+              const measure = staff.measures[mIdx]
+              if (measure) return { partId: part.id, staffId: staff.id, measureId: measure.id, measure, mIdx, staff }
+            }
+          }
+          return null
+        })() : null
+        const sigTimeSig = sigMeasureCtx
+          ? resolveTimeSig(sigMeasureCtx.staff.measures, sigMeasureCtx.mIdx, score.timeSignature)
+          : score.timeSignature
+        const sigKeySig = sigMeasureCtx
+          ? resolveKeySig(sigMeasureCtx.staff.measures, sigMeasureCtx.mIdx, score.keySignature)
+          : score.keySignature
+
         const tabs: Array<{ key: typeof contextMenuTab; label: string }> = [
           { key: 'articulations', label: 'Articulations' },
           { key: 'volta',         label: 'Volta' },
           { key: 'transpose',     label: 'Transpose' },
+          ...(isSingleBar ? [{ key: 'signatures' as const, label: 'Signatures' }] : []),
         ]
 
         return (
@@ -3611,6 +3656,71 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
                   >
                     Apply
                   </button>
+                </div>
+              </div>
+            )}
+
+            {/* Signatures tab — single-measure bar selection only */}
+            {contextMenuTab === 'signatures' && sigMeasureCtx && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 4 }}>
+                {/* Time signature row */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ flex: 1, fontSize: 11, color: '#999' }}>Time signature</span>
+                  <span style={{ fontSize: 13, fontWeight: 'bold', color: '#d4d4d4', minWidth: 32, textAlign: 'center' }}>
+                    {sigTimeSig.numerator}/{sigTimeSig.denominator}
+                  </span>
+                  <button
+                    style={btnBase}
+                    onClick={() => setTimeSigPickerState({
+                      measureId: sigMeasureCtx.measureId,
+                      partId:    sigMeasureCtx.partId,
+                      staffId:   sigMeasureCtx.staffId,
+                      current:   sigTimeSig,
+                      screenX:   left + menuW / 2,
+                      screenY:   top,
+                    })}
+                  >
+                    Change…
+                  </button>
+                  {sigMeasureCtx.measure.timeSignature && (
+                    <button
+                      style={{ ...btnBase, color: '#e07070' }}
+                      title="Remove per-measure override and inherit from score"
+                      onClick={() => dispatch({ type: 'CLEAR_TIME', partId: sigMeasureCtx.partId, staffId: sigMeasureCtx.staffId, measureId: sigMeasureCtx.measureId })}
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+
+                {/* Key signature row */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ flex: 1, fontSize: 11, color: '#999' }}>Key signature</span>
+                  <span style={{ fontSize: 11, color: '#d4d4d4', minWidth: 32, textAlign: 'center' }}>
+                    {keyLabel(sigKeySig)}
+                  </span>
+                  <button
+                    style={btnBase}
+                    onClick={() => setKeySigPickerState({
+                      measureId: sigMeasureCtx.measureId,
+                      partId:    sigMeasureCtx.partId,
+                      staffId:   sigMeasureCtx.staffId,
+                      current:   sigKeySig,
+                      screenX:   left + menuW / 2,
+                      screenY:   top,
+                    })}
+                  >
+                    Change…
+                  </button>
+                  {sigMeasureCtx.measure.keySignature && (
+                    <button
+                      style={{ ...btnBase, color: '#e07070' }}
+                      title="Remove per-measure override and inherit from score"
+                      onClick={() => dispatch({ type: 'CLEAR_KEY', partId: sigMeasureCtx.partId, staffId: sigMeasureCtx.staffId, measureId: sigMeasureCtx.measureId })}
+                    >
+                      Reset
+                    </button>
+                  )}
                 </div>
               </div>
             )}
