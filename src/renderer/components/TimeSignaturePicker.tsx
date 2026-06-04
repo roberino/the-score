@@ -36,44 +36,19 @@ const PRESET_GROUPS: { group: string; presets: Preset[] }[] = [
 
 export { PRESET_GROUPS }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// ── Shared content (used both inline and in the floating picker) ───────────────
 
-interface TimeSignaturePickerProps {
+interface TimeSignaturePickerContentProps {
   current: TimeSignature
-  screenX: number
-  screenY: number
-  onClose: () => void
   onSelect: (sig: TimeSignature) => void
   onReset?: () => void
 }
 
-export function TimeSignaturePicker({
-  current, screenX, screenY, onClose, onSelect, onReset,
-}: TimeSignaturePickerProps): JSX.Element {
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    const handleOutside = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest('[data-timesig-picker]')) onClose()
-    }
-    window.addEventListener('keydown', handleKey)
-    const timer = setTimeout(() => window.addEventListener('mousedown', handleOutside), 0)
-    return () => {
-      window.removeEventListener('keydown', handleKey)
-      clearTimeout(timer)
-      window.removeEventListener('mousedown', handleOutside)
-    }
-  }, [onClose])
-
+export function TimeSignaturePickerContent({
+  current, onSelect, onReset,
+}: TimeSignaturePickerContentProps): JSX.Element {
   return (
-    <div
-      data-timesig-picker=""
-      style={{
-        position: 'fixed', left: screenX, top: screenY,
-        background: '#2d2d2d', border: '1px solid #555', borderRadius: 4,
-        padding: '8px 10px', boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-        zIndex: 1000, minWidth: 160,
-      }}
-    >
+    <>
       {onReset && (
         <button
           onClick={onReset}
@@ -115,6 +90,49 @@ export function TimeSignaturePicker({
           </div>
         </div>
       ))}
+    </>
+  )
+}
+
+// ── Floating picker ───────────────────────────────────────────────────────────
+
+interface TimeSignaturePickerProps {
+  current: TimeSignature
+  screenX: number
+  screenY: number
+  onClose: () => void
+  onSelect: (sig: TimeSignature) => void
+  onReset?: () => void
+}
+
+export function TimeSignaturePicker({
+  current, screenX, screenY, onClose, onSelect, onReset,
+}: TimeSignaturePickerProps): JSX.Element {
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const handleOutside = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-timesig-picker]')) onClose()
+    }
+    window.addEventListener('keydown', handleKey)
+    const timer = setTimeout(() => window.addEventListener('mousedown', handleOutside), 0)
+    return () => {
+      window.removeEventListener('keydown', handleKey)
+      clearTimeout(timer)
+      window.removeEventListener('mousedown', handleOutside)
+    }
+  }, [onClose])
+
+  return (
+    <div
+      data-timesig-picker=""
+      style={{
+        position: 'fixed', left: screenX, top: screenY,
+        background: '#2d2d2d', border: '1px solid #555', borderRadius: 4,
+        padding: '8px 10px', boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+        zIndex: 1000, minWidth: 160,
+      }}
+    >
+      <TimeSignaturePickerContent current={current} onSelect={onSelect} {...(onReset !== undefined ? { onReset } : {})} />
     </div>
   )
 }

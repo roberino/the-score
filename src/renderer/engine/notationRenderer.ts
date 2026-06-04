@@ -104,7 +104,7 @@ export function accToVex(acc: 'sharp' | 'flat' | 'natural' | 'doubleSharp' | 'do
 
 // Returns Map<eventId, displayAccidentals[]> where displayAccidentals[i] is the
 // accidental symbol to render for pitch i (null = render no symbol).
-function computeDisplayAccidentals(
+export function computeDisplayAccidentals(
   events: readonly NoteEvent[],
   writtenKeyFifths: number,
 ): Map<string, Accidental[]> {
@@ -117,10 +117,11 @@ function computeDisplayAccidentals(
   for (const event of events) {
     if (event.type !== 'note') continue
     const note = event as Note
-    if (!note.tieEnd || note.pitch.accidental === null) continue
+    if (!note.tieEnd) continue
     const keySigAcc = keyAccidental(note.pitch.noteName as NoteName, writtenKeyFifths)
-    if (normAcc(note.pitch.accidental) !== normAcc(keySigAcc)) {
-      carry.set(`${note.pitch.noteName}${note.pitch.octave}`, note.pitch.accidental)
+    const normalizedAcc = normAcc(note.pitch.accidental)
+    if (normalizedAcc !== normAcc(keySigAcc)) {
+      carry.set(`${note.pitch.noteName}${note.pitch.octave}`, normalizedAcc)
     }
   }
 
@@ -149,8 +150,8 @@ function computeDisplayAccidentals(
         continue
       }
 
-      // What we want: null stored → follow key sig; otherwise the explicit accidental.
-      const intended: CarryAcc = storedAcc === null ? keySigAcc : storedAcc
+      // null and 'natural' both mean "no chromatic alteration" — same as pitchToMidi semantics.
+      const intended: CarryAcc = normAcc(storedAcc)
 
       let display: Accidental
       if (normAcc(carryAcc) === normAcc(intended)) {

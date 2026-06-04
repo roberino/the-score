@@ -4,7 +4,7 @@ import type { KeySignature } from '@shared/score'
 // ── Circle data ───────────────────────────────────────────────────────────────
 // Clockwise from 12 o'clock = C major. Each entry covers 30°.
 
-const POSITIONS = [
+export const POSITIONS = [
   { major: 'C',  minor: 'Am',  fifths: 0  },
   { major: 'G',  minor: 'Em',  fifths: 1  },
   { major: 'D',  minor: 'Bm',  fifths: 2  },
@@ -45,48 +45,19 @@ function textPt(r: number, midDeg: number): [number, number] {
   return [CX + r * Math.cos(toRad(midDeg)), CY + r * Math.sin(toRad(midDeg))]
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// ── Shared content (used both inline and in the floating picker) ───────────────
 
-interface CircleOfFifthsProps {
+interface CircleOfFifthsContentProps {
   current: KeySignature
-  screenX: number
-  screenY: number
-  onClose: () => void
   onSelect: (key: KeySignature) => void
   onReset?: () => void
 }
 
-export function CircleOfFifths({
-  current, screenX, screenY, onClose, onSelect, onReset,
-}: CircleOfFifthsProps): JSX.Element {
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    const handleOutside = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest('[data-cof-picker]')) onClose()
-    }
-    window.addEventListener('keydown', handleKey)
-    const timer = setTimeout(() => window.addEventListener('mousedown', handleOutside), 0)
-    return () => {
-      window.removeEventListener('keydown', handleKey)
-      clearTimeout(timer)
-      window.removeEventListener('mousedown', handleOutside)
-    }
-  }, [onClose])
-
-  // Clamp so the picker stays on screen
-  const left = Math.min(screenX, window.innerWidth  - 310)
-  const top  = Math.min(screenY, window.innerHeight - 320)
-
+export function CircleOfFifthsContent({
+  current, onSelect, onReset,
+}: CircleOfFifthsContentProps): JSX.Element {
   return (
-    <div
-      data-cof-picker=""
-      style={{
-        position: 'fixed', left, top,
-        background: '#2d2d2d', border: '1px solid #555', borderRadius: 8,
-        padding: 12, boxShadow: '0 6px 20px rgba(0,0,0,0.5)',
-        zIndex: 1000,
-      }}
-    >
+    <>
       {onReset && (
         <button
           onClick={onReset}
@@ -157,6 +128,53 @@ export function CircleOfFifths({
         <text x={CX} y={CY + 4} textAnchor="middle" fontSize={10} fill="#666">= maj</text>
         <text x={CX} y={CY + 16} textAnchor="middle" fontSize={9}  fill="#555">inner = min</text>
       </svg>
+    </>
+  )
+}
+
+// ── Floating picker ───────────────────────────────────────────────────────────
+
+interface CircleOfFifthsProps {
+  current: KeySignature
+  screenX: number
+  screenY: number
+  onClose: () => void
+  onSelect: (key: KeySignature) => void
+  onReset?: () => void
+}
+
+export function CircleOfFifths({
+  current, screenX, screenY, onClose, onSelect, onReset,
+}: CircleOfFifthsProps): JSX.Element {
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const handleOutside = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('[data-cof-picker]')) onClose()
+    }
+    window.addEventListener('keydown', handleKey)
+    const timer = setTimeout(() => window.addEventListener('mousedown', handleOutside), 0)
+    return () => {
+      window.removeEventListener('keydown', handleKey)
+      clearTimeout(timer)
+      window.removeEventListener('mousedown', handleOutside)
+    }
+  }, [onClose])
+
+  // Clamp so the picker stays on screen
+  const left = Math.min(screenX, window.innerWidth  - 310)
+  const top  = Math.min(screenY, window.innerHeight - 320)
+
+  return (
+    <div
+      data-cof-picker=""
+      style={{
+        position: 'fixed', left, top,
+        background: '#2d2d2d', border: '1px solid #555', borderRadius: 8,
+        padding: 12, boxShadow: '0 6px 20px rgba(0,0,0,0.5)',
+        zIndex: 1000,
+      }}
+    >
+      <CircleOfFifthsContent current={current} onSelect={onSelect} {...(onReset !== undefined ? { onReset } : {})} />
     </div>
   )
 }

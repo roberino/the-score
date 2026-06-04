@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest'
 import { applyCommand } from '@shared/commands'
 import type { Score, Note, NoteEvent, Slur, Duration, TimeSignature, KeySignature, Chord, Pitch, Articulation } from '@shared/score'
 import { createRest, createNote } from '@shared/score'
+import { measureCapacityUnits, eventDurationUnits } from '@shared/musicUtils'
 
 // ── Score fixture helpers ─────────────────────────────────────────────────────
 
@@ -1200,5 +1201,101 @@ describe('Duplicate pitch guard — chord buffer dedup filter', () => {
       arr.findIndex(q => q.noteName === p.noteName && q.octave === p.octave) === i
     )
     expect(deduped).toHaveLength(3)
+  })
+})
+
+// ── SET_SCORE_TIME — underflow fill (12/8 regression) ────────────────────────
+// Changing to a larger time signature must extend each measure's rest pool to
+// the new capacity so all available beats can be reached by the note cursor.
+
+function totalUnits(evs: NoteEvent[]): number {
+  return evs.reduce((s, e) => s + eventDurationUnits(e), 0)
+}
+
+function makeScoreWithWholeRests(measureCount: number, timeSig: TimeSignature): Score {
+  const now = '2024-01-01T00:00:00.000Z'
+  const cap = measureCapacityUnits(timeSig)
+  const capacity = cap
+  // Simulate a fresh score: one whole rest per measure (as created by fillWithRests)
+  const ms = Array.from({ length: measureCount }, (_, i) => ({
+    id: `m${i + 1}`, number: i + 1,
+    barline: (i === measureCount - 1 ? 'final' : 'single') as any,
+    voices: [{ id: `v${i + 1}`, events: [{ id: `r${i + 1}`, type: 'rest' as const, duration: 'whole' as const, dots: 0 }] }],
+  }))
+  return {
+    id: 'score-1',
+    metadata: { title: '', subtitle: '', composer: '', arranger: '', lyricist: '', copyright: '', createdAt: now, updatedAt: now },
+    parts: [{
+      id: PART_ID, name: 'Piano', shortName: 'Pno.',
+      midiProgram: 0, transposeSemitones: 0,
+      staves: [{ id: STAFF_ID, clef: 'treble', measures: ms }],
+      volume: 0.8, muted: false, labelVisible: true,
+    }],
+    keySignature: { fifths: 0, mode: 'major' },
+    timeSignature: timeSig,
+    tempo: 120, showPartLabels: true, textBoxes: [], version: 1,
+  }
+}
+
+describe('SET_SCORE_TIME — underflow fill on time-sig increase', () => {
+  it('4/4 → 12/8: every measure gains rests to reach 96-unit capacity', () => {
+    const score = makeScoreWithWholeRests(4, { numerator: 4, denominator: 4 })
+    const next = applyCommand(score, { type: 'SET_SCORE_TIME', time: { numerator: 12, denominator: 8 } })
+    const expectedCap = measureCapacityUnits({ numerator: 12, denominator: 8 }) // 96
+    for (const m of (next.parts[0].staves[0].measures as any[])) {
+      expect(totalUnits(m.voices[0].events)).toBe(expectedCap)
+    }
+  })
+
+  it('4/4 → 12/8: all measures updated, not just the first', () => {
+    const score = makeScoreWithWholeRests(3, { numerator: 4, denominator: 4 })
+    const next = applyCommand(score, { type: 'SET_SCORE_TIME', time: { numerator: 12, denominator: 8 } })
+    const ms = next.parts[0].staves[0].measures as any[]
+    expect(ms).toHaveLength(3)
+    for (const m of ms) {
+      expect(totalUnits(m.voices[0].events)).toBe(96)
+    }
+  })
+
+  it('12/8 capacity is 96 units — equivalent to 6 quarter notes', () => {
+    expect(measureCapacityUnits({ numerator: 12, denominator: 8 })).toBe(96)
+  })
+
+  it('4/4 → 12/8: tail rests are proper notation (all events are rests)', () => {
+    const score = makeScoreWithWholeRests(2, { numerator: 4, denominator: 4 })
+    const next = applyCommand(score, { type: 'SET_SCORE_TIME', time: { numerator: 12, denominator: 8 } })
+    for (const m of (next.parts[0].staves[0].measures as any[])) {
+      for (const ev of m.voices[0].events) {
+        expect(ev.type).toBe('rest')
+      }
+    }
+  })
+
+  it('4/4 → 3/4 (overflow): notes exceeding 48 units are pushed to the next measure', () => {
+    // Score with 4 quarter notes (64 units) in a 4/4 measure — should overflow to 3/4
+    const q = (id: string) => createNote('C', 4, 'quarter') as NoteEvent
+    const now = '2024-01-01T00:00:00.000Z'
+    const score: Score = {
+      id: 'score-1',
+      metadata: { title: '', subtitle: '', composer: '', arranger: '', lyricist: '', copyright: '', createdAt: now, updatedAt: now },
+      parts: [{
+        id: PART_ID, name: 'Piano', shortName: 'Pno.',
+        midiProgram: 0, transposeSemitones: 0,
+        staves: [{ id: STAFF_ID, clef: 'treble', measures: [
+          { id: 'm1', number: 1, barline: 'single' as any, voices: [{ id: 'v1', events: [createNote('C',4,'quarter'), createNote('C',4,'quarter'), createNote('C',4,'quarter'), createNote('C',4,'quarter')] }] },
+          { id: 'm2', number: 2, barline: 'final'  as any, voices: [{ id: 'v2', events: [] }] },
+        ]}],
+        volume: 0.8, muted: false, labelVisible: true,
+      }],
+      keySignature: { fifths: 0, mode: 'major' },
+      timeSignature: { numerator: 4, denominator: 4 },
+      tempo: 120, showPartLabels: true, textBoxes: [], version: 1,
+    }
+    const next = applyCommand(score, { type: 'SET_SCORE_TIME', time: { numerator: 3, denominator: 4 } })
+    const ms = next.parts[0].staves[0].measures as any[]
+    // Each measure should be exactly 48 units after redistribution
+    for (const m of ms) {
+      expect(totalUnits(m.voices[0].events)).toBe(48)
+    }
   })
 })

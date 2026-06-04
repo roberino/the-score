@@ -113,7 +113,16 @@ function spillOverFrom(
       used += units
     }
 
-    if (splitIdx === events.length) break  // no overflow — done
+    if (splitIdx === events.length) {
+      // No overflow. If the measure is under capacity (e.g. time sig just increased),
+      // fill the tail with rests and keep going — later measures may also be short.
+      const remaining = capacity - used
+      if (remaining > 0) {
+        events.push(...fillWithRests(remaining))
+        continue
+      }
+      break  // exactly at capacity, nothing to propagate
+    }
 
     const overflow = events.splice(splitIdx)
 
