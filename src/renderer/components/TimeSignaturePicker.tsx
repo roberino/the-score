@@ -122,11 +122,14 @@ export function TimeSignaturePicker({
     }
   }, [onClose])
 
+  const left = Math.min(screenX, window.innerWidth  - 200)
+  const top  = Math.min(screenY, window.innerHeight - 220)
+
   return (
     <div
       data-timesig-picker=""
       style={{
-        position: 'fixed', left: screenX, top: screenY,
+        position: 'fixed', left, top,
         background: '#2d2d2d', border: '1px solid #555', borderRadius: 4,
         padding: '8px 10px', boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
         zIndex: 1000, minWidth: 160,
