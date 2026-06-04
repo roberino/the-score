@@ -57,6 +57,15 @@ Each row's body is a compressed piano roll:
 - **Note colour** — matches the part accent colour (same blue `#3b9ddd` used for sequencer cells, voice-2 green `#2d8f4e` for second-voice notes). Rests produce no rectangle.
 - **Sequencer parts** — use the same mini-grid step preview already rendered in score view (step columns × pitch rows within the row height), consistent with the score view display.
 
+### 2.3 Score cursor marker
+
+A thin vertical line spans all track rows at the current score cursor position (the same `cursorMeasureId` used by "Play from cursor"):
+
+- **Colour** — distinct from the playback cursor; use `#4fc3f7` (light blue) so it reads clearly against the dark track background.
+- **Position** — snapped to the left edge of the cursor's measure: `x = measureIndex × measureWidth`.
+- **Visibility** — always shown when a cursor measure is set (even during playback, where it is overlaid by the moving playback cursor). Hidden only if no cursor measure is set.
+- The score cursor marker is **not** the playback cursor — it marks where playback will start from if "Play from cursor" is used.
+
 ---
 
 ## 3. Time axis and ruler
@@ -89,7 +98,8 @@ The performance view is **read-only** for note editing:
 
 - No note editing or selection from this view.
 - Mute, solo, and volume controls in the track header are interactive (they affect playback state).
-- Clicking a bar in the track body navigates to that measure in the Score view (see §6.2).
+- Clicking a bar in the track body **sets the score cursor** to that bar, snapping to the nearest barline (beat position 0). The score cursor marker (§2.3) updates immediately. The view does not navigate away.
+- This enables "Play from cursor" to be configured directly from the performance view without switching to the Score tab.
 
 ---
 
@@ -99,17 +109,16 @@ The performance view is **read-only** for note editing:
 
 The view is accessible via a **Performance** tab in the main tab bar, at the same level as Score and Routing. Switching to the view does not affect playback state or the score cursor position.
 
-### 6.2 Navigate to score from a bar click
+### 6.2 Set cursor from bar click
 
-Clicking anywhere in a track row's canvas area navigates to the corresponding measure in the Score view:
+Clicking anywhere in a track row's canvas area sets the score cursor to beat 1 of the clicked measure:
 
-1. The app switches to the **Score** tab.
-2. The score's note-entry cursor is moved to beat 1 of the clicked measure (beat position 0).
-3. The Score view scrolls to bring that measure into view.
-
-The measure is identified by the horizontal click position: `measureIndex = floor(clickX / measureWidth)`, where `clickX` is the x offset within the canvas cell. The cursor is placed in the first part's staff at that measure index.
-
-This interaction is not available during active playback — clicks on the track body are ignored while the score is playing.
+- `measureIndex = floor(clickX / measureWidth)`, clamped to `[0, totalMeasures − 1]`.
+- `clickX` is the x offset within the canvas cell (already in content space, no scroll adjustment needed).
+- The cursor is placed in the first part's staff at the computed measure index, beat position 0.
+- The score cursor marker (§2.3) moves immediately to the clicked measure.
+- The view stays on Performance — no tab switch occurs.
+- Clicking during active playback has no effect.
 
 ---
 

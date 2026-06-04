@@ -10,6 +10,7 @@ import {
 } from '@shared/musicUtils'
 import type { Score, Part, Staff, NoteEvent, Note, Chord } from '@shared/score'
 import type { MeasureTimeEntry } from '@shared/musicUtils'
+import { measureIndexFromClickX } from '@shared/performanceViewUtils'
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
@@ -29,7 +30,8 @@ const C_RULER_TEXT  = '#666'
 const C_TRACK_BG_A  = '#252526'
 const C_TRACK_BG_B  = '#1e1e1e'
 const C_HEADER_BG   = '#2a2a2a'
-const C_CURSOR      = '#e8a020'
+const C_CURSOR       = '#e8a020'   // playback cursor (moving)
+const C_SCORE_CURSOR = '#4fc3f7'   // score cursor / play-from position (static)
 
 // ── Instrument icon helpers (shared with RoutingView) ─────────────────────────
 
@@ -352,12 +354,8 @@ function RulerCanvas({ totalMeasures }: { totalMeasures: number }) {
 
 // ── PerformanceView ───────────────────────────────────────────────────────────
 
-interface PerformanceViewProps {
-  onNavigateToScore: () => void
-}
-
-export function PerformanceView({ onNavigateToScore }: PerformanceViewProps): JSX.Element {
-  const { score, dispatch, isPlaying, setCursor, requestScrollToCursor } = useAppStore()
+export function PerformanceView(): JSX.Element {
+  const { score, dispatch, isPlaying, setCursor, requestScrollToCursor, cursorMeasureId } = useAppStore()
 
   // Solo state: track which part is soloed, and save pre-solo mute states for restore
   const [soloPartId, setSoloPartId]     = useState<string | null>(null)
@@ -462,16 +460,22 @@ export function PerformanceView({ onNavigateToScore }: PerformanceViewProps): JS
     }
   }, [soloPartId, preSoloMutes, score.parts, dispatch])
 
-  // Click on a track bar → navigate to that measure in the Score view
+  // Score cursor x position in the canvas (null = no cursor set)
+  const scoreCursorX = useMemo(() => {
+    if (!cursorMeasureId) return null
+    const mIdx = score.parts[0]?.staves[0]?.measures.findIndex(m => m.id === cursorMeasureId) ?? -1
+    return mIdx >= 0 ? mIdx * MEASURE_W : null
+  }, [cursorMeasureId, score.parts])
+
+  // Click on a track bar → set the score cursor (for Play from cursor); stay in this view
   const handleBarClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (isPlaying) return
-    const measureIndex = Math.floor(e.nativeEvent.offsetX / MEASURE_W)
-    const measure = score.parts[0]?.staves[0]?.measures[measureIndex]
+    const mIdx = measureIndexFromClickX(e.nativeEvent.offsetX, MEASURE_W, totalMeasures)
+    const measure = score.parts[0]?.staves[0]?.measures[mIdx]
     if (!measure) return
     setCursor(measure.id, 0)
     requestScrollToCursor()
-    onNavigateToScore()
-  }, [isPlaying, score.parts, setCursor, requestScrollToCursor, onNavigateToScore])
+  }, [isPlaying, score.parts, totalMeasures, setCursor, requestScrollToCursor])
 
   // Grid template rows: ruler row + one row per track
   const gridTemplateRows = `${RULER_H}px ${tracks.map(() => `${TRACK_H}px`).join(' ')}`
@@ -556,7 +560,22 @@ export function PerformanceView({ onNavigateToScore }: PerformanceViewProps): JS
         ]
       })}
 
-      {/* Playback cursor — spans full track height in column 2 */}
+      {/* Score cursor marker — shows play-from-cursor position */}
+      {scoreCursorX !== null && (
+        <div style={{
+          position: 'absolute',
+          left: HEADER_W + scoreCursorX,
+          top: RULER_H,
+          width: 2,
+          height: totalTrackH,
+          background: C_SCORE_CURSOR,
+          pointerEvents: 'none',
+          zIndex: 4,
+          opacity: 0.85,
+        }} />
+      )}
+
+      {/* Playback cursor — moves in real time during playback */}
       {cursorX !== null && (
         <div style={{
           position: 'absolute',
