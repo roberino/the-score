@@ -3,6 +3,7 @@ import { useAppStore } from '../store/appStore'
 import { Toolbar } from './Toolbar'
 import { ScoreCanvas } from './ScoreCanvas'
 import { RoutingView } from './RoutingView'
+import { PerformanceView } from './PerformanceView'
 import { StatusBar } from './StatusBar'
 import { PartsPanel } from './PartsPanel'
 import { SequenceEditor } from './SequenceEditor'
@@ -13,11 +14,12 @@ import { loadDrumSampler } from '../engine/drumSamplerEngine'
 import { exportScorePdf } from '../engine/pdfExporter'
 import { scoreToMusicXml, musicxmlToScore } from '../engine/musicxmlEngine'
 
-type AppView = 'score' | 'routing'
+type AppView = 'score' | 'routing' | 'performance'
 
 const TAB_LABELS: Record<AppView, string> = {
-  score:   'Score',
-  routing: 'Routing',
+  score:       'Score',
+  routing:     'Routing',
+  performance: 'Performance',
 }
 
 export function App(): JSX.Element {
@@ -176,6 +178,9 @@ export function App(): JSX.Element {
         </main>
         <main style={{ flex: 1, overflow: 'auto', display: !sequencerPartId && activeView === 'routing' ? 'block' : 'none' }}>
           <RoutingView />
+        </main>
+        <main style={{ flex: 1, overflow: 'hidden', display: !sequencerPartId && activeView === 'performance' ? 'flex' : 'none' }}>
+          <PerformanceView />
         </main>
       </div>
       <StatusBar />
