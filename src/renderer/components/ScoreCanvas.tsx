@@ -585,6 +585,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     isPlaying,
     barSelection, setBarSelection, deleteSelectedBars,
     midiLearnListening, midiLearnBindings, setMidiLearnError,
+    scrollToCursorToken,
   } = useAppStore()
 
   // ── Articulation state ──────────────────────────────────────────────────────
@@ -765,6 +766,30 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     const cursor = playbackCursorElRef.current
     if (cursor) cursor.style.display = 'none'
   }, [isPlaying])
+
+  // Scroll the cursor measure into view when requested externally (e.g. navigate from Performance view)
+  useEffect(() => {
+    if (!scrollToCursorToken || !cursorMeasureId) return
+    const layouts = layoutsRef.current
+    const colLayouts = layouts.filter(l => l.measureId === cursorMeasureId)
+    if (!colLayouts.length) return
+    const topY = Math.min(...colLayouts.map(l => l.staveTopY)) - 8
+    const botY = Math.max(...colLayouts.map(l => l.staveTopY + 80)) + 8
+    const canvasArea = canvasAreaRef.current
+    const scrollContainer = canvasArea?.closest<HTMLElement>('main')
+    if (!scrollContainer) return
+    const containerRect = scrollContainer.getBoundingClientRect()
+    const areaRect = canvasArea!.getBoundingClientRect()
+    const margin = 60
+    const absTop = areaRect.top - containerRect.top + scrollContainer.scrollTop + topY
+    const absBot = absTop + (botY - topY)
+    const { scrollTop, clientHeight } = scrollContainer
+    if (absTop < scrollTop + margin) {
+      scrollContainer.scrollTop = Math.max(0, absTop - margin)
+    } else if (absBot > scrollTop + clientHeight - margin) {
+      scrollContainer.scrollTop = absTop - clientHeight * 0.3
+    }
+  }, [scrollToCursorToken, cursorMeasureId])
 
   // RAF animation loop: move cursor during playback
   useEffect(() => {

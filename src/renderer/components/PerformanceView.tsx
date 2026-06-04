@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
+import { VolumeSlider } from './VolumeSlider'
 import * as Tone from 'tone'
 import { useAppStore } from '../store/appStore'
 import { INSTRUMENTS, type InstrumentFamily } from '@shared/instruments'
@@ -282,11 +283,10 @@ function TrackHeader({ part, staffCount, isMuted, isSoloed, soloActive, onMuteTo
         >S</button>
 
         {/* Volume slider */}
-        <input
-          type="range" min={0} max={100} step={1}
-          value={Math.round(part.volume * 100)}
-          onChange={e => onVolumeChange(Number(e.target.value) / 100)}
-          style={{ flex: 1, accentColor: '#0e639c', cursor: 'pointer', minWidth: 0 }}
+        <VolumeSlider
+          value={part.volume}
+          onChange={onVolumeChange}
+          style={{ flex: 1, minWidth: 0 }}
         />
       </div>
     </div>
@@ -352,8 +352,12 @@ function RulerCanvas({ totalMeasures }: { totalMeasures: number }) {
 
 // ── PerformanceView ───────────────────────────────────────────────────────────
 
-export function PerformanceView(): JSX.Element {
-  const { score, dispatch, isPlaying } = useAppStore()
+interface PerformanceViewProps {
+  onNavigateToScore: () => void
+}
+
+export function PerformanceView({ onNavigateToScore }: PerformanceViewProps): JSX.Element {
+  const { score, dispatch, isPlaying, setCursor, requestScrollToCursor } = useAppStore()
 
   // Solo state: track which part is soloed, and save pre-solo mute states for restore
   const [soloPartId, setSoloPartId]     = useState<string | null>(null)
@@ -458,6 +462,17 @@ export function PerformanceView(): JSX.Element {
     }
   }, [soloPartId, preSoloMutes, score.parts, dispatch])
 
+  // Click on a track bar → navigate to that measure in the Score view
+  const handleBarClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (isPlaying) return
+    const measureIndex = Math.floor(e.nativeEvent.offsetX / MEASURE_W)
+    const measure = score.parts[0]?.staves[0]?.measures[measureIndex]
+    if (!measure) return
+    setCursor(measure.id, 0)
+    requestScrollToCursor()
+    onNavigateToScore()
+  }, [isPlaying, score.parts, setCursor, requestScrollToCursor, onNavigateToScore])
+
   // Grid template rows: ruler row + one row per track
   const gridTemplateRows = `${RULER_H}px ${tracks.map(() => `${TRACK_H}px`).join(' ')}`
 
@@ -520,10 +535,14 @@ export function PerformanceView(): JSX.Element {
             )}
           </div>,
 
-          // Canvas cell
+          // Canvas cell — click navigates to that measure in Score view
           <div
             key={`r-${part.id}-${staff.id}`}
-            style={{ borderBottom: '1px solid #1a1a1a', overflow: 'hidden', position: 'relative' }}
+            style={{
+              borderBottom: '1px solid #1a1a1a', overflow: 'hidden', position: 'relative',
+              cursor: isPlaying ? 'default' : 'pointer',
+            }}
+            onClick={handleBarClick}
           >
             <PianoRollRow
               staff={staff}

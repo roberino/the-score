@@ -111,6 +111,7 @@ export interface AppState {
   playbackManualStop: boolean      // true when user manually stopped; false on natural end
   playbackResumePositionSec: number // transport seconds to resume from (0 = beginning)
   playbackPositionTick: number
+  scrollToCursorToken: number   // incremented to request ScoreCanvas scroll to cursor
   playbackMode: 'beginning' | 'from-cursor'
 
   // Duration resize
@@ -162,6 +163,7 @@ export interface AppState {
   setNoteInputMode: (mode: 'overwrite' | 'chord') => void
   setLyricCursor: (noteId: string | null) => void
   setCursor: (measureId: string | null, beatPosition: number) => void
+  requestScrollToCursor: () => void
   setLastEnteredPitch: (pitch: Pitch | null) => void
   moveCursorToFirstAvailable: () => void
   checkAndAutoAddBar: () => void
@@ -233,6 +235,7 @@ export const useAppStore = create<AppState>()(
     playbackManualStop: false,
     playbackResumePositionSec: 0,
     playbackPositionTick: 0,
+    scrollToCursorToken: 0,
     playbackMode: 'beginning',
 
     pendingResize: null,
@@ -738,6 +741,7 @@ export const useAppStore = create<AppState>()(
       s.cursorMeasureId = measureId
       s.cursorBeatPosition = beatPosition
     }),
+    requestScrollToCursor: () => set(s => { s.scrollToCursorToken += 1 }),
     setLastEnteredPitch: (pitch) => set(s => { s.lastEnteredPitch = pitch as any }),
 
     moveCursorToFirstAvailable: () => {

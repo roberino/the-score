@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import { useAppStore } from '../store/appStore'
 import { midiOutputEngine, type MidiOutputInfo } from '../engine/midiOutputEngine'
 import { INSTRUMENTS, type InstrumentFamily } from '@shared/instruments'
+import { VolumeSlider } from './VolumeSlider'
 
 // ── Instrument icons ──────────────────────────────────────────────────────────
 // SVG assets sourced from Wikimedia Commons, stored in assets/instruments/.
@@ -305,11 +306,10 @@ export function RoutingView(): JSX.Element {
                     {/* Volume */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ fontSize: 11, color: '#666', width: 60 }}>Volume</span>
-                      <input
-                        type="range" min={0} max={100} step={1}
-                        value={Math.round(part.volume * 100)}
-                        onChange={e => dispatch({ type: 'SET_PART_METADATA', partId: part.id, volume: Number(e.target.value) / 100 })}
-                        style={{ flex: 1, accentColor: '#0e639c', cursor: 'pointer' }}
+                      <VolumeSlider
+                        value={part.volume}
+                        onChange={v => dispatch({ type: 'SET_PART_METADATA', partId: part.id, volume: v })}
+                        style={{ flex: 1 }}
                       />
                       <span style={{ fontSize: 11, color: '#555', width: 28, textAlign: 'right' }}>{Math.round(part.volume * 100)}</span>
                     </div>

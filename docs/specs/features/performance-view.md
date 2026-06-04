@@ -85,17 +85,31 @@ The existing play/stop controls (including the Play from beginning / Play from h
 
 ## 5. Interaction
 
-The performance view is **read-only** for MVP:
+The performance view is **read-only** for note editing:
 
-- No note editing, selection, or cursor placement from this view.
+- No note editing or selection from this view.
 - Mute, solo, and volume controls in the track header are interactive (they affect playback state).
-- Clicking elsewhere in the track body has no effect.
+- Clicking a bar in the track body navigates to that measure in the Score view (see §6.2).
 
 ---
 
 ## 6. Navigation
 
+### 6.1 Tab access
+
 The view is accessible via a **Performance** tab in the main tab bar, at the same level as Score and Routing. Switching to the view does not affect playback state or the score cursor position.
+
+### 6.2 Navigate to score from a bar click
+
+Clicking anywhere in a track row's canvas area navigates to the corresponding measure in the Score view:
+
+1. The app switches to the **Score** tab.
+2. The score's note-entry cursor is moved to beat 1 of the clicked measure (beat position 0).
+3. The Score view scrolls to bring that measure into view.
+
+The measure is identified by the horizontal click position: `measureIndex = floor(clickX / measureWidth)`, where `clickX` is the x offset within the canvas cell. The cursor is placed in the first part's staff at that measure index.
+
+This interaction is not available during active playback — clicks on the track body are ignored while the score is playing.
 
 ---
 

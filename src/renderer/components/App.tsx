@@ -180,7 +180,7 @@ export function App(): JSX.Element {
           <RoutingView />
         </main>
         <main style={{ flex: 1, overflow: 'hidden', display: !sequencerPartId && activeView === 'performance' ? 'flex' : 'none' }}>
-          <PerformanceView />
+          <PerformanceView onNavigateToScore={() => setActiveView('score')} />
         </main>
       </div>
       <StatusBar />
