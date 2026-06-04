@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { v4 as uuid } from 'uuid'
 import { TEMPO_WORDS } from '@shared/musicUtils'
 import type { Directive, DirectiveCategory } from '@shared/score'
+import { DYNAMICS, buildDirectiveTabs, defaultDirectiveTab } from '@shared/directiveUtils'
 
 // ── Expression presets ────────────────────────────────────────────────────────
 
@@ -54,7 +55,7 @@ export interface DirectivePickerProps {
 export function DirectivePicker({
   existing, showTempo, screenX, screenY, onAdd, onRemove, onClose,
 }: DirectivePickerProps): JSX.Element {
-  const [tab, setTab] = useState<DirectiveCategory>(showTempo ? 'tempo' : 'expression')
+  const [tab, setTab] = useState<DirectiveCategory>(defaultDirectiveTab(showTempo))
 
   // Tempo state
   const [tempoText, setTempoText] = useState('')
@@ -90,10 +91,7 @@ export function DirectivePicker({
   const left = Math.min(screenX, window.innerWidth  - pickerW - 8)
   const top  = Math.min(screenY, window.innerHeight - pickerH - 8)
 
-  const tabs: { id: DirectiveCategory; label: string }[] = [
-    ...(showTempo ? [{ id: 'tempo' as DirectiveCategory, label: 'Tempo' }] : []),
-    { id: 'expression', label: 'Expression' },
-  ]
+  const tabs = buildDirectiveTabs(showTempo)
 
   return (
     <div
@@ -199,6 +197,24 @@ export function DirectivePicker({
             >
               Add tempo
             </button>
+          </div>
+        )}
+
+        {/* Dynamic */}
+        {tab === 'dynamic' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={sectionLabel}>Dynamic level</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {DYNAMICS.map(d => (
+                <button
+                  key={d}
+                  style={{ ...chip(), fontFamily: 'serif', fontStyle: 'italic', fontWeight: 'bold', fontSize: 13 }}
+                  onClick={() => addDirective({ category: 'dynamic', text: d })}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
