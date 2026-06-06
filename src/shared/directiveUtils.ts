@@ -19,12 +19,11 @@ export interface DirectiveTabDef {
 export function buildDirectiveTabs(showTempo: boolean): DirectiveTabDef[] {
   return [
     ...(showTempo ? [{ id: 'tempo' as DirectiveCategory, label: 'Tempo' }] : []),
-    { id: 'dynamic'    as DirectiveCategory, label: 'Dynamic'    },
     { id: 'expression' as DirectiveCategory, label: 'Expression' },
   ]
 }
 
 /** The tab that should be active on first open. */
 export function defaultDirectiveTab(showTempo: boolean): DirectiveCategory {
-  return showTempo ? 'tempo' : 'dynamic'
+  return showTempo ? 'tempo' : 'expression'
 }

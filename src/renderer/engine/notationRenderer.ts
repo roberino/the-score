@@ -1461,6 +1461,16 @@ function drawDirectives(
     }
   }
 
+  // ── Dynamic (above stave, centred in note area) ────────────────────────────
+  const dynDirs = directives.filter(d => d.category === 'dynamic')
+  if (dynDirs.length > 0) {
+    const noteAreaMidX = (noteStartX + layout.x + layout.width) / 2
+    nativeCtx.font      = 'bold italic 13px Edwin, serif'
+    nativeCtx.fillStyle = '#111'
+    nativeCtx.textAlign = 'center'
+    nativeCtx.fillText(dynDirs.map(d => d.text).join(' '), noteAreaMidX, layout.staveY + 14)
+  }
+
   // ── Expression (above stave) ───────────────────────────────────────────────
   const exprDirs = directives.filter(d => d.category === 'expression')
   if (exprDirs.length > 0) {
