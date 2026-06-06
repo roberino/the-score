@@ -5,4 +5,4 @@ out/
 *.local
 .DS_Store
 Thumbs.db
-resources/icon.iconset/
+**/resources/icon.iconset/

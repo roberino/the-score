@@ -3,6 +3,7 @@ import { resolve } from 'path'
 
 export default defineConfig({
   test: {
+    root: __dirname,
     environment: 'node',
     include: ['src/tests/**/*.test.ts']
   },
