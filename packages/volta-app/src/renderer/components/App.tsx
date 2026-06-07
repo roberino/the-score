@@ -96,8 +96,10 @@ export function App(): JSX.Element {
     try {
       const score = midiToScore(result.bytes)
       loadScore(score, result.path)
-    } catch {
-      console.error('Failed to import MIDI file')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
+      console.error('Failed to import MIDI file:', err)
+      window.alert(`Import failed: ${msg}`)
     }
   }
 

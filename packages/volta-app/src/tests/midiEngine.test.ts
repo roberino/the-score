@@ -4,30 +4,24 @@
 //   Export: build a Score → scoreToMidi → new Midi(bytes) → inspect tracks/header.
 //   Import: build a Midi object → midi.toArray() → midiToScore → inspect Score.
 
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { v4 as uuid } from 'uuid'
 import { Midi } from '@tonejs/midi'
 import { writeMidi } from 'midi-file'
-import { scoreToMidi, midiToScore, type MidiExportOptions, type MidiImportOptions } from '@renderer/engine/midiEngine'
-import { createScore, createPart, createStaff, createMeasure, createNote, createRest } from '@shared/score'
-import type { Score, Part, Staff, Measure, Voice, Note, Chord, Rest, NoteEvent, KeySignature, TimeSignature, Hairpin, PedalMark } from '@shared/score'
+import { scoreToMidi, midiToScore, type MidiExportOptions } from '@renderer/engine/midiEngine'
+import { createScore, createPart, createStaff, createMeasure, createNote } from '@shared/score'
+import type { Score, Part, Staff, Measure, Note, Chord, NoteEvent, KeySignature, TimeSignature, PedalMark } from '@shared/score'
 
 // ── Test helpers ───────────────────────────────────────────────────────────────
 
 const SIG_44: TimeSignature = { numerator: 4, denominator: 4 }
 const SIG_34: TimeSignature = { numerator: 3, denominator: 4 }
 const KEY_C:  KeySignature  = { fifths: 0,  mode: 'major' }
-const KEY_G:  KeySignature  = { fifths: 1,  mode: 'major' }
-const KEY_F:  KeySignature  = { fifths: -1, mode: 'major' }
-const KEY_Bb: KeySignature  = { fifths: -2, mode: 'major' }
 
 function noteEv(name: Note['pitch']['noteName'], octave: number, dur: Note['duration'], acc: Note['pitch']['accidental'] = null): Note {
   return createNote(name, octave, dur, acc)
 }
 
-function restEv(dur: Rest['duration']): Rest {
-  return createRest(dur)
-}
 
 function singlePartScore(
   events: NoteEvent[],

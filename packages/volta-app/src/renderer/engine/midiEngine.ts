@@ -751,20 +751,11 @@ function trackToFlatEvents(
     let tuplet: TupletInfo | undefined
 
     if (triplet) {
-      // For triplets, use the group's total unit span divided by 3 for exact arithmetic
       duration = triplet.baseDuration
       dots     = 0
-      // Compute the group's total units from all 3 notes, then each = total/3
-      // We read the "total" from the last note in the group (caller ensures i+2 is present)
-      const groupEndTicks   = groups[gi + 2 - (gi % 3)]?.ticks ?? g.ticks  // fallback
-      // Simpler: single-note contribution = total group ticks / 3 units
-      // Use ticksToUnits on the full span divided by 3
-      // Actually: for a group starting at gi and ending at gi+2 (the last in the triplet),
-      // the full group span in units was already used for the mark detection.
-      // Each note gets units = DURATION_UNITS[baseDuration] * 2/3 (the tuplet factor)
-      // which in 64th-units: baseDuration in units * 2/3
+      // Each of 3 triplet notes consumes baseDuration × 2/3 units (exact float arithmetic)
       const baseDurUnits: Record<Duration, number> = { '64th':1,'32nd':2,'16th':4,'eighth':8,'quarter':16,'half':32,'whole':64 }
-      units = baseDurUnits[duration] * 2 / 3  // exact float (e.g. 4 * 2/3 = 2.667 for 16th triplet)
+      units  = baseDurUnits[duration] * 2 / 3  // e.g. 4 * 2/3 = 2.667 for triplet-16th
       tuplet = { id: triplet.tupletId, actual: 3, normal: 2 }
     } else {
       const rawUnits = Math.max(1, ticksToUnits(g.durationTicks, ppq))
@@ -774,15 +765,15 @@ function trackToFlatEvents(
       dots     = q.dots
     }
 
+    const vel   = Math.round(g.velocity * 127)
+    const extra = tuplet ? { tuplet } : {}
+
     if (isDrum) {
       const pitches = g.midiNums.map(drumPitch)
-      flat.push({ type: g.midiNums.length === 1 ? 'note' : 'chord', units, duration, dots: dots ?? 0, pitches, velocity: Math.round(g.velocity * 127), tuplet })
+      flat.push({ type: g.midiNums.length === 1 ? 'note' : 'chord', units, duration, dots: dots ?? 0, pitches, velocity: vel, ...extra })
     } else {
-      const written = g.midiNums.map(m => {
-        const writtenMidi = Math.max(0, Math.min(127, m + transposeSemitones))
-        return midiToPitch(writtenMidi, ks)
-      })
-      flat.push({ type: written.length === 1 ? 'note' : 'chord', units, duration, dots: dots ?? 0, pitches: written, velocity: Math.round(g.velocity * 127), tuplet })
+      const written = g.midiNums.map(m => midiToPitch(Math.max(0, Math.min(127, m + transposeSemitones)), ks))
+      flat.push({ type: written.length === 1 ? 'note' : 'chord', units, duration, dots: dots ?? 0, pitches: written, velocity: vel, ...extra })
     }
 
     cursor = startUnits + (triplet ? Math.round(units) : units)
@@ -921,6 +912,12 @@ function packIntoMeasures(
 }
 
 export function midiToScore(bytes: Uint8Array, opts: MidiImportOptions = {}): Score {
+  // Validate MIDI magic bytes: MThd = 0x4D 0x54 0x68 0x64
+  if (bytes[0] !== 0x4D || bytes[1] !== 0x54 || bytes[2] !== 0x68 || bytes[3] !== 0x64) {
+    const hint = bytes[0] === 0x7B ? ' — this looks like a .notation file. Use File → Open instead.' : '.'
+    throw new Error(`Not a valid MIDI file${hint}`)
+  }
+
   const { detectTuplets = true } = opts
   const midi = new Midi(bytes)
   const ppq  = midi.header.ppq
