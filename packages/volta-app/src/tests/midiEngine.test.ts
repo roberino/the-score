@@ -4,10 +4,11 @@
 //   Export: build a Score → scoreToMidi → new Midi(bytes) → inspect tracks/header.
 //   Import: build a Midi object → midi.toArray() → midiToScore → inspect Score.
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { v4 as uuid } from 'uuid'
 import { Midi } from '@tonejs/midi'
 import { writeMidi } from 'midi-file'
-import { scoreToMidi, midiToScore } from '@renderer/engine/midiEngine'
+import { scoreToMidi, midiToScore, type MidiExportOptions, type MidiImportOptions } from '@renderer/engine/midiEngine'
 import { createScore, createPart, createStaff, createMeasure, createNote, createRest } from '@shared/score'
 import type { Score, Part, Staff, Measure, Voice, Note, Chord, Rest, NoteEvent, KeySignature, TimeSignature, Hairpin, PedalMark } from '@shared/score'
 
@@ -58,8 +59,8 @@ function twoPartScore(events0: NoteEvent[], events1: NoteEvent[]): Score {
   return { ...base, parts: [part0, part1] }
 }
 
-function parseMidi(score: Score): Midi {
-  return new Midi(scoreToMidi(score))
+function parseMidi(score: Score, exportOpts?: MidiExportOptions): Midi {
+  return new Midi(scoreToMidi(score, exportOpts))
 }
 
 // Build a minimal MIDI file for import tests.
@@ -492,6 +493,167 @@ describe('midiToScore — voice detection', () => {
     const measures = score.parts[0].staves[0].measures
     const hasVoice1 = measures.some(m => m.voices.length >= 2)
     expect(hasVoice1).toBe(true)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NEW FEATURE TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('scoreToMidi — channel de-duplication', () => {
+  it('two parts sharing the same midiChannel get distinct channels', () => {
+    const base  = createScore('Test')
+    const staff = createStaff('treble')
+    const m: Measure = { ...createMeasure(1, 'final'), voices: [{ id: 'v', events: [noteEv('C', 4, 'quarter')] }] }
+    // Both parts request channel 3 (1-based) → collide
+    const part0: Part = { ...base.parts[0], midiChannel: 3, staves: [{ ...staff, measures: [m] }] }
+    const part1: Part = { ...createPart('Violin', 'Vln.', 40), midiChannel: 3, staves: [{ ...staff, measures: [m] }] }
+    const score: Score = { ...base, parts: [part0, part1] }
+    const midi  = parseMidi(score)
+    expect(midi.tracks.length).toBe(2)
+    expect(midi.tracks[0].channel).not.toBe(midi.tracks[1].channel)
+  })
+})
+
+describe('scoreToMidi — key signature encoding fix', () => {
+  it('Ab minor key signature round-trips correctly (not undefined)', () => {
+    const base  = createScore('Test')
+    const score: Score = { ...base, keySignature: { fifths: -4, mode: 'minor' } }
+    const result = midiToScore(scoreToMidi(score))
+    expect(result.keySignature.fifths).toBe(-4)
+    expect(result.keySignature.mode).toBe('minor')
+  })
+
+  it('G major key signature round-trips correctly', () => {
+    const score: Score = { ...createScore('Test'), keySignature: { fifths: 1, mode: 'major' } }
+    expect(midiToScore(scoreToMidi(score)).keySignature.fifths).toBe(1)
+  })
+
+  it('F# major key signature round-trips correctly', () => {
+    const score: Score = { ...createScore('Test'), keySignature: { fifths: 6, mode: 'major' } }
+    expect(midiToScore(scoreToMidi(score)).keySignature.fifths).toBe(6)
+  })
+})
+
+describe('scoreToMidi — notationDurations option', () => {
+  it('marcato note exports at full written duration when notationDurations=true', () => {
+    const base  = createScore('Test')
+    const s     = createStaff('treble')
+    const marcatoNote = { ...noteEv('C', 4, 'quarter'), articulations: ['marcato'] } as Note
+    const m: Measure = { ...createMeasure(1, 'final'), voices: [{ id: 'v', events: [marcatoNote] }] }
+    const part: Part = { ...base.parts[0], volume: 1.0, staves: [{ ...s, measures: [m] }] }
+    const score: Score = { ...base, parts: [part] }
+    const withArt    = parseMidi(score, { notationDurations: false }).tracks[0].notes[0].durationTicks
+    const withoutArt = parseMidi(score, { notationDurations: true }).tracks[0].notes[0].durationTicks
+    // notationDurations=true should give the full quarter-note duration
+    expect(withoutArt).toBe(480)
+    // notationDurations=false should be shorter (marcato = ×0.85)
+    expect(withArt).toBeLessThan(withoutArt)
+  })
+})
+
+describe('scoreToMidi — VOLTA_MEASURES metadata', () => {
+  it('stores the original measure count in a text meta event', () => {
+    const score = createScore()  // default score with some measures
+    const midi  = new Midi(scoreToMidi(score))
+    const meta  = midi.header.meta.find(m => m.text?.startsWith('VOLTA_MEASURES:'))
+    expect(meta).toBeDefined()
+    const count = parseInt(meta!.text.split(':')[1], 10)
+    expect(count).toBeGreaterThan(0)
+  })
+})
+
+describe('midiToScore — VOLTA_MEASURES: trim to original count', () => {
+  it('score with 5 measures imports as 5 measures (not padded to 8)', () => {
+    // Build a MIDI from a 5-measure score → carries VOLTA_MEASURES:5 meta
+    const base  = createScore('5m')
+    const staff = createStaff('treble')
+    const measures = Array.from({ length: 5 }, (_, i) =>
+      ({ ...createMeasure(i + 1, i === 4 ? 'final' : 'single'), voices: [{ id: uuid(), events: [noteEv('C', 4, 'whole')] }] } as Measure)
+    )
+    const part: Part = { ...base.parts[0], staves: [{ ...staff, measures }] }
+    const score5: Score = { ...base, parts: [part] }
+    const reimported = midiToScore(scoreToMidi(score5))
+    expect(reimported.parts[0].staves[0].measures.length).toBe(5)
+  })
+})
+
+describe('midiToScore — name-based instrument inference', () => {
+  it('"Violin" track with program 0 imports as Violin (not Piano)', () => {
+    const bytes = buildMidi(m => {
+      const t  = m.addTrack()
+      t.name   = 'Violin'
+      // program stays 0 (default Piano)
+      t.addNote({ midi: 64, ticks: 0, durationTicks: 480 })
+    })
+    const score = midiToScore(bytes)
+    expect(score.parts[0].name).toBe('Violin')
+    expect(score.parts[0].midiProgram).toBe(40)  // GM Violin = 40
+  })
+
+  it('"Clarinet in Bb" track with program 0 imports with correct transposition', () => {
+    const bytes = buildMidi(m => {
+      const t  = m.addTrack()
+      t.name   = 'Clarinet in Bb'
+      t.addNote({ midi: 60, ticks: 0, durationTicks: 480 })
+    })
+    const score = midiToScore(bytes)
+    expect(score.parts[0].transposeSemitones).toBe(2)  // Bb clarinet +2
+  })
+
+  it('"Violoncello" track with program 0 imports as Cello', () => {
+    const bytes = buildMidi(m => {
+      const t  = m.addTrack()
+      t.name   = 'Violoncello'
+      t.addNote({ midi: 48, ticks: 0, durationTicks: 480 })
+    })
+    const score = midiToScore(bytes)
+    expect(score.parts[0].midiProgram).toBe(42)  // GM Cello = 42
+  })
+})
+
+describe('midiToScore — triplet detection', () => {
+  it('3 triplet-16th notes (80 ticks each) import with TupletInfo', () => {
+    // 3 × 80 ticks = 240 ticks = 1 quarter beat: triplet 16ths
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      t.addNote({ midi: 60, ticks: 0,   durationTicks: 80 })
+      t.addNote({ midi: 62, ticks: 80,  durationTicks: 80 })
+      t.addNote({ midi: 64, ticks: 160, durationTicks: 80 })
+    })
+    const score  = midiToScore(bytes)
+    const events = score.parts[0].staves[0].measures[0].voices[0].events.filter(e => e.type === 'note') as Note[]
+    const triplets = events.filter(e => e.tuplet != null)
+    expect(triplets.length).toBe(3)
+    expect(triplets[0].tuplet?.actual).toBe(3)
+    expect(triplets[0].tuplet?.normal).toBe(2)
+    expect(triplets[0].duration).toBe('16th')
+  })
+
+  it('same tupletId shared across 3 triplet notes', () => {
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      t.addNote({ midi: 60, ticks: 0,   durationTicks: 80 })
+      t.addNote({ midi: 62, ticks: 80,  durationTicks: 80 })
+      t.addNote({ midi: 64, ticks: 160, durationTicks: 80 })
+    })
+    const score   = midiToScore(bytes)
+    const events  = score.parts[0].staves[0].measures[0].voices[0].events.filter(e => e.type === 'note') as Note[]
+    const triplets = events.filter(e => e.tuplet != null)
+    expect(triplets[0].tuplet?.id).toBe(triplets[1].tuplet?.id)
+    expect(triplets[1].tuplet?.id).toBe(triplets[2].tuplet?.id)
+  })
+
+  it('detectTuplets=false skips triplet detection', () => {
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      t.addNote({ midi: 60, ticks: 0,   durationTicks: 80 })
+      t.addNote({ midi: 62, ticks: 80,  durationTicks: 80 })
+      t.addNote({ midi: 64, ticks: 160, durationTicks: 80 })
+    })
+    const score  = midiToScore(bytes, { detectTuplets: false })
+    const events = score.parts[0].staves[0].measures[0].voices[0].events.filter(e => e.type === 'note') as Note[]
+    expect(events.every(e => e.tuplet == null)).toBe(true)
   })
 })
 

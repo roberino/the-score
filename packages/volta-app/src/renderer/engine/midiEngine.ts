@@ -2,7 +2,7 @@
 // MIDI import / export  (professional DAW quality)
 //
 // scoreToMidi  — Score → Uint8Array (MIDI Type 1, multi-track)
-// midiToScore  — Uint8Array → Score (multi-part, dynamics, ties)
+// midiToScore  — Uint8Array → Score (multi-part, dynamics, ties, triplets)
 //
 // Uses @tonejs/midi for binary encoding/decoding.
 // Duration arithmetic is in 64th-note units (quarter = 16 units = 480 ticks at PPQ 480).
@@ -18,7 +18,7 @@ import {
   type Note, type Chord, type Rest, type NoteEvent,
   type Duration, type Pitch, type Accidental, type NoteName,
   type BarlineType, type TimeSignature, type KeySignature, type DynamicLevel,
-  type Hairpin,
+  type Hairpin, type TupletInfo,
 } from '@shared/score'
 import {
   measureCapacityUnits, resolveTimeSig, resolveDirectiveTempo,
@@ -30,6 +30,7 @@ import {
 
 const PPQ = 480
 const CHORD_TICK_TOLERANCE = 5
+const VOLTA_MEASURES_META  = 'VOLTA_MEASURES:'  // prefix for measure-count meta text
 
 const DURATION_BEATS: Record<Duration, number> = {
   whole: 4, half: 2, quarter: 1, eighth: 0.5,
@@ -169,8 +170,35 @@ function measureTickLen(ts: TimeSignature): number {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export interface MidiExportOptions {
-  /** Expand repeat signs before export so the MIDI file plays through. Default: true. */
+  /** Expand repeat signs before export so the MIDI plays through. Default: true. */
   expandRepeats?: boolean
+  /**
+   * Export full written note durations, ignoring articulation shortening (marcato, staccato).
+   * Prevents phantom rests on re-import. Default: false (shorter notes for DAW realism).
+   */
+  notationDurations?: boolean
+}
+
+// Key event emitted to the conductor track — collected for post-processing.
+type KeyEvent = { fifths: number; mode: 'major' | 'minor' }
+
+// @tonejs/midi has a bug: encodes key sigs as keyIndex+7 instead of keyIndex−7,
+// so every key comes back as undefined on re-parse. Scan the output bytes for
+// FF 59 02 XX YY sequences and overwrite with the correct signed values.
+function fixKeySignatureBytes(bytes: Uint8Array, keyEvents: KeyEvent[]): Uint8Array {
+  if (keyEvents.length === 0) return bytes
+  const result = new Uint8Array(bytes)
+  let evIdx = 0
+  for (let i = 0; i < result.length - 4 && evIdx < keyEvents.length; i++) {
+    if (result[i] === 0xFF && result[i + 1] === 0x59 && result[i + 2] === 0x02) {
+      const { fifths, mode } = keyEvents[evIdx]
+      result[i + 3] = fifths < 0 ? (256 + fifths) : fifths  // two's complement signed byte
+      result[i + 4] = mode === 'major' ? 0 : 1
+      evIdx++
+      i += 4
+    }
+  }
+  return result
 }
 
 // Compute cumulative tick at the start of each position in the playback sequence.
@@ -189,28 +217,31 @@ function sequenceTicks(
   return result
 }
 
-// Populate the MIDI header with tempo / time-sig / key-sig events from the score.
+// Populate the MIDI header and return the ordered list of key events emitted.
 function populateConductorEvents(
   midi: Midi,
   score: Score,
   refMeasures: readonly Measure[],
   sequence: number[],
   seqTicks: number[],
-): void {
+): KeyEvent[] {
+  const emittedKeys: KeyEvent[] = []
+
+  const pushKey = (fifths: number, mode: 'major' | 'minor', ticks: number) => {
+    midi.header.keySignatures.push({ ticks, key: FIFTHS_TO_KEY[fifths] ?? 'C', scale: mode })
+    emittedKeys.push({ fifths, mode })
+  }
+
   midi.header.tempos.push({ bpm: score.tempo, ticks: 0 })
   midi.header.timeSignatures.push({
     ticks: 0,
     timeSignature: [score.timeSignature.numerator, score.timeSignature.denominator],
   })
-  midi.header.keySignatures.push({
-    ticks: 0,
-    key:   FIFTHS_TO_KEY[score.keySignature.fifths] ?? 'C',
-    scale: score.keySignature.mode,
-  })
+  pushKey(score.keySignature.fifths, score.keySignature.mode, 0)
 
-  let lastBpm   = score.tempo
-  let lastTsNum = score.timeSignature.numerator
-  let lastTsDen = score.timeSignature.denominator
+  let lastBpm    = score.tempo
+  let lastTsNum  = score.timeSignature.numerator
+  let lastTsDen  = score.timeSignature.denominator
   let lastFifths = score.keySignature.fifths
 
   for (let si = 1; si < sequence.length; si++) {
@@ -234,10 +265,48 @@ function populateConductorEvents(
 
     const ks = measure.keySignature
     if (ks && ks.fifths !== lastFifths) {
-      midi.header.keySignatures.push({ ticks: tick, key: FIFTHS_TO_KEY[ks.fifths] ?? 'C', scale: ks.mode })
+      pushKey(ks.fifths, ks.mode, tick)
       lastFifths = ks.fifths
     }
   }
+
+  return emittedKeys
+}
+
+// True when the part should use MIDI channel 10 (percussion).
+function isDrumPart(part: Part): boolean {
+  return part.midiChannel === 10 || part.staves[0]?.clef === 'percussion'
+}
+
+// Build a collision-free channel assignment for all non-muted parts.
+// Drum parts always get channel 9 (0-based). Melodic parts are remapped if they collide.
+function assignChannels(parts: readonly Part[]): Map<string, number> {
+  const result = new Map<string, number>()
+  const used   = new Set<number>()
+  const pool   = [0,1,2,3,4,5,6,7,8,10,11,12,13,14,15]  // melodic channels (no 9)
+  let   poolIdx = 0
+
+  for (const part of parts) {
+    if (part.muted) continue
+    if (isDrumPart(part)) {
+      result.set(part.id, 9)
+      used.add(9)
+      continue
+    }
+    const requested = part.midiChannel != null ? part.midiChannel - 1 : -1
+    if (requested >= 0 && requested !== 9 && !used.has(requested)) {
+      result.set(part.id, requested)
+      used.add(requested)
+    } else {
+      // Requested channel is taken or invalid — grab the next free one
+      while (poolIdx < pool.length && used.has(pool[poolIdx])) poolIdx++
+      const ch = pool[poolIdx] ?? 0
+      poolIdx++
+      result.set(part.id, ch)
+      used.add(ch)
+    }
+  }
+  return result
 }
 
 // Effective MIDI velocity for a note in a given measure of a staff.
@@ -248,7 +317,7 @@ function resolveVelocity(
   partVolume: number,
 ): number {
   const evDynamic = (event as any).dynamic as DynamicLevel | undefined
-  let base = 75  // default mf
+  let base = 75
   if (evDynamic) {
     base = DYNAMIC_VELOCITY[evDynamic] ?? 75
   } else {
@@ -263,11 +332,11 @@ function resolveVelocity(
 
 // Collected note data for one note event, used in two-pass emit (pre / post hairpin).
 type NoteEntry = {
-  noteEventId: string    // Note.id or Chord.id — matches Hairpin.fromNoteId / toNoteId
-  midiNums:    number[]  // one element for Note, multiple for Chord
-  tick:        number    // absolute tick position
-  durTicks:    number    // performance duration (after articulation mod)
-  velocity:    number    // 1–127, mutable for hairpin adjustment
+  noteEventId: string
+  midiNums:    number[]
+  tick:        number
+  durTicks:    number
+  velocity:    number  // mutable for hairpin adjustment
 }
 
 function applyHairpinVelocities(entries: NoteEntry[], hairpins: readonly Hairpin[]): void {
@@ -287,20 +356,19 @@ function applyHairpinVelocities(entries: NoteEntry[], hairpins: readonly Hairpin
   }
 }
 
-// Build and add one MIDI track for a Part. Handles both score and sequencer modes.
 function buildPartTrack(
   midi: Midi,
   score: Score,
   part: Part,
-  partIndex: number,
+  channel: number,          // pre-deduped 0-based channel
   sequence: number[],
   seqTicks: number[],
+  notationDurations: boolean,
 ): void {
   const staff = part.staves[0]
   if (!staff) return
 
-  const channel = (part.midiChannel ?? (partIndex + 1)) - 1  // @tonejs/midi is 0-based
-  const track   = midi.addTrack()
+  const track = midi.addTrack()
   track.name              = part.name
   track.channel           = channel
   track.instrument.number = part.midiProgram
@@ -337,8 +405,6 @@ function buildPartTrack(
 
   // ── Score mode: two-pass (collect → hairpin → emit) ─────────────────────────
   const allEntries: NoteEntry[] = []
-
-  // Per-voice tie accumulators: MIDI pitch → NoteEntry of the open tieStart note
   const voiceTies = new Map<number, Map<number, NoteEntry>>()
 
   for (let si = 0; si < sequence.length; si++) {
@@ -366,7 +432,6 @@ function buildPartTrack(
       }
     }
 
-    // Walk each voice
     for (let vi = 0; vi < measure.voices.length; vi++) {
       if (!voiceTies.has(vi)) voiceTies.set(vi, new Map())
       const ties = voiceTies.get(vi)!
@@ -377,24 +442,23 @@ function buildPartTrack(
         const dotFactor = event.dots === 2 ? 1.75 : event.dots === 1 ? 1.5 : 1
         const tuplet    = (event as any).tuplet
         const tupFactor = tuplet ? (tuplet.normal / tuplet.actual) : 1
-        // fullTicks: nominal duration for cursor advance (not performance-adjusted)
         const fullTicks = Math.round(beats * dotFactor * tupFactor * PPQ)
         const mods      = articulationPlaybackMods(event)
-        const perfTicks = Math.max(1, Math.round(fullTicks * mods.durFactor))
+        // notationDurations: skip the durFactor shortening so notes round-trip cleanly
+        const perfTicks = notationDurations
+          ? fullTicks
+          : Math.max(1, Math.round(fullTicks * mods.durFactor))
         const velocity  = resolveVelocity(staff.measures, mIdx, event, part.volume)
 
         if (event.type === 'note') {
           const n       = event as Note
           const midiNum = pitchToMidiNum(n.pitch, part.transposeSemitones)
-
           if (n.tieEnd) {
-            // Extend the open tie chain for this pitch, if any
             const pending = ties.get(midiNum)
             if (pending) {
               pending.durTicks += perfTicks
-              if (!n.tieStart) ties.delete(midiNum)  // chain ends here
+              if (!n.tieStart) ties.delete(midiNum)
             } else {
-              // Orphaned tieEnd: emit normally
               allEntries.push({ noteEventId: n.id, midiNums: [midiNum], tick: voiceTick, durTicks: perfTicks, velocity })
             }
           } else {
@@ -403,21 +467,17 @@ function buildPartTrack(
             if (n.tieStart) ties.set(midiNum, entry)
           }
         } else if (event.type === 'chord') {
-          const c      = event as Chord
-          const midis  = c.pitches.map(p => pitchToMidiNum(p, part.transposeSemitones))
-          allEntries.push({ noteEventId: c.id, midiNums: midis, tick: voiceTick, durTicks: perfTicks, velocity })
+          const c = event as Chord
+          allEntries.push({ noteEventId: c.id, midiNums: c.pitches.map(p => pitchToMidiNum(p, part.transposeSemitones)), tick: voiceTick, durTicks: perfTicks, velocity })
         }
-        // rests: just advance cursor
 
         voiceTick += fullTicks
       }
     }
   }
 
-  // Hairpin velocity interpolation
   if ((staff.hairpins ?? []).length > 0) applyHairpinVelocities(allEntries, staff.hairpins!)
 
-  // Emit
   for (const e of allEntries) {
     for (const midiNum of e.midiNums) {
       track.addNote({ midi: midiNum, ticks: e.tick, durationTicks: e.durTicks, velocity: e.velocity / 127 })
@@ -426,7 +486,7 @@ function buildPartTrack(
 }
 
 export function scoreToMidi(score: Score, opts: MidiExportOptions = {}): Uint8Array {
-  const { expandRepeats = true } = opts
+  const { expandRepeats = true, notationDurations = false } = opts
   const midi = new Midi()
 
   const refMeasures = score.parts[0]?.staves[0]?.measures ?? []
@@ -435,41 +495,109 @@ export function scoreToMidi(score: Score, opts: MidiExportOptions = {}): Uint8Ar
     : Array.from({ length: refMeasures.length }, (_, i) => i)
   const seqTicks = sequenceTicks(refMeasures, sequence, score.timeSignature)
 
-  populateConductorEvents(midi, score, refMeasures, sequence, seqTicks)
-  score.parts.forEach((part, idx) => {
-    if (!part.muted) buildPartTrack(midi, score, part, idx, sequence, seqTicks)
+  const keyEvents = populateConductorEvents(midi, score, refMeasures, sequence, seqTicks)
+
+  // Store original measure count so re-import can restore it precisely
+  midi.header.meta.push({ type: 'text', text: `${VOLTA_MEASURES_META}${refMeasures.length}`, ticks: 0 })
+
+  // De-duplicate channels before building tracks
+  const channelMap = assignChannels(score.parts)
+
+  score.parts.forEach(part => {
+    if (part.muted) return
+    const ch = channelMap.get(part.id) ?? 0
+    buildPartTrack(midi, score, part, ch, sequence, seqTicks, notationDurations)
   })
 
-  return midi.toArray()
+  // Fix @tonejs/midi's key-signature encoding bug (keyIndex+7 → keyIndex−7)
+  return fixKeySignatureBytes(midi.toArray(), keyEvents)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // IMPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-
-// Split overlapping notes into two voices. Voice 0 takes priority.
-function splitVoices<T extends { ticks: number; durationTicks: number }>(
-  sorted: T[],
-): [T[], T[]] {
-  const v0: T[] = [], v1: T[] = []
-  let cursor0 = 0
-  for (const n of sorted) {
-    if (n.ticks >= cursor0) { v0.push(n); cursor0 = n.ticks + n.durationTicks }
-    else                      { v1.push(n) }
-  }
-  return [v0, v1]
+export interface MidiImportOptions {
+  /** Detect triplet groups and import as TupletInfo notes. Default: true. */
+  detectTuplets?: boolean
 }
 
-// Find the closest instrument in the database by GM program number.
-function lookupInstrument(program: number, isDrum: boolean): InstrumentDef | undefined {
+// Lowercase name fragments → instruments.json ID, ordered longest-first to prefer specifics
+const TRACK_NAME_HINTS: Array<[string, string]> = [
+  ['clarinet in bb',  'clarinetBb'],
+  ['clarinet in a',   'clarinetA'],
+  ['bass clarinet',   'bassClarinet'],
+  ['english horn',    'enghorn'],
+  ['cor anglais',     'enghorn'],
+  ['horn in f',       'hornF'],
+  ['french horn',     'hornF'],
+  ['trumpet in bb',   'trumpetBb'],
+  ['baritone sax',    'barSax'],
+  ['soprano sax',     'sopSax'],
+  ['tenor sax',       'tenSax'],
+  ['alto sax',        'altSax'],
+  ['double bass',     'doublebass'],
+  ['contrabass',      'doublebass'],
+  ['bass guitar',     'bass-guitar'],
+  ['violoncello',     'cello'],
+  ['clarinet',        'clarinetBb'],
+  ['bassoon',         'bassoon'],
+  ['piccolo',         'piccolo'],
+  ['trombone',        'trombone'],
+  ['oboe',            'oboe'],
+  ['flute',           'flute'],
+  ['tuba',            'tuba'],
+  ['trumpet',         'trumpetBb'],
+  ['violin',          'violin'],
+  ['viola',           'viola'],
+  ['cello',           'cello'],
+  ['horn',            'hornF'],
+  ['harp',            'harp'],
+  ['piano',           'piano'],
+  ['organ',           'organ'],
+  ['harpsichord',     'harpsichord'],
+  ['celesta',         'celesta'],
+  ['timpani',         'timpani'],
+  ['vibraphone',      'vibraphone'],
+  ['guitar',          'guitar'],
+  ['drum',            'drum-kit'],
+  ['percussion',      'drum-kit'],
+]
+
+function lookupInstrumentByName(name: string): InstrumentDef | undefined {
+  const lower = name.toLowerCase()
+  for (const [hint, id] of TRACK_NAME_HINTS) {
+    if (lower.includes(hint)) return INSTRUMENTS.find(i => i.id === id)
+  }
+  return undefined
+}
+
+// Find the closest instrument in the database. When program=0 (Piano default) and
+// a track name is given, try name inference first — program 0 is the Piano default
+// for many exporters that didn't write a real Program Change.
+function lookupInstrument(program: number, isDrum: boolean, trackName = ''): InstrumentDef | undefined {
   if (isDrum) return INSTRUMENTS.find(i => i.midiChannel === 10)
+  if (program === 0 && trackName) {
+    const byName = lookupInstrumentByName(trackName)
+    if (byName) return byName
+  }
   return INSTRUMENTS
-    .filter(i => i.midiChannel !== 10)  // exclude drum kit from melodic lookup
+    .filter(i => i.midiChannel !== 10)
     .reduce<InstrumentDef | undefined>((best, inst) => {
       if (!best) return inst
       return Math.abs(inst.midiProgram - program) < Math.abs(best.midiProgram - program) ? inst : best
     }, undefined)
+}
+
+// Split overlapping notes into two voices. Voice 0 takes priority.
+function splitVoices<T extends { ticks: number; durationTicks: number }>(sorted: T[]): [T[], T[]] {
+  const v0: T[] = [], v1: T[] = []
+  let cursor0 = 0
+  for (const n of sorted) {
+    if (n.ticks >= cursor0) { v0.push(n); cursor0 = n.ticks + n.durationTicks }
+    else                      v1.push(n)
+  }
+  return [v0, v1]
 }
 
 // A "slot" describes one measure in the global timeline built from the MIDI file.
@@ -480,7 +608,6 @@ interface MeasureSlot {
   timeSig:   TimeSignature
 }
 
-// Build the global measure timeline from header time-signature events.
 function buildMeasureSlots(
   timeSigEvents: Array<{ ticks: number; timeSignature: number[] }>,
   totalTicks: number,
@@ -489,13 +616,8 @@ function buildMeasureSlots(
   const sorted = [...timeSigEvents].sort((a, b) => a.ticks - b.ticks)
   const slots: MeasureSlot[] = []
   let currentTS: TimeSignature = { numerator: 4, denominator: 4 }
-  let tsIdx = 0
-  let tick  = 0
-  let mIdx  = 0
-
-  // Generate enough slots to cover all notes plus a few extra measures
+  let tsIdx = 0, tick = 0, mIdx = 0
   const target = totalTicks + Math.round(8 * 4 * ppq)
-
   while (tick <= target) {
     while (tsIdx < sorted.length && sorted[tsIdx].ticks <= tick) {
       currentTS = { numerator: sorted[tsIdx].timeSignature[0], denominator: sorted[tsIdx].timeSignature[1] }
@@ -503,20 +625,17 @@ function buildMeasureSlots(
     }
     const mTickLen = Math.round(currentTS.numerator * (4 / currentTS.denominator) * ppq)
     slots.push({ mIdx, startTick: tick, endTick: tick + mTickLen, timeSig: currentTS })
-    tick += mTickLen
-    mIdx++
+    tick += mTickLen; mIdx++
   }
-
   return slots
 }
 
-// Return the slot index that contains the given tick.
 function findSlotIndex(slots: MeasureSlot[], tick: number): number {
   let lo = 0, hi = slots.length - 1
   while (lo <= hi) {
     const mid = (lo + hi) >> 1
-    if (slots[mid].endTick <= tick)   { lo = mid + 1 }
-    else if (slots[mid].startTick > tick) { hi = mid - 1 }
+    if (slots[mid].endTick <= tick)       lo = mid + 1
+    else if (slots[mid].startTick > tick) hi = mid - 1
     else return mid
   }
   return Math.max(0, slots.length - 1)
@@ -535,55 +654,185 @@ function groupChords(
     const ref = sorted[i]
     const group = [ref]
     let j = i + 1
-    while (j < sorted.length && sorted[j].ticks - ref.ticks <= CHORD_TICK_TOLERANCE) {
-      group.push(sorted[j]); j++
-    }
+    while (j < sorted.length && sorted[j].ticks - ref.ticks <= CHORD_TICK_TOLERANCE) { group.push(sorted[j]); j++ }
     groups.push({
       ticks:        ref.ticks,
       durationTicks: Math.max(...group.map(n => n.durationTicks)),
       midiNums:     group.map(n => n.midi),
-      velocity:     group.reduce((s, n) => s + n.velocity, 0) / group.length,  // keep 0-1 precision
+      velocity:     group.reduce((s, n) => s + n.velocity, 0) / group.length,
     })
     i = j
   }
   return groups
 }
 
+// Triplet marker for a group index: which tupletId and what written base note.
+type TripletMark = { tupletId: string; baseDuration: Duration }
+
+// Detect groups of 3 consecutive notes with regular spacing whose total tick span
+// equals a standard duple duration (within ±4% tolerance). Returns a map from
+// group index to its triplet mark.
+function detectTripletMarks(groups: RawGroup[], ppq: number): Map<number, TripletMark> {
+  const marks    = new Map<number, TripletMark>()
+  const TOLERANCE = Math.round(ppq * 0.04)  // ±4% of a quarter note
+  // Standard duple note lengths in ticks (32nd to half):
+  const DUPLES: Array<[number, Duration]> = [
+    [ppq / 4, '16th'], [ppq / 2, 'eighth'], [ppq, 'quarter'], [ppq * 2, 'half'],
+  ]
+
+  for (let i = 0; i < groups.length - 2; i++) {
+    if (marks.has(i)) continue
+    const a = groups[i], b = groups[i + 1], c = groups[i + 2]
+
+    // Require regular inter-note spacing
+    const iAB = b.ticks - a.ticks
+    const iBC = c.ticks - b.ticks
+    if (Math.abs(iAB - iBC) > TOLERANCE) continue
+
+    // Total span of the 3-note group
+    const totalTicks = c.ticks + c.durationTicks - a.ticks
+
+    // Find a standard duple duration that matches total × 1 (3 triplet Xths = 2 Xths)
+    // total = 2 × baseNote → baseNote = total / 2
+    const baseNoteTicks = totalTicks / 2
+    const duple = DUPLES.find(([d]) => Math.abs(d - baseNoteTicks) <= TOLERANCE)
+    if (!duple) continue
+
+    const tupletId = uuid()
+    const baseDuration = duple[1]
+    marks.set(i,     { tupletId, baseDuration })
+    marks.set(i + 1, { tupletId, baseDuration })
+    marks.set(i + 2, { tupletId, baseDuration })
+    i += 2
+  }
+  return marks
+}
+
 // Flat event used while packing notes into measures.
+// units is a float for tuplet notes (e.g. 8/3 for triplet-16ths).
 type FlatEvent = {
   type:     'note' | 'chord' | 'rest'
-  units:    number           // quantised 64th-note units
+  units:    number
   duration: Duration
   dots:     0 | 1
   pitches?: Pitch[]
-  velocity: number           // 0–127 average velocity for dynamics detection
+  velocity: number       // 0–127 average velocity for dynamics detection
+  tuplet?:  TupletInfo
+}
+
+function trackToFlatEvents(
+  groups: RawGroup[],
+  isDrum: boolean,
+  ppq: number,
+  activeKeySig: (tick: number) => KeySignature,
+  transposeSemitones: number,
+  tripletMarks: Map<number, TripletMark>,
+): FlatEvent[] {
+  const flat: FlatEvent[] = []
+  let cursor = 0
+
+  for (let gi = 0; gi < groups.length; gi++) {
+    const g = groups[gi]
+    const startUnits = ticksToUnits(g.ticks, ppq)
+    const gap        = startUnits - cursor
+
+    if (gap >= 1) {
+      const q = quantise(gap)
+      flat.push({ type: 'rest', units: q.units, duration: q.duration, dots: q.dots, velocity: 0 })
+      cursor = startUnits
+    }
+
+    const ks = activeKeySig(g.ticks)
+    const triplet = tripletMarks.get(gi)
+
+    let units: number
+    let duration: Duration
+    let dots: 0 | 1
+    let tuplet: TupletInfo | undefined
+
+    if (triplet) {
+      // For triplets, use the group's total unit span divided by 3 for exact arithmetic
+      duration = triplet.baseDuration
+      dots     = 0
+      // Compute the group's total units from all 3 notes, then each = total/3
+      // We read the "total" from the last note in the group (caller ensures i+2 is present)
+      const groupEndTicks   = groups[gi + 2 - (gi % 3)]?.ticks ?? g.ticks  // fallback
+      // Simpler: single-note contribution = total group ticks / 3 units
+      // Use ticksToUnits on the full span divided by 3
+      // Actually: for a group starting at gi and ending at gi+2 (the last in the triplet),
+      // the full group span in units was already used for the mark detection.
+      // Each note gets units = DURATION_UNITS[baseDuration] * 2/3 (the tuplet factor)
+      // which in 64th-units: baseDuration in units * 2/3
+      const baseDurUnits: Record<Duration, number> = { '64th':1,'32nd':2,'16th':4,'eighth':8,'quarter':16,'half':32,'whole':64 }
+      units = baseDurUnits[duration] * 2 / 3  // exact float (e.g. 4 * 2/3 = 2.667 for 16th triplet)
+      tuplet = { id: triplet.tupletId, actual: 3, normal: 2 }
+    } else {
+      const rawUnits = Math.max(1, ticksToUnits(g.durationTicks, ppq))
+      const q = quantise(rawUnits)
+      units    = q.units
+      duration = q.duration
+      dots     = q.dots
+    }
+
+    if (isDrum) {
+      const pitches = g.midiNums.map(drumPitch)
+      flat.push({ type: g.midiNums.length === 1 ? 'note' : 'chord', units, duration, dots: dots ?? 0, pitches, velocity: Math.round(g.velocity * 127), tuplet })
+    } else {
+      const written = g.midiNums.map(m => {
+        const writtenMidi = Math.max(0, Math.min(127, m + transposeSemitones))
+        return midiToPitch(writtenMidi, ks)
+      })
+      flat.push({ type: written.length === 1 ? 'note' : 'chord', units, duration, dots: dots ?? 0, pitches: written, velocity: Math.round(g.velocity * 127), tuplet })
+    }
+
+    cursor = startUnits + (triplet ? Math.round(units) : units)
+  }
+
+  return flat
+}
+
+// Add dynamic directives to measures when the inferred level changes.
+function injectDynamics(measures: Measure[], voiceNotes: FlatEvent[]): Measure[] {
+  let lastDynamic: DynamicLevel | null = null
+  let noteIdx = 0
+  return measures.map(m => {
+    const firstNote = (m.voices[0]?.events ?? []).find(e => e.type !== 'rest')
+    if (!firstNote) return m
+    while (noteIdx < voiceNotes.length && voiceNotes[noteIdx].type === 'rest') noteIdx++
+    const raw = voiceNotes[noteIdx]
+    if (!raw || raw.velocity === 0) return m
+    const level = inferDynamic(raw.velocity)
+    noteIdx++
+    if (level === lastDynamic) return m
+    lastDynamic = level
+    return { ...m, directives: [...(m.directives ?? []), { id: uuid(), category: 'dynamic' as const, text: level }] }
+  })
 }
 
 // Pack a sequence of flat events into measures with tie support at barlines.
+// targetMeasures: if provided, stop padding once this many measures are built.
 function packIntoMeasures(
   events: FlatEvent[],
   slots: MeasureSlot[],
-  tsSwitches: Map<number, TimeSignature>,    // slotIdx → new time sig override
-  keySwitches: Map<number, KeySignature>,    // slotIdx → new key sig override
-  tempoDirs: Map<number, number>,            // slotIdx → bpm directive
+  tsSwitches:  Map<number, TimeSignature>,
+  keySwitches: Map<number, KeySignature>,
+  tempoDirs:   Map<number, number>,
+  targetMeasures?: number,
 ): Measure[] {
   const measures: Measure[] = []
-  let slotIdx   = 0
+  let slotIdx  = 0
   let mEvents: NoteEvent[] = []
-  let beatPos   = 0
-  let timeSig   = slots[0]?.timeSig ?? { numerator: 4, denominator: 4 }
-  let capacity  = measureCapacityUnits(timeSig)
-  let mNum      = 1
+  let beatPos  = 0  // float-safe for tuplet accumulation
+  let timeSig  = slots[0]?.timeSig ?? { numerator: 4, denominator: 4 }
+  let capacity = measureCapacityUnits(timeSig)
+  let mNum     = 1
 
   function closeMeasure(barline: BarlineType = 'single') {
-    // Fill remaining space with rests
-    const rem = capacity - beatPos
+    const rem = capacity - Math.round(beatPos)
     if (rem > 0) for (const r of fillWithRests(rem)) mEvents.push(r)
-
-    const tsSwitch = tsSwitches.get(slotIdx + 1)  // next measure may have a new time sig
+    const tsSwitch = tsSwitches.get(slotIdx + 1)
     const ksSwitch = keySwitches.get(slotIdx)
     const bpm      = tempoDirs.get(slotIdx)
-
     measures.push({
       id:     uuid(),
       number: mNum++,
@@ -592,35 +841,27 @@ function packIntoMeasures(
       ...(ksSwitch != null ? { keySignature: ksSwitch } : {}),
       ...(bpm != null ? { directives: [{ id: uuid(), category: 'tempo' as const, text: `${bpm} bpm`, bpm }] } : {}),
     })
-
-    mEvents  = []
-    beatPos  = 0
-    slotIdx++
-
-    if (tsSwitch) {
-      timeSig  = tsSwitch
-      capacity = measureCapacityUnits(tsSwitch)
-    } else if (slots[slotIdx]) {
-      timeSig  = slots[slotIdx].timeSig
-      capacity = measureCapacityUnits(timeSig)
-    }
+    mEvents = []; beatPos = 0; slotIdx++
+    if (tsSwitch) { timeSig = tsSwitch; capacity = measureCapacityUnits(tsSwitch) }
+    else if (slots[slotIdx]) { timeSig = slots[slotIdx].timeSig; capacity = measureCapacityUnits(timeSig) }
   }
 
   function makeNoteEvent(ev: FlatEvent, units: number, tieStart: boolean, tieEnd: boolean): NoteEvent {
-    const q = units === ev.units ? ev : quantise(units)
-    if (ev.type === 'rest') {
-      return createRest(q.duration) as Rest
-    }
+    const q = Math.abs(units - ev.units) < 0.5 ? ev : quantise(units)
+    if (ev.type === 'rest') return createRest(q.duration) as Rest
     if (ev.type === 'note') {
-      const p = ev.pitches![0]
+      const p    = ev.pitches![0]
       const base = createNote(p.noteName, p.octave, q.duration, p.accidental)
-      return { ...base, id: uuid(), dots: q.dots, tieStart, tieEnd } as Note
+      return {
+        ...base, id: uuid(), dots: q.dots, tieStart, tieEnd,
+        ...(ev.tuplet ? { tuplet: ev.tuplet } : {}),
+      } as Note
     }
-    // chord
     return {
-      id:    uuid(), type: 'chord',
+      id: uuid(), type: 'chord',
       pitches: ev.pitches!, duration: q.duration, dots: q.dots as (0 | 1 | 2),
       articulations: [],
+      ...(ev.tuplet ? { tuplet: ev.tuplet } : {}),
     } as Chord
   }
 
@@ -628,41 +869,32 @@ function packIntoMeasures(
     let remaining       = ev.units
     let isFirstFragment = true
 
-    while (remaining > 0) {
+    while (remaining > 0.001) {
       const space = capacity - beatPos
 
-      if (remaining <= space) {
-        // Fits in current measure
-        mEvents.push(makeNoteEvent(ev, remaining, false, !isFirstFragment))
-        beatPos += remaining
-        remaining = 0
-        if (beatPos >= capacity) closeMeasure()
+      if (remaining <= space + 0.001) {
+        mEvents.push(makeNoteEvent(ev, Math.round(remaining), false, !isFirstFragment))
+        beatPos   += remaining
+        remaining  = 0
+        if (beatPos >= capacity - 0.001) closeMeasure()
       } else if (ev.type === 'rest') {
-        // Rests split without ties: fill current measure remainder, then continue
-        if (space > 0) {
-          for (const r of fillWithRests(space)) mEvents.push(r)
-          beatPos = capacity
-        }
+        if (space >= 1) { for (const r of fillWithRests(Math.round(space))) mEvents.push(r); beatPos = capacity }
         remaining -= space
         closeMeasure()
-        // Distribute the remaining rest across subsequent measures
-        while (remaining > 0) {
-          const nextSpace = capacity  // capacity may have changed after closeMeasure
-          const fill = Math.min(remaining, nextSpace)
-          for (const r of fillWithRests(fill)) mEvents.push(r)
+        while (remaining > 0.001) {
+          const fill = Math.min(remaining, capacity)
+          for (const r of fillWithRests(Math.round(fill))) mEvents.push(r)
           beatPos    = fill
           remaining -= fill
-          if (beatPos >= capacity) closeMeasure()
+          if (beatPos >= capacity - 0.001) closeMeasure()
         }
       } else if (space >= 1) {
-        // Note/chord overflows: create tied fragment
-        mEvents.push(makeNoteEvent(ev, space, /*tieStart:*/ true, /*tieEnd:*/ !isFirstFragment))
+        mEvents.push(makeNoteEvent(ev, Math.round(space), true, !isFirstFragment))
         beatPos        += space
         remaining      -= space
         isFirstFragment = false
         closeMeasure()
       } else {
-        // No space at all — just close and retry
         closeMeasure()
       }
     }
@@ -670,8 +902,9 @@ function packIntoMeasures(
 
   if (mEvents.length > 0) closeMeasure()
 
-  // Pad to at least 8 measures
-  while (measures.length < 8) {
+  // Pad: honour targetMeasures if provided, otherwise ensure at least 8
+  const minMeasures = targetMeasures ?? 8
+  while (measures.length < minMeasures) {
     const ts = slots[slotIdx]?.timeSig ?? timeSig
     measures.push({
       id:     uuid(),
@@ -682,104 +915,33 @@ function packIntoMeasures(
     slotIdx++
   }
 
-  // Enforce barlines
   for (let k = 0; k < measures.length - 1; k++) measures[k] = { ...measures[k], barline: 'single' }
   measures[measures.length - 1] = { ...measures[measures.length - 1], barline: 'final' }
-
   return measures
 }
 
-// Import a single MIDI track's notes into a voice's flat event list.
-function trackToFlatEvents(
-  groups: RawGroup[],
-  isDrum: boolean,
-  ppq: number,
-  activeKeySig: (tick: number) => KeySignature,
-  transposeSemitones: number,
-): FlatEvent[] {
-  const flat: FlatEvent[] = []
-  let cursor = 0  // in 64th-note units
-
-  for (const g of groups) {
-    const startUnits = ticksToUnits(g.ticks, ppq)
-    const gap        = startUnits - cursor
-
-    // Fill gap with rests
-    if (gap >= 1) {
-      const q = quantise(gap)
-      flat.push({ type: 'rest', units: q.units, duration: q.duration, dots: q.dots, velocity: 0 })
-      cursor = startUnits
-    }
-
-    const rawUnits = Math.max(1, ticksToUnits(g.durationTicks, ppq))
-    const q        = quantise(rawUnits)
-    const ks       = activeKeySig(g.ticks)
-
-    if (isDrum) {
-      const pitches = g.midiNums.map(drumPitch)
-      flat.push({ type: g.midiNums.length === 1 ? 'note' : 'chord', units: q.units, duration: q.duration, dots: q.dots, pitches, velocity: Math.round(g.velocity * 127) })
-    } else {
-      // Concert → written pitch
-      const written = g.midiNums.map(m => {
-        const writtenMidi = Math.max(0, Math.min(127, m + transposeSemitones))
-        return midiToPitch(writtenMidi, ks)
-      })
-      flat.push({
-        type:    written.length === 1 ? 'note' : 'chord',
-        units:   q.units,
-        duration: q.duration,
-        dots:    q.dots,
-        pitches: written,
-        velocity: Math.round(g.velocity * 127),
-      })
-    }
-
-    cursor = startUnits + q.units
-  }
-
-  return flat
-}
-
-// Add dynamic directives to measures when the inferred level changes.
-function injectDynamics(measures: Measure[], voiceNotes: FlatEvent[]): Measure[] {
-  let lastDynamic: DynamicLevel | null = null
-  let noteIdx = 0
-
-  return measures.map(m => {
-    const eventsInMeasure = m.voices[0]?.events ?? []
-    const firstNote = eventsInMeasure.find(e => e.type !== 'rest')
-    if (!firstNote) return m
-
-    // Find the matching flat event for this measure's first note
-    while (noteIdx < voiceNotes.length && voiceNotes[noteIdx].type === 'rest') noteIdx++
-    const raw = voiceNotes[noteIdx]
-    if (!raw || raw.velocity === 0) return m
-
-    const level = inferDynamic(raw.velocity)
-    if (level === lastDynamic) { noteIdx++; return m }
-
-    lastDynamic = level
-    noteIdx++
-    const directive = { id: uuid(), category: 'dynamic' as const, text: level }
-    return { ...m, directives: [...(m.directives ?? []), directive] }
-  })
-}
-
-export function midiToScore(bytes: Uint8Array): Score {
+export function midiToScore(bytes: Uint8Array, opts: MidiImportOptions = {}): Score {
+  const { detectTuplets = true } = opts
   const midi = new Midi(bytes)
   const ppq  = midi.header.ppq
 
   // ── Global header events ─────────────────────────────────────────────────────
-  const sortedTempos  = [...midi.header.tempos].sort((a, b) => a.ticks - b.ticks)
+  const sortedTempos   = [...midi.header.tempos].sort((a, b) => a.ticks - b.ticks)
   const sortedTimeSigs = [...midi.header.timeSignatures].sort((a, b) => a.ticks - b.ticks)
-  const sortedKeySigs = [...midi.header.keySignatures].sort((a, b) => a.ticks - b.ticks)
+  const sortedKeySigs  = [...midi.header.keySignatures].sort((a, b) => a.ticks - b.ticks)
 
-  const initTempo   = Math.round(sortedTempos[0]?.bpm ?? 120)
-  const initTsRaw   = sortedTimeSigs[0]?.timeSignature ?? [4, 4]
+  const initTempo    = Math.round(sortedTempos[0]?.bpm ?? 120)
+  const initTsRaw    = sortedTimeSigs[0]?.timeSignature ?? [4, 4]
   const initTimeSig: TimeSignature = { numerator: initTsRaw[0], denominator: initTsRaw[1] }
-  const initKsKey   = sortedKeySigs[0]?.key ?? 'C'
-  const initKsScale = sortedKeySigs[0]?.scale ?? 'major'
+  const initKsKey    = sortedKeySigs[0]?.key ?? 'C'
+  const initKsScale  = sortedKeySigs[0]?.scale ?? 'major'
   const initKeySig: KeySignature = { fifths: KEY_TO_FIFTHS[initKsKey] ?? 0, mode: initKsScale as 'major' | 'minor' }
+
+  // Original measure count stored by our exporter — use to cap padding
+  const metaMeasuresText = midi.header.meta.find(m => m.text?.startsWith(VOLTA_MEASURES_META))?.text
+  const targetMeasures   = metaMeasuresText
+    ? (parseInt(metaMeasuresText.slice(VOLTA_MEASURES_META.length), 10) || undefined)
+    : undefined
 
   // ── Measure timeline ─────────────────────────────────────────────────────────
   const notesTracks = midi.tracks.filter(t => t.notes.length > 0)
@@ -789,37 +951,25 @@ export function midiToScore(bytes: Uint8Array): Score {
 
   const slots = buildMeasureSlots(sortedTimeSigs, totalTicks, ppq)
 
-  // ── Per-slot overrides derived from mid-score events ─────────────────────────
+  // ── Per-slot overrides ────────────────────────────────────────────────────────
   const tsSwitches   = new Map<number, TimeSignature>()
   const keySwitches  = new Map<number, KeySignature>()
-  const tempoChanges = new Map<number, number>()  // slotIdx → bpm
+  const tempoChanges = new Map<number, number>()
 
-  // Time sig switches: detect when a slot has a different TS than its predecessor
   for (let i = 1; i < slots.length; i++) {
     const prev = slots[i - 1].timeSig, curr = slots[i].timeSig
-    if (prev.numerator !== curr.numerator || prev.denominator !== curr.denominator) {
-      tsSwitches.set(i, curr)
-    }
+    if (prev.numerator !== curr.numerator || prev.denominator !== curr.denominator) tsSwitches.set(i, curr)
   }
-
-  // Key sig changes: map each event to the nearest measure start
   for (const ks of sortedKeySigs.slice(1)) {
-    const sIdx = findSlotIndex(slots, ks.ticks)
-    keySwitches.set(sIdx, { fifths: KEY_TO_FIFTHS[ks.key] ?? 0, mode: ks.scale as 'major' | 'minor' })
+    if (ks.key) keySwitches.set(findSlotIndex(slots, ks.ticks), { fifths: KEY_TO_FIFTHS[ks.key] ?? 0, mode: ks.scale as 'major' | 'minor' })
   }
-
-  // Tempo changes: map each event to the nearest measure start
   for (const t of sortedTempos.slice(1)) {
-    const sIdx = findSlotIndex(slots, t.ticks)
-    tempoChanges.set(sIdx, Math.round(t.bpm))
+    tempoChanges.set(findSlotIndex(slots, t.ticks), Math.round(t.bpm))
   }
 
-  // Key sig lookup at a given tick
   function activeKeySig(tick: number): KeySignature {
     const sIdx = findSlotIndex(slots, tick)
-    for (let i = sIdx; i >= 0; i--) {
-      if (keySwitches.has(i)) return keySwitches.get(i)!
-    }
+    for (let i = sIdx; i >= 0; i--) { if (keySwitches.has(i)) return keySwitches.get(i)! }
     return initKeySig
   }
 
@@ -828,60 +978,52 @@ export function midiToScore(bytes: Uint8Array): Score {
     return { ...base, tempo: initTempo, timeSignature: initTimeSig, keySignature: initKeySig }
   }
 
-  // ── Import each note-bearing track as a Part ─────────────────────────────────
+  // ── Import each note-bearing track as a Part ──────────────────────────────────
   const parts: ReturnType<typeof createScore>['parts'][0][] = []
 
   for (const track of notesTracks) {
-    const trackChannel = track.channel   // 0-based; 9 = GM drum channel
-    const isDrum    = trackChannel === 9 || track.instrument.percussion
-    const program   = isDrum ? 0 : track.instrument.number
-    const inst      = lookupInstrument(program, isDrum)
-    const transpose = inst?.transposeSemitones ?? 0
-    const clef      = inst?.defaultClef ?? (isDrum ? 'percussion' : 'treble')
+    const trackChannel = track.channel
+    const isDrum       = trackChannel === 9 || track.instrument.percussion
+    const program      = isDrum ? 0 : track.instrument.number
+    const inst         = lookupInstrument(program, isDrum, track.name)
+    const transpose    = inst?.transposeSemitones ?? 0
+    const clef         = inst?.defaultClef ?? (isDrum ? 'percussion' : 'treble')
 
-    // Sort → chord group → split voices (in that order: simultaneous notes = chords, not different voices)
-    const sorted   = [...track.notes].sort((a, b) => a.ticks - b.ticks)
-    const groups   = groupChords(sorted)
+    const sorted           = [...track.notes].sort((a, b) => a.ticks - b.ticks)
+    const groups           = groupChords(sorted)
     const [v0groups, v1groups] = splitVoices(groups)
-    const hasVoice1 = v1groups.length > 0
+    const hasVoice1        = v1groups.length > 0
 
-    // Convert to flat events
-    const v0flat = trackToFlatEvents(v0groups, isDrum, ppq, activeKeySig, transpose)
-    const v1flat = hasVoice1 ? trackToFlatEvents(v1groups, isDrum, ppq, activeKeySig, transpose) : []
+    // Triplet detection — done per-voice on the chord groups
+    const v0marks = detectTuplets ? detectTripletMarks(v0groups, ppq) : new Map<number, TripletMark>()
+    const v1marks = detectTuplets && hasVoice1 ? detectTripletMarks(v1groups, ppq) : new Map<number, TripletMark>()
 
-    // Pack into measures
-    const v0measures = packIntoMeasures(v0flat, slots, tsSwitches, keySwitches, tempoChanges)
-    // Inject dynamics based on note velocities
+    const v0flat = trackToFlatEvents(v0groups, isDrum, ppq, activeKeySig, transpose, v0marks)
+    const v1flat = hasVoice1 ? trackToFlatEvents(v1groups, isDrum, ppq, activeKeySig, transpose, v1marks) : []
+
+    const v0measures = packIntoMeasures(v0flat, slots, tsSwitches, keySwitches, tempoChanges, targetMeasures)
     const v0withDyn  = injectDynamics(v0measures, v0flat)
 
     let finalMeasures: Measure[]
-
     if (hasVoice1) {
-      // Pack Voice 1 and merge into Voice 0 measures
-      const v1measures = packIntoMeasures(v1flat, slots, new Map(), new Map(), new Map())
+      const v1measures = packIntoMeasures(v1flat, slots, new Map(), new Map(), new Map(), targetMeasures)
       finalMeasures = v0withDyn.map((m, i) => {
         const v1 = v1measures[i]
-        if (!v1) return m
-        return { ...m, voices: [...m.voices, { id: uuid(), events: v1.voices[0]?.events ?? [] }] }
+        return v1 ? { ...m, voices: [...m.voices, { id: uuid(), events: v1.voices[0]?.events ?? [] }] } : m
       })
     } else {
       finalMeasures = v0withDyn
     }
 
-    // CC 64 → pedal marks (on Voice 0 measures)
+    // CC 64 → pedal marks
     const cc64 = track.controlChanges[64] ?? []
     if (cc64.length > 0) {
       const pedalByMeasure = new Map<number, typeof finalMeasures[0]['pedalMarks']>()
       for (const cc of cc64) {
         const sIdx = findSlotIndex(slots, cc.ticks)
         if (sIdx >= finalMeasures.length) continue
-        const slot     = slots[sIdx]
-        const beatPos  = ticksToUnits(cc.ticks - slot.startTick, ppq)
-        const existing = pedalByMeasure.get(sIdx) ?? []
-        pedalByMeasure.set(sIdx, [
-          ...existing,
-          { id: uuid(), type: cc.value >= 0.5 ? 'down' : 'up', beatPosition: beatPos },
-        ])
+        const beatPos = ticksToUnits(cc.ticks - slots[sIdx].startTick, ppq)
+        pedalByMeasure.set(sIdx, [...(pedalByMeasure.get(sIdx) ?? []), { id: uuid(), type: cc.value >= 0.5 ? 'down' : 'up', beatPosition: beatPos }])
       }
       finalMeasures = finalMeasures.map((m, i) => {
         const pm = pedalByMeasure.get(i)
@@ -889,32 +1031,23 @@ export function midiToScore(bytes: Uint8Array): Score {
       })
     }
 
-    // Build Staff and Part
     const partName  = track.name || (isDrum ? 'Drums' : inst?.name ?? 'Piano')
     const shortName = partName.slice(0, 6) + (partName.length > 6 ? '.' : '')
-    const midiCh    = isDrum ? 10 : trackChannel + 1  // convert back to 1-based
-
-    const staff = {
-      id: uuid(),
-      clef,
-      measures: finalMeasures,
-    }
 
     parts.push({
       id:                uuid(),
       name:              partName,
       shortName,
       midiProgram:       inst?.midiProgram ?? program,
-      midiChannel:       midiCh,
+      midiChannel:       isDrum ? 10 : trackChannel + 1,
       transposeSemitones: transpose,
-      staves:            [staff],
+      staves:            [{ id: uuid(), clef, measures: finalMeasures }],
       volume:            0.8,
       muted:             false,
       labelVisible:      true,
     })
   }
 
-  // ── Assemble Score ────────────────────────────────────────────────────────────
   const base = createScore(midi.header.name || 'Imported MIDI')
   return {
     ...base,
