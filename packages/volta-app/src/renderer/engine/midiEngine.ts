@@ -572,21 +572,77 @@ function lookupInstrumentByName(name: string): InstrumentDef | undefined {
   return undefined
 }
 
-// Find the closest instrument in the database. When program=0 (Piano default) and
-// a track name is given, try name inference first — program 0 is the Piano default
-// for many exporters that didn't write a real Program Change.
-function lookupInstrument(program: number, isDrum: boolean, trackName = ''): InstrumentDef | undefined {
+// Pitch statistics derived from a track's actual note content (concert pitch).
+interface PitchStats {
+  min:    number  // lowest MIDI pitch in track
+  max:    number  // highest MIDI pitch in track
+  median: number  // median MIDI pitch
+}
+
+function computePitchStats(groups: RawGroup[]): PitchStats | undefined {
+  const pitches = groups.flatMap(g => g.midiNums)
+  if (pitches.length === 0) return undefined
+  const sorted = [...pitches].sort((a, b) => a - b)
+  return { min: sorted[0], max: sorted[sorted.length - 1], median: sorted[Math.floor(sorted.length / 2)] }
+}
+
+// Score how well an instrument's practical range covers the track's observed pitches.
+// Inputs are concert pitches throughout. Lower score = better match.
+function scoreInstrumentByRange(inst: InstrumentDef, stats: PitchStats): number {
+  // Convert instrument written range to concert range
+  const cMin = inst.pitchRange.min - inst.transposeSemitones
+  const cMax = inst.pitchRange.max - inst.transposeSemitones
+
+  // Heavy penalty for notes outside the instrument's practical range
+  const belowPenalty = Math.max(0, cMin - stats.min) * 10
+  const abovePenalty = Math.max(0, stats.max - cMax) * 10
+
+  // Secondary: how close is the track median to the instrument's centre
+  const centerDist = Math.abs(stats.median - (cMin + cMax) / 2)
+
+  return belowPenalty + abovePenalty + centerDist
+}
+
+// Look up the best matching instrument using three signals in priority order:
+//   1. GM program number (when non-zero — authoritative)
+//   2. Track name substring match (for program=0 files)
+//   3. Pitch range scoring (when program=0 and name gives no match)
+function lookupInstrument(
+  program: number,
+  isDrum:  boolean,
+  trackName = '',
+  pitchStats?: PitchStats,
+): InstrumentDef | undefined {
   if (isDrum) return INSTRUMENTS.find(i => i.midiChannel === 10)
-  if (program === 0 && trackName) {
-    const byName = lookupInstrumentByName(trackName)
-    if (byName) return byName
-  }
-  return INSTRUMENTS
-    .filter(i => i.midiChannel !== 10)
-    .reduce<InstrumentDef | undefined>((best, inst) => {
+
+  const melodic = INSTRUMENTS.filter(i => i.midiChannel !== 10)
+
+  // Signal 1: explicit program number (non-zero = intentional assignment)
+  if (program > 0) {
+    return melodic.reduce<InstrumentDef | undefined>((best, inst) => {
       if (!best) return inst
       return Math.abs(inst.midiProgram - program) < Math.abs(best.midiProgram - program) ? inst : best
     }, undefined)
+  }
+
+  // Signal 2: track name
+  if (trackName) {
+    const byName = lookupInstrumentByName(trackName)
+    if (byName) return byName
+  }
+
+  // Signal 3: pitch range (program=0 with no usable name)
+  // Only reliable when the track spans at least an octave — a single note or
+  // a narrow fragment could plausibly belong to any instrument and would
+  // produce false positives, particularly for transposing instruments.
+  if (pitchStats && (pitchStats.max - pitchStats.min) >= 12) {
+    return melodic
+      .map(inst => ({ inst, score: scoreInstrumentByRange(inst, pitchStats) }))
+      .sort((a, b) => a.score - b.score)[0]?.inst
+  }
+
+  // Fallback: Piano (program 0)
+  return melodic.find(i => i.id === 'piano')
 }
 
 // Split overlapping notes into two voices. Voice 0 takes priority.
@@ -982,12 +1038,15 @@ export function midiToScore(bytes: Uint8Array, opts: MidiImportOptions = {}): Sc
     const trackChannel = track.channel
     const isDrum       = trackChannel === 9 || track.instrument.percussion
     const program      = isDrum ? 0 : track.instrument.number
-    const inst         = lookupInstrument(program, isDrum, track.name)
+
+    // Sort and chord-group first so we can compute pitch stats for range inference
+    const sorted = [...track.notes].sort((a, b) => a.ticks - b.ticks)
+    const groups = groupChords(sorted)
+
+    const pitchStats   = isDrum ? undefined : computePitchStats(groups)
+    const inst         = lookupInstrument(program, isDrum, track.name, pitchStats)
     const transpose    = inst?.transposeSemitones ?? 0
     const clef         = inst?.defaultClef ?? (isDrum ? 'percussion' : 'treble')
-
-    const sorted           = [...track.notes].sort((a, b) => a.ticks - b.ticks)
-    const groups           = groupChords(sorted)
     const [v0groups, v1groups] = splitVoices(groups)
     const hasVoice1        = v1groups.length > 0
 

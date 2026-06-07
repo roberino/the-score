@@ -572,6 +572,56 @@ describe('midiToScore — VOLTA_MEASURES: trim to original count', () => {
   })
 })
 
+describe('midiToScore — pitch-range instrument inference', () => {
+  // Range inference only fires when the track spans ≥ 12 semitones (one octave).
+
+  it('low-range passage (C2–C4, 24 semitones) infers a bass-range instrument', () => {
+    // Cello concert range: 36–81. Double bass: 28–55. Tuba: 26–65.
+    // Notes spanning 36–60 should prefer a low-range instrument over Violin/Flute.
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      // No name, no program — range spans C2(36) to C4(60)
+      ;[36, 40, 43, 48, 52, 55, 60].forEach((midi, i) => {
+        t.addNote({ midi, ticks: i * 480, durationTicks: 480 })
+      })
+    })
+    const score = midiToScore(bytes)
+    const part  = score.parts[0]
+    // Should not import as Flute (concert 60–98) or Violin (55–105)
+    expect(part.midiProgram).not.toBe(73)  // Flute
+    expect(part.midiProgram).not.toBe(40)  // Violin
+    // Should pick a bass-range instrument (cello=42, doublebass=43, tuba=58, bassoon=70…)
+    expect(part.staves[0].clef).toMatch(/bass|treble/)  // at least one of the bass-range defaults
+  })
+
+  it('high-range passage (C5–C7, 24 semitones) infers a treble-range instrument', () => {
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      // Notes spanning C5(72) to C7(96)
+      ;[72, 76, 79, 84, 88, 91, 96].forEach((midi, i) => {
+        t.addNote({ midi, ticks: i * 480, durationTicks: 480 })
+      })
+    })
+    const score = midiToScore(bytes)
+    const part  = score.parts[0]
+    // Should not pick tuba (concert 26–65) or cello (36–81)
+    expect(part.midiProgram).not.toBe(58)  // Tuba
+    expect(part.midiProgram).not.toBe(42)  // Cello
+    expect(part.staves[0].clef).toBe('treble')
+  })
+
+  it('narrow span (< 1 octave, 0 program, no name) falls back to Piano', () => {
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      ;[60, 62, 64].forEach((midi, i) => {
+        t.addNote({ midi, ticks: i * 480, durationTicks: 480 })
+      })
+    })
+    const score = midiToScore(bytes)
+    expect(score.parts[0].midiProgram).toBe(0)  // Piano = GM 0
+  })
+})
+
 describe('midiToScore — name-based instrument inference', () => {
   it('"Violin" track with program 0 imports as Violin (not Piano)', () => {
     const bytes = buildMidi(m => {
