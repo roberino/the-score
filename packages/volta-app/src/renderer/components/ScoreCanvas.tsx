@@ -246,9 +246,10 @@ function BarlinePicker({
       data-barline-picker=""
       style={{
         position: 'fixed', left: screenX, top: screenY,
-        background: '#fff', border: '1px solid #ccc', borderRadius: 4,
-        padding: 6, boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+        background: '#1e1e1e', border: '1px solid #444', borderRadius: 4,
+        padding: 6, boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
         zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 120,
+        color: '#d4d4d4',
       }}
     >
       {isLastMeasure && (
@@ -266,7 +267,7 @@ function BarlinePicker({
             style={{
               padding: '3px 8px', fontSize: 12, textAlign: 'left',
               cursor: disabled ? 'not-allowed' : 'pointer',
-              opacity: disabled ? 0.4 : 1,
+              color: disabled ? '#555' : '#ccc',
               background: 'none', border: '1px solid transparent', borderRadius: 3,
             }}
           >
@@ -575,6 +576,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     soundOnInput, audioMode,
     pendingResize, resizeError, resizeNote, confirmResize, cancelResize, clearResizeError,
     insertMeasure,
+    setInsertBarsDialogOpen,
     deleteMeasure,
     addHairpin,
     applyTuplet,
@@ -2016,10 +2018,10 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         return
       }
 
-      // Insert bar after cursor/selected measure (Ctrl/Cmd+B)
+      // Insert bars dialog (Ctrl/Cmd+B)
       if (mod && (e.key === 'b' || e.key === 'B')) {
         e.preventDefault()
-        insertMeasure()
+        setInsertBarsDialogOpen(true)
         return
       }
 
@@ -2147,7 +2149,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     moveSelectedNotes, navigateSelection, moveCursorByEvent, selectAllInMeasure,
     toggleTie, handleSlurKey,
     setInputMode, setSelectedDuration, toggleDot, resizeNote, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
-    insertMeasure, deleteMeasure, selectedMeasureId, insertTuplet,
+    insertMeasure, setInsertBarsDialogOpen, deleteMeasure, selectedMeasureId, insertTuplet,
     barSelection, deleteSelectedBars, setBarSelection,
     isPlaying,
   ])
@@ -3717,7 +3719,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       {pendingResize && (
         <div style={{
           position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 2000, background: 'rgba(0,0,0,0.3)',
+          zIndex: 2000, background: 'rgba(0,0,0,0.5)',
         }}
           onKeyDown={e => {
             if (e.key === 'Escape') { e.stopPropagation(); cancelResize() }
@@ -3725,18 +3727,18 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           }}
         >
           <div style={{
-            background: '#fff', border: '1px solid #ccc', borderRadius: 6,
-            padding: '16px 20px', boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+            background: '#252526', border: '1px solid #444', borderRadius: 6,
+            padding: '16px 20px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
             minWidth: 280, display: 'flex', flexDirection: 'column', gap: 16,
           }}>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>Resize note?</div>
-            <div style={{ fontSize: 13, color: '#444' }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: '#d4d4d4' }}>Resize note?</div>
+            <div style={{ fontSize: 13, color: '#aaa' }}>
               This will remove {pendingResize.pitchedCount} note{pendingResize.pitchedCount > 1 ? 's' : ''} after the selected note.
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button
                 onClick={cancelResize}
-                style={{ padding: '4px 14px', borderRadius: 4, border: '1px solid #ccc', background: '#f5f5f5', cursor: 'pointer', fontSize: 13 }}
+                style={{ padding: '4px 14px', borderRadius: 4, border: '1px solid #555', background: '#2d2d2d', color: '#ccc', cursor: 'pointer', fontSize: 13 }}
               >
                 Cancel
               </button>

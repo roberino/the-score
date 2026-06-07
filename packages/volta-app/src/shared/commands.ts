@@ -23,7 +23,7 @@ export type Command =
   | { type: 'REPLACE_NOTE';     partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; event: NoteEvent }
   | { type: 'SET_NOTE_DURATION'; partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; duration: Duration; dots?: 0 | 1 | 2 }
   | { type: 'ADD_MEASURE';      partId: string; staffId: string; afterMeasureId: string }
-  | { type: 'INSERT_MEASURE';   afterMeasureIndex: number }
+  | { type: 'INSERT_MEASURE';   afterMeasureIndex: number; count?: number; partId?: string }
   | { type: 'REMOVE_MEASURE';   measureIndex: number }
   | { type: 'DELETE_MEASURE';   partId: string; staffId: string; measureId: string }
   | { type: 'SET_BARLINE';      partId: string; staffId: string; measureId: string; barline: BarlineType }
@@ -234,6 +234,33 @@ function repitchNotes(
 }
 
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function insertBarsIntoStaff(
+  measures: any[],
+  afterIdx: number,
+  count: number,
+  scoreTimeSig: { numerator: number; denominator: number },
+): void {
+  if (afterIdx < 0 || afterIdx >= measures.length) return
+  const wasLast = afterIdx === measures.length - 1
+  if (wasLast) measures[afterIdx].barline = 'single'
+  const insertTimeSig = resolveTimeSig(measures, afterIdx, scoreTimeSig)
+  const newMeasures = []
+  for (let i = 0; i < count; i++) {
+    const isNewLast = wasLast && i === count - 1
+    newMeasures.push(createMeasure(
+      measures[afterIdx].number + 1 + i,
+      isNewLast ? 'final' : 'single',
+      insertTimeSig,
+    ))
+  }
+  measures.splice(afterIdx + 1, 0, ...newMeasures)
+  for (let i = afterIdx + 1 + count; i < measures.length; i++) {
+    measures[i].number = i + 1
+  }
+}
+
 // ── Command executor ─────────────────────────────────────────────────────────
 // Applies a command to a Score and returns the new Score (immutably, via Immer).
 // Think of Immer's `produce` as a C# `with` expression for deep object graphs.
@@ -331,24 +358,13 @@ export function applyCommand(score: Score, command: Command): Score {
       }
 
       case 'INSERT_MEASURE': {
-        const { afterMeasureIndex } = command
+        const { afterMeasureIndex, count = 1, partId } = command
         for (const part of draft.parts) {
+          const afterIdx = partId && part.id !== partId
+            ? (part.staves[0]?.measures.length ?? 1) - 1  // append to end of other parts
+            : afterMeasureIndex
           for (const staff of part.staves) {
-            const measures = staff.measures as any[]
-            if (afterMeasureIndex < 0 || afterMeasureIndex >= measures.length) continue
-            const isLast = afterMeasureIndex === measures.length - 1
-            // If inserting at the end, demote the current final barline first
-            if (isLast) measures[afterMeasureIndex].barline = 'single'
-            const insertTimeSig = resolveTimeSig(measures, afterMeasureIndex, draft.timeSignature)
-            const newMeasure = createMeasure(
-              measures[afterMeasureIndex].number + 1,
-              isLast ? 'final' : 'single',
-              insertTimeSig,
-            )
-            measures.splice(afterMeasureIndex + 1, 0, newMeasure)
-            for (let i = afterMeasureIndex + 2; i < measures.length; i++) {
-              measures[i].number = i + 1
-            }
+            insertBarsIntoStaff(staff.measures as any[], afterIdx, count, draft.timeSignature)
           }
         }
         break

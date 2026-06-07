@@ -92,6 +92,7 @@ export interface AppState {
   // UI panels
   keyboardVisible: boolean
   soundOnInput: boolean
+  insertBarsDialogOpen: boolean
 
   // Audio
   audioMode: 'builtin' | 'midi-out'
@@ -167,7 +168,7 @@ export interface AppState {
   setLastEnteredPitch: (pitch: Pitch | null) => void
   moveCursorToFirstAvailable: () => void
   checkAndAutoAddBar: () => void
-  insertMeasure: () => void
+  insertMeasure: (opts?: { count?: number; position?: 'after-cursor' | 'end'; partId?: string | null }) => void
   deleteMeasure: (measureId: string) => void
   addHairpin: (hairpinType: HairpinType) => void
   removeHairpin: (partId: string, staffId: string, hairpinId: string) => void
@@ -177,6 +178,7 @@ export interface AppState {
   removeVolta: (voltaId: string) => void
   toggleKeyboard: () => void
   toggleSoundOnInput: () => void
+  setInsertBarsDialogOpen: (open: boolean) => void
   setAudioMode: (mode: 'builtin' | 'midi-out') => void
   setMidiOutputDevice: (deviceId: string | null) => void
   setMidiInputDevice: (id: string | null, name: string | null) => void
@@ -220,6 +222,7 @@ export const useAppStore = create<AppState>()(
 
     keyboardVisible: false,
     soundOnInput: true,
+    insertBarsDialogOpen: false,
 
     audioMode: 'builtin',
     midiOutputDeviceId: null,
@@ -771,6 +774,7 @@ export const useAppStore = create<AppState>()(
 
     toggleKeyboard: () => set(s => { s.keyboardVisible = !s.keyboardVisible }),
     toggleSoundOnInput: () => set(s => { s.soundOnInput = !s.soundOnInput }),
+    setInsertBarsDialogOpen: (open) => set(s => { s.insertBarsDialogOpen = open }),
 
     setAudioMode: (mode) => {
       set(s => { s.audioMode = mode })
@@ -863,25 +867,43 @@ export const useAppStore = create<AppState>()(
       }
     },
 
-    insertMeasure: () => {
+    insertMeasure: (opts = {}) => {
+      const { count = 1, position = 'after-cursor', partId = null } = opts
       const { score, selectedMeasureId, cursorMeasureId } = get()
-      const refId = selectedMeasureId ?? cursorMeasureId
-      if (!refId) return
 
-      let afterIndex = -1
-      outer: for (const part of score.parts) {
-        for (const staff of part.staves) {
-          const idx = staff.measures.findIndex(m => m.id === refId)
-          if (idx !== -1) { afterIndex = idx; break outer }
+      // Resolve afterMeasureIndex from the target part (or part[0] when inserting into all)
+      const refPart = partId
+        ? score.parts.find(p => p.id === partId)
+        : score.parts[0]
+      if (!refPart) return
+
+      let afterIndex: number
+      if (position === 'end') {
+        afterIndex = (refPart.staves[0]?.measures.length ?? 1) - 1
+      } else {
+        const refId = selectedMeasureId ?? cursorMeasureId
+        if (!refId) return
+        afterIndex = -1
+        outer: for (const part of score.parts) {
+          for (const staff of part.staves) {
+            const idx = staff.measures.findIndex(m => m.id === refId)
+            if (idx !== -1) { afterIndex = idx; break outer }
+          }
         }
+        if (afterIndex === -1) return
       }
-      if (afterIndex === -1) return
 
-      get().dispatch({ type: 'INSERT_MEASURE', afterMeasureIndex: afterIndex })
+      get().dispatch({
+        type: 'INSERT_MEASURE',
+        afterMeasureIndex: afterIndex,
+        count,
+        ...(partId ? { partId } : {}),
+      })
 
-      // Move cursor into the new bar
-      const newStaff = get().score.parts[0]?.staves[0]
-      const newMeasure = newStaff?.measures[afterIndex + 1]
+      // Move cursor into the first new bar of the target part
+      const updatedParts = get().score.parts
+      const cursorPart = partId ? updatedParts.find(p => p.id === partId) : updatedParts[0]
+      const newMeasure = cursorPart?.staves[0]?.measures[afterIndex + 1]
       if (newMeasure) {
         get().setCursor(newMeasure.id, 0)
         get().setSelectedMeasure(null)

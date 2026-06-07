@@ -7,6 +7,7 @@ import { CircleOfFifths } from './CircleOfFifths'
 import { AudioSettingsPanel } from './AudioSettingsPanel'
 import { MidiInputPanel } from './MidiInputPanel'
 import { MidiLearnPanel } from './MidiLearnPanel'
+import { InsertBarsDialog } from './InsertBarsDialog'
 
 const NOTE_CHARS: Record<Duration, string> = {
   whole:   '\u{1D15D}',                            // whole note
@@ -72,6 +73,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     midiInputDeviceId, midiInputDeviceName,
     selectedMeasureId,
     insertMeasure,
+    insertBarsDialogOpen, setInsertBarsDialogOpen,
     playbackMode, setPlaybackMode,
     midiLearnListening, midiLearnBindings,
   } = useAppStore()
@@ -281,9 +283,9 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
         <div style={{ width: 1, height: 24, background: '#3e3e3e' }} />
 
         <ToolbarButton
-          onClick={insertMeasure}
-          disabled={isPlaying || !(selectedMeasureId ?? cursorMeasureId)}
-          title="Insert bar after selection (⌘B)"
+          onClick={() => setInsertBarsDialogOpen(true)}
+          disabled={isPlaying}
+          title="Insert bars (⌘B)"
           label="+ Bar"
         />
 
@@ -616,6 +618,14 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
             />
           )}
         </div>
+      )}
+
+      {insertBarsDialogOpen && (
+        <InsertBarsDialog
+          parts={score.parts.map(p => ({ id: p.id, name: p.name }))}
+          onInsert={(count, position, partId) => insertMeasure({ count, position, partId })}
+          onClose={() => setInsertBarsDialogOpen(false)}
+        />
       )}
     </div>
   )

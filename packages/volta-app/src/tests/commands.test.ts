@@ -599,6 +599,136 @@ describe('INSERT_MEASURE — barline and numbering', () => {
   })
 })
 
+// ── INSERT_MEASURE with count ─────────────────────────────────────────────────
+
+function insertMeasures(score: Score, afterMeasureIndex: number, count: number) {
+  return applyCommand(score, { type: 'INSERT_MEASURE', afterMeasureIndex, count })
+}
+
+describe('INSERT_MEASURE — count > 1', () => {
+  it('inserts the correct number of bars', () => {
+    const score = makeMultiMeasureScore(3)
+    const next = insertMeasures(score, 1, 4)
+    expect(measures(next)).toHaveLength(7)
+  })
+
+  it('all inserted bars in the middle have single barlines', () => {
+    const score = makeMultiMeasureScore(3)
+    const next = insertMeasures(score, 0, 3)
+    const ms = measures(next)
+    expect(ms[1].barline).toBe('single')
+    expect(ms[2].barline).toBe('single')
+    expect(ms[3].barline).toBe('single')
+  })
+
+  it('insert multiple at end: only last new bar gets final barline', () => {
+    const score = makeMultiMeasureScore(2) // m1(single) m2(final)
+    const next = insertMeasures(score, 1, 3) // insert 3 after last
+    const ms = measures(next)
+    expect(ms).toHaveLength(5)
+    expect(ms[1].barline).toBe('single') // old last demoted
+    expect(ms[2].barline).toBe('single')
+    expect(ms[3].barline).toBe('single')
+    expect(ms[4].barline).toBe('final')  // only the new last
+  })
+
+  it('renumbers all measures correctly after multi-insert', () => {
+    const score = makeMultiMeasureScore(3)
+    const next = insertMeasures(score, 1, 2)
+    expect(measures(next).map((m: any) => m.number)).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('count=1 behaves identically to omitting count', () => {
+    const score = makeMultiMeasureScore(3)
+    const withCount = insertMeasures(score, 1, 1)
+    const withoutCount = insertMeasure(score, 1)
+    const msA = measures(withCount)
+    const msB = measures(withoutCount)
+    expect(msA.map((m: any) => m.barline)).toEqual(msB.map((m: any) => m.barline))
+    expect(msA.map((m: any) => m.number)).toEqual(msB.map((m: any) => m.number))
+    expect(msA).toHaveLength(msB.length)
+  })
+})
+
+// ── INSERT_MEASURE with partId ────────────────────────────────────────────────
+
+function makeTwoPartScore(measureCount: number): Score {
+  const now = '2024-01-01T00:00:00.000Z'
+  const makeMeasures = () => Array.from({ length: measureCount }, (_, i) =>
+    makeMeasure(`m${i + 1}`, i + 1, i === measureCount - 1 ? 'final' : 'single')
+  )
+  return {
+    id: 'score-2p',
+    metadata: { title: '', subtitle: '', composer: '', arranger: '', lyricist: '', copyright: '', createdAt: now, updatedAt: now },
+    parts: [
+      { id: 'p1', name: 'Flute',  shortName: 'Fl.', midiProgram: 0,  transposeSemitones: 0, staves: [{ id: 's1', clef: 'treble', measures: makeMeasures() }], volume: 0.8, muted: false, labelVisible: true },
+      { id: 'p2', name: 'Cello',  shortName: 'Vc.', midiProgram: 42, transposeSemitones: 0, staves: [{ id: 's2', clef: 'bass',   measures: makeMeasures() }], volume: 0.8, muted: false, labelVisible: true },
+    ],
+    keySignature: { fifths: 0, mode: 'major' },
+    timeSignature: { numerator: 4, denominator: 4 },
+    tempo: 120, showPartLabels: true, textBoxes: [], version: 1,
+  }
+}
+
+function partMeasures(score: Score, partId: string) {
+  return (score.parts.find(p => p.id === partId)!.staves[0].measures as any[])
+}
+
+describe('INSERT_MEASURE — partId', () => {
+  it('when partId set, target part gets bars inserted at the given index', () => {
+    const score = makeTwoPartScore(4) // 4 bars each
+    const next = applyCommand(score, { type: 'INSERT_MEASURE', afterMeasureIndex: 1, count: 2, partId: 'p1' })
+    expect(partMeasures(next, 'p1')).toHaveLength(6)
+  })
+
+  it('when partId set, other parts get the same count appended at end to stay aligned', () => {
+    const score = makeTwoPartScore(4)
+    const next = applyCommand(score, { type: 'INSERT_MEASURE', afterMeasureIndex: 1, count: 2, partId: 'p1' })
+    expect(partMeasures(next, 'p2')).toHaveLength(6)
+  })
+
+  it('other parts new bars are appended at the end, not at the insertion point', () => {
+    // p1: insert after index 0 → [m1, NEW, NEW, m2, m3]
+    // p2: append at end → [m1, m2, m3, NEW, NEW]
+    const score = makeTwoPartScore(3)
+    const next = applyCommand(score, { type: 'INSERT_MEASURE', afterMeasureIndex: 0, count: 2, partId: 'p1' })
+    const p1ms = partMeasures(next, 'p1')
+    const p2ms = partMeasures(next, 'p2')
+    // p1: new bars are at indices 1 and 2
+    expect(p1ms[0].number).toBe(1)
+    expect(p1ms[1].number).toBe(2) // first new
+    expect(p1ms[2].number).toBe(3) // second new
+    expect(p1ms[3].number).toBe(4) // old m2 renumbered
+    // p2: new bars are at the end
+    expect(p2ms[0].number).toBe(1)
+    expect(p2ms[1].number).toBe(2)
+    expect(p2ms[2].number).toBe(3)
+    expect(p2ms[3].number).toBe(4) // first appended
+    expect(p2ms[4].number).toBe(5) // second appended
+  })
+
+  it('final barline moves to the new last bar in both parts', () => {
+    const score = makeTwoPartScore(2)
+    const next = applyCommand(score, { type: 'INSERT_MEASURE', afterMeasureIndex: 0, count: 1, partId: 'p1' })
+    const p1ms = partMeasures(next, 'p1')
+    const p2ms = partMeasures(next, 'p2')
+    expect(p1ms[p1ms.length - 1].barline).toBe('final')
+    expect(p2ms[p2ms.length - 1].barline).toBe('final')
+    expect(p1ms.filter((m: any) => m.barline === 'final')).toHaveLength(1)
+    expect(p2ms.filter((m: any) => m.barline === 'final')).toHaveLength(1)
+  })
+
+  it('without partId, all parts get bars inserted at the same index (existing behaviour)', () => {
+    const score = makeTwoPartScore(3)
+    const next = applyCommand(score, { type: 'INSERT_MEASURE', afterMeasureIndex: 1, count: 2 })
+    expect(partMeasures(next, 'p1')).toHaveLength(5)
+    expect(partMeasures(next, 'p2')).toHaveLength(5)
+    // Both parts have new bars at index 2 and 3
+    expect(partMeasures(next, 'p1')[2].number).toBe(3)
+    expect(partMeasures(next, 'p2')[2].number).toBe(3)
+  })
+})
+
 // ── REMOVE_MEASURE ────────────────────────────────────────────────────────────
 
 describe('REMOVE_MEASURE — barline and numbering', () => {

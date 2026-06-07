@@ -115,6 +115,47 @@ The renderer no longer needs special empty-measure handling; it renders the stor
 
 ---
 
+## Manual Bar Insertion
+
+Clicking the **`+ Bar`** toolbar button (or pressing **⌘B**) opens an **Insert Bars** dialog rather than immediately inserting a single bar. The dialog allows the user to choose where to insert and how many bars to add.
+
+### Dialog fields
+
+| Field | Control | Default | Constraints |
+|-------|---------|---------|-------------|
+| Number of bars | Numeric input | **1** | min 1, max 99 |
+| Position | Radio group | **After current bar** | "After current bar" or "At end of score" |
+
+- "After current bar" inserts after the currently selected measure (or cursor measure if no selection).
+- "At end of score" appends after the final measure regardless of cursor position.
+- The button is disabled (greyed out) when no cursor or selection exists; "After current bar" is therefore only available when the cursor/selection is set.
+
+### Dialog interaction
+
+1. Button click or ⌘B opens the dialog.
+2. The number input is focused automatically so the user can type a count and press Enter.
+3. **Confirm** (Enter or "Insert" button): inserts the requested bars and closes the dialog. The cursor moves to beat 0 of the first newly-inserted bar.
+4. **Cancel** (Escape or "Cancel" button): closes without changes.
+5. Clicking outside the panel closes without changes.
+
+### Undo behaviour
+
+All bars inserted in one dialog confirmation are treated as a **single undo step**. Undoing removes all inserted bars at once and restores the cursor to its pre-insertion position.
+
+### `INSERT_MEASURE` count extension
+
+`INSERT_MEASURE` gains an optional `count` field:
+
+```typescript
+{ type: 'INSERT_MEASURE'; afterMeasureIndex: number; count?: number }
+```
+
+- Default `count` is 1 (backward-compatible).
+- The command inserts `count` consecutive measures starting at `afterMeasureIndex + 1`.
+- Bar renumbering and final-barline maintenance apply across all inserted bars as a single atomic operation.
+
+---
+
 ## Commands
 
 ### `ADD_MEASURE` (existing, unimplemented)
@@ -185,3 +226,9 @@ After drawing each stave, render the bar number as canvas text above the first b
 7. Clicking the last bar's barline shows the picker with options disabled.
 8. Bar numbers appear above the first bar of each new line (bar 5, 9, 13, … for 4 bars per line) but not above bar 1.
 9. Undo after auto-add removes the added bar and restores the final barline to the previous last bar.
+10. Clicking `+ Bar` opens the Insert Bars dialog; the count field is focused and defaults to 1.
+11. Confirming with count=3, position="After current bar" inserts 3 consecutive bars after the cursor measure; the cursor moves to the first new bar.
+12. Confirming with position="At end of score" inserts the requested bars after the last measure, regardless of cursor position.
+13. Cancelling or pressing Escape closes the dialog with no score changes.
+14. All bars from a single dialog confirmation are removed by a single undo.
+15. `INSERT_MEASURE` with `count: N` inserts exactly N bars and renumbers all subsequent measures correctly.
