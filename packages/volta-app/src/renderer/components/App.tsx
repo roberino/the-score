@@ -4,6 +4,7 @@ import { Toolbar } from './Toolbar'
 import { ScoreCanvas } from './ScoreCanvas'
 import { RoutingView } from './RoutingView'
 import { PerformanceView } from './PerformanceView'
+import { EventEditorView } from './EventEditorView'
 import { StatusBar } from './StatusBar'
 import { PartsPanel } from './PartsPanel'
 import { SequenceEditor } from './SequenceEditor'
@@ -14,12 +15,13 @@ import { loadDrumSampler } from '../engine/drumSamplerEngine'
 import { exportScorePdf } from '../engine/pdfExporter'
 import { scoreToMusicXml, musicxmlToScore } from '../engine/musicxmlEngine'
 
-type AppView = 'score' | 'routing' | 'performance'
+type AppView = 'score' | 'routing' | 'performance' | 'events'
 
 const TAB_LABELS: Record<AppView, string> = {
   score:       'Score',
   routing:     'Routing',
   performance: 'Performance',
+  events:      'Events',
 }
 
 export function App(): JSX.Element {
@@ -63,6 +65,7 @@ export function App(): JSX.Element {
       if (mod && e.key === 'z' && !e.shiftKey) { e.preventDefault(); if (!isPlaying) undo() }
       if (mod && e.key === 'z' &&  e.shiftKey) { e.preventDefault(); if (!isPlaying) redo() }
       if (mod && e.key === 's' && !e.shiftKey) { e.preventDefault(); saveScore() }
+      if (mod && (e.key === 'e' || e.key === 'E')) { e.preventDefault(); setActiveView(v => v === 'events' ? 'score' : 'events') }
       // Space toggles playback except in note/rest mode (where Space enters a rest)
       if (!mod && e.key === ' ' && inputMode !== 'note' && inputMode !== 'rest') {
         e.preventDefault()
@@ -184,6 +187,11 @@ export function App(): JSX.Element {
         <main style={{ flex: 1, overflow: 'hidden', display: !sequencerPartId && activeView === 'performance' ? 'flex' : 'none' }}>
           <PerformanceView />
         </main>
+        {!sequencerPartId && activeView === 'events' && (
+          <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <EventEditorView />
+          </main>
+        )}
       </div>
       <StatusBar />
     </div>
