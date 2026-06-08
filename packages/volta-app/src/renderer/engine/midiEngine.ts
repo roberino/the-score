@@ -838,13 +838,17 @@ function trackToFlatEvents(
   return flat
 }
 
-// Add dynamic directives to measures when the inferred level changes.
+// Attach note-level dynamics to the first non-rest event of each measure when the
+// inferred dynamic level changes. Uses event.dynamic (renders below the stave) rather
+// than measure directives (which rendered above, incorrectly).
 function injectDynamics(measures: Measure[], voiceNotes: FlatEvent[]): Measure[] {
   let lastDynamic: DynamicLevel | null = null
   let noteIdx = 0
   return measures.map(m => {
-    const firstNote = (m.voices[0]?.events ?? []).find(e => e.type !== 'rest')
-    if (!firstNote) return m
+    const voice0 = m.voices[0]
+    if (!voice0) return m
+    const firstNoteIdx = voice0.events.findIndex(e => e.type !== 'rest')
+    if (firstNoteIdx === -1) return m
     while (noteIdx < voiceNotes.length && voiceNotes[noteIdx].type === 'rest') noteIdx++
     const raw = voiceNotes[noteIdx]
     if (!raw || raw.velocity === 0) return m
@@ -852,7 +856,10 @@ function injectDynamics(measures: Measure[], voiceNotes: FlatEvent[]): Measure[]
     noteIdx++
     if (level === lastDynamic) return m
     lastDynamic = level
-    return { ...m, directives: [...(m.directives ?? []), { id: uuid(), category: 'dynamic' as const, text: level }] }
+    const updatedEvents = voice0.events.map((e, i) =>
+      i === firstNoteIdx ? { ...e, dynamic: level } : e
+    )
+    return { ...m, voices: m.voices.map((v, i) => i === 0 ? { ...v, events: updatedEvents } : v) }
   })
 }
 

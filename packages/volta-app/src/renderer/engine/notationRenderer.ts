@@ -1266,8 +1266,7 @@ function renderFromLayouts(
     const lyricY       = Math.min(rawLyricY, pedalY - 18)
     measureLyricY.set(layout.measureId, lyricY)
 
-    // Directives: drawn in the VexFlow headroom zone above the top staff line
-    drawDirectives(ctx, layout, measure, staff, score, part === score.parts[0], stave.getNoteStartX())
+    drawDirectives(ctx, layout, measure, staff, score, part === score.parts[0], stave.getNoteStartX(), pedalY)
     // Pedal marks below the stave
     if (measure.pedalMarks?.length) {
       drawPedalMarks(ctx, layout, measure, staff, score, stave.getNoteStartX(), pedalY)
@@ -1425,7 +1424,8 @@ function drawDirectives(
   staff: Staff,
   score: Score,
   isFirstPart: boolean,
-  noteStartX: number
+  noteStartX: number,
+  pedalY: number,
 ): void {
   const nativeCtx: CanvasRenderingContext2D | null =
     typeof (ctx as any).context2D !== 'undefined' ? (ctx as any).context2D : null
@@ -1461,14 +1461,13 @@ function drawDirectives(
     }
   }
 
-  // ── Dynamic (above stave, centred in note area) ────────────────────────────
+  // ── Dynamic (below stave, left-aligned at note start) ─────────────────────
   const dynDirs = directives.filter(d => d.category === 'dynamic')
   if (dynDirs.length > 0) {
-    const noteAreaMidX = (noteStartX + layout.x + layout.width) / 2
     nativeCtx.font      = 'bold italic 13px Edwin, serif'
     nativeCtx.fillStyle = '#111'
-    nativeCtx.textAlign = 'center'
-    nativeCtx.fillText(dynDirs.map(d => d.text).join(' '), noteAreaMidX, layout.staveY + 14)
+    nativeCtx.textAlign = 'left'
+    nativeCtx.fillText(dynDirs.map(d => d.text).join(' '), noteStartX, pedalY - 14)
   }
 
   // ── Expression (above stave) ───────────────────────────────────────────────

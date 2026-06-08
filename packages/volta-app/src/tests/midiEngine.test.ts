@@ -421,26 +421,60 @@ describe('midiToScore — chord detection', () => {
 })
 
 describe('midiToScore — velocity → dynamics', () => {
-  it('velocity 88 produces an "f" dynamic directive', () => {
+  function firstNoteEvent(score: Score, measureIndex = 0): any {
+    const events = score.parts[0].staves[0].measures[measureIndex].voices[0].events
+    return events.find((e: any) => e.type !== 'rest')
+  }
+
+  it('velocity 88 sets "f" dynamic on the first note', () => {
     const bytes = buildMidi(m => {
       const t = m.addTrack()
       t.addNote({ midi: 60, ticks: 0, durationTicks: 480, velocity: 88 / 127 })
     })
-    const score    = midiToScore(bytes)
-    const directives = score.parts[0].staves[0].measures[0].directives ?? []
-    const dynDir   = directives.find(d => d.category === 'dynamic')
-    expect(dynDir?.text).toBe('f')
+    const score = midiToScore(bytes)
+    expect(firstNoteEvent(score)?.dynamic).toBe('f')
   })
 
-  it('velocity 50 produces a "p" dynamic directive', () => {
+  it('velocity 50 sets "p" dynamic on the first note', () => {
     const bytes = buildMidi(m => {
       const t = m.addTrack()
       t.addNote({ midi: 60, ticks: 0, durationTicks: 480, velocity: 50 / 127 })
     })
-    const score    = midiToScore(bytes)
+    const score = midiToScore(bytes)
+    expect(firstNoteEvent(score)?.dynamic).toBe('p')
+  })
+
+  it('dynamic is NOT stored as a measure directive', () => {
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      t.addNote({ midi: 60, ticks: 0, durationTicks: 480, velocity: 88 / 127 })
+    })
+    const score = midiToScore(bytes)
     const directives = score.parts[0].staves[0].measures[0].directives ?? []
-    const dynDir   = directives.find(d => d.category === 'dynamic')
-    expect(dynDir?.text).toBe('p')
+    expect(directives.some((d: any) => d.category === 'dynamic')).toBe(false)
+  })
+
+  it('dynamic is only injected when the level changes between measures', () => {
+    // Two notes at the same velocity: only the first measure gets a dynamic
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      t.addNote({ midi: 60, ticks: 0,    durationTicks: 1920, velocity: 75 / 127 }) // mf, m1
+      t.addNote({ midi: 62, ticks: 1920, durationTicks: 1920, velocity: 75 / 127 }) // mf, m2 — same, no new dynamic
+    })
+    const score = midiToScore(bytes)
+    expect(firstNoteEvent(score, 0)?.dynamic).toBe('mf')
+    expect(firstNoteEvent(score, 1)?.dynamic).toBeUndefined()
+  })
+
+  it('dynamic updates when velocity changes between measures', () => {
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      t.addNote({ midi: 60, ticks: 0,    durationTicks: 1920, velocity: 50 / 127 }) // p,  m1
+      t.addNote({ midi: 62, ticks: 1920, durationTicks: 1920, velocity: 88 / 127 }) // f,  m2
+    })
+    const score = midiToScore(bytes)
+    expect(firstNoteEvent(score, 0)?.dynamic).toBe('p')
+    expect(firstNoteEvent(score, 1)?.dynamic).toBe('f')
   })
 })
 
