@@ -23,7 +23,7 @@ import {
 import {
   measureCapacityUnits, resolveTimeSig, resolveDirectiveTempo,
   articulationPlaybackMods, buildPlaybackSequence, fillWithRests,
-  activeAssignmentAt,
+  activeAssignmentAt, DYNAMIC_VELOCITY,
 } from '@shared/musicUtils'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -37,12 +37,6 @@ const DURATION_BEATS: Record<Duration, number> = {
   '16th': 0.25, '32nd': 0.125, '64th': 0.0625,
 }
 
-// ── Dynamic velocity ───────────────────────────────────────────────────────────
-
-const DYNAMIC_VELOCITY: Record<string, number> = {
-  pppp: 10, ppp: 22, pp: 36, p: 50, mp: 62, mf: 75,
-  f: 88, ff: 101, fff: 112, ffff: 120, sfz: 122, fp: 88,
-}
 
 function inferDynamic(velocity: number): DynamicLevel {
   if (velocity <= 15) return 'pppp'

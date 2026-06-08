@@ -1,6 +1,6 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord } from '@shared/score'
-import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, articulationPlaybackMods, expandOrnamentNotes } from '@shared/musicUtils'
+import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, articulationPlaybackMods, expandOrnamentNotes, DYNAMIC_VOLUME } from '@shared/musicUtils'
 import { pitchToHz, type PlaybackController } from './audioEngine'
 import { scheduleDrumHit, releaseDrumSampler } from './drumSamplerEngine'
 
@@ -138,12 +138,15 @@ export async function playScoreWithSampler(
       if (event.type === 'note') {
         const n  = event as Note
         const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
+        const noteDynVol = n.dynamic != null ? (DYNAMIC_VOLUME[n.dynamic] ?? null) : null
         Tone.Transport.schedule((time) => {
           if (isPartMuted?.(partId)) return
           const partVol     = getPartVolume?.(partId) ?? part.volume
           const explicitVel = (n as any).velocity as number | undefined
-          const liveVolume  = explicitVel !== undefined
-            ? partVol * (explicitVel / 127)
+          const liveVolume  = noteDynVol !== null
+            ? noteDynVol
+            : explicitVel !== undefined
+            ? (dynMultiplier ?? partVol) * (explicitVel / 127)
             : dynMultiplier ?? partVol
           sampler.volume.value = 20 * Math.log10(Math.max(0.001, liveVolume)) + volDbBonus
           sampler.triggerAttack(hz, time)
@@ -151,14 +154,17 @@ export async function playScoreWithSampler(
         Tone.Transport.schedule((time) => { sampler.triggerRelease(hz, time) },
           legatoUntilSec ?? startSec + effectiveDur)
       } else if (event.type === 'chord') {
-        const freqs = (event as unknown as Chord).pitches
-          .map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
+        const c = event as unknown as Chord
+        const freqs = c.pitches.map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
+        const noteDynVol = c.dynamic != null ? (DYNAMIC_VOLUME[c.dynamic] ?? null) : null
         Tone.Transport.schedule((time) => {
           if (isPartMuted?.(partId)) return
           const partVol     = getPartVolume?.(partId) ?? part.volume
           const explicitVel = (event as any).velocity as number | undefined
-          const liveVolume  = explicitVel !== undefined
-            ? partVol * (explicitVel / 127)
+          const liveVolume  = noteDynVol !== null
+            ? noteDynVol
+            : explicitVel !== undefined
+            ? (dynMultiplier ?? partVol) * (explicitVel / 127)
             : dynMultiplier ?? partVol
           sampler.volume.value = 20 * Math.log10(Math.max(0.001, liveVolume)) + volDbBonus
           freqs.forEach(hz => sampler.triggerAttack(hz, time))

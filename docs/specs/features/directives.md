@@ -63,20 +63,26 @@ Directives are stored per-staff per-measure.
 
 The user may override the BPM number after selecting a word, or type a custom text + BPM.
 
-### Dynamics → volume multiplier
+### Dynamics → MIDI velocity and volume multiplier
 
-| Dynamic | Multiplier |
-|---------|-----------|
-| ppp     | 0.15      |
-| pp      | 0.25      |
-| p       | 0.40      |
-| mp      | 0.55      |
-| mf      | 0.65      |
-| f       | 0.80      |
-| ff      | 0.90      |
-| fff     | 1.00      |
+Each dynamic level maps to a canonical MIDI velocity (0–127) and a derived volume multiplier used by the audio and sampler engines. These constants live in `musicUtils.ts` as `DYNAMIC_VELOCITY` and `DYNAMIC_VOLUME`.
 
-Multiplier is applied to the part's base volume (`part.volume`) at that measure.
+| Dynamic | MIDI velocity | Volume multiplier |
+|---------|--------------|-------------------|
+| pppp    | 10           | 0.08              |
+| ppp     | 22           | 0.15              |
+| pp      | 36           | 0.25              |
+| p       | 50           | 0.40              |
+| mp      | 62           | 0.55              |
+| mf      | 75           | 0.65              |
+| f       | 88           | 0.80              |
+| ff      | 101          | 0.90              |
+| fff     | 112          | 1.00              |
+| ffff    | 120          | 1.00              |
+| sfz     | 122          | 0.90              |
+| fp      | 88           | 0.40              |
+
+Measure-level dynamic directives apply their multiplier to all notes in that measure and forward, until a later directive overrides it.
 
 ### Expression presets
 
@@ -185,10 +191,6 @@ Called from `audioEngine` for the first part's staff when scheduling each measur
 ### Dynamic resolution (`resolveDirectiveDynamic`)
 
 ```ts
-const DYNAMIC_VOLUME: Record<string, number> = {
-  ppp: 0.15, pp: 0.25, p: 0.40, mp: 0.55, mf: 0.65, f: 0.80, ff: 0.90, fff: 1.00
-}
-
 function resolveDirectiveDynamic(measures: Measure[], idx: number): number | null {
   for (let i = idx; i >= 0; i--) {
     const d = measures[i].directives?.find(d => d.category === 'dynamic')
@@ -197,6 +199,17 @@ function resolveDirectiveDynamic(measures: Measure[], idx: number): number | nul
   return null  // no dynamic → use part.volume unchanged
 }
 ```
+
+### Playback velocity priority chain
+
+All three playback engines (audio, sampler, MIDI output) resolve playback volume/velocity using the same priority order, highest to lowest:
+
+1. **Explicit velocity** (`event.velocity`, 0–127) — set by the user in the Event Editor or preserved from MIDI import. In MIDI output, scaled by `partVol * velFactor * hairpinFactor`. In audio/sampler, expressed as `partVol * (velocity / 127)`.
+2. **Per-note dynamic** (`event.dynamic`, e.g. `'f'`) — maps to `DYNAMIC_VELOCITY` for MIDI output and `DYNAMIC_VOLUME` for audio/sampler. Overrides any measure directive for that specific note only.
+3. **Measure directive dynamic** — `resolveDirectiveDynamic()` scans backward to find the nearest dynamic directive; its `DYNAMIC_VOLUME` multiplier is used as an absolute volume level.
+4. **Part volume** (`part.volume`) — the default when no dynamic context applies.
+
+Articulation modifiers (`velFactor`, `volDbBonus`) and hairpin interpolation are applied on top of whichever level wins.
 
 ### MIDI program resolution (`resolveDirectiveMidiProgram`)
 

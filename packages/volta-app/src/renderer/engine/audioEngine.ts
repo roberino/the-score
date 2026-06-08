@@ -7,7 +7,7 @@
 
 import * as Tone from 'tone'
 import type { Score, Note, Chord, Hairpin } from '@shared/score'
-import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, eventToSeconds, articulationPlaybackMods, expandOrnamentNotes, type FlatScheduleEntry } from '@shared/musicUtils'
+import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, eventToSeconds, articulationPlaybackMods, expandOrnamentNotes, DYNAMIC_VOLUME, type FlatScheduleEntry } from '@shared/musicUtils'
 import { scheduleDrumHit, releaseDrumSampler } from './drumSamplerEngine'
 
 // Re-export so callers that import from here continue to work
@@ -158,9 +158,10 @@ export async function playScore(
       if (event.type === 'note') {
         const n  = event as Note
         const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
+        const noteDynVol = n.dynamic != null ? (DYNAMIC_VOLUME[n.dynamic] ?? null) : null
         Tone.Transport.schedule((time) => {
           if (isPartMuted?.(partId)) return
-          const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+          const liveVolume = noteDynVol ?? dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
           const liveDb = 20 * Math.log10(Math.max(0.001, liveVolume)) + volDbBonus + hairpinDb
           synth.set({ envelope })
           synth.volume.value = liveDb
@@ -171,9 +172,10 @@ export async function playScore(
       } else if (event.type === 'chord') {
         const c     = event as Chord
         const freqs = c.pitches.map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
+        const noteDynVol = c.dynamic != null ? (DYNAMIC_VOLUME[c.dynamic] ?? null) : null
         Tone.Transport.schedule((time) => {
           if (isPartMuted?.(partId)) return
-          const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+          const liveVolume = noteDynVol ?? dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
           const liveDb = 20 * Math.log10(Math.max(0.001, liveVolume)) + volDbBonus + hairpinDb
           synth.set({ envelope })
           synth.volume.value = liveDb

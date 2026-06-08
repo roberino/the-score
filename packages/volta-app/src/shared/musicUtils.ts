@@ -311,8 +311,14 @@ export const KEY_TO_DURATION: Record<string, Duration> = {
 
 // ── Directive resolution ──────────────────────────────────────────────────────
 
+export const DYNAMIC_VELOCITY: Record<string, number> = {
+  pppp: 10, ppp: 22, pp: 36, p: 50, mp: 62, mf: 75,
+  f: 88, ff: 101, fff: 112, ffff: 120, sfz: 122, fp: 88,
+}
+
 export const DYNAMIC_VOLUME: Record<string, number> = {
-  ppp: 0.15, pp: 0.25, p: 0.40, mp: 0.55, mf: 0.65, f: 0.80, ff: 0.90, fff: 1.00,
+  pppp: 0.08, ppp: 0.15, pp: 0.25, p: 0.40, mp: 0.55, mf: 0.65,
+  f: 0.80, ff: 0.90, fff: 1.00, ffff: 1.00, sfz: 0.90, fp: 0.40,
 }
 
 export const TEMPO_WORDS: { text: string; bpm: number }[] = [
