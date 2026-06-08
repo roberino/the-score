@@ -35,6 +35,9 @@ export type Command =
   | { type: 'SET_SCORE_TIME';   time: TimeSignature }
   | { type: 'CLEAR_TIME';       partId: string; staffId: string; measureId: string }
   | { type: 'SET_TEMPO';            measureId: string; bpm: number }
+  | { type: 'SET_MEASURE_TEMPO';   measureId: string; bpm: number }
+  | { type: 'CLEAR_MEASURE_TEMPO'; measureId: string }
+  | { type: 'CLEAR_CLEF';          partId: string; staffId: string; measureId: string }
   | { type: 'SET_TITLE';            title: string }
   | { type: 'SET_COMPOSER';         composer: string }
   | { type: 'SET_HEADING';          field: 'title' | 'subtitle' | 'composer' | 'arranger'; value: string }
@@ -537,6 +540,34 @@ export function applyCommand(score: Score, command: Command): Score {
       case 'SET_TEMPO': {
         // Set tempo on the score root (simplification — future: per-measure map)
         draft.tempo = command.bpm
+        break
+      }
+
+      case 'SET_MEASURE_TEMPO': {
+        for (const part of draft.parts) {
+          for (const staff of part.staves) {
+            const m = (staff.measures as any[]).find((m: any) => m.id === command.measureId)
+            if (m) m.tempo = command.bpm
+          }
+        }
+        break
+      }
+
+      case 'CLEAR_MEASURE_TEMPO': {
+        for (const part of draft.parts) {
+          for (const staff of part.staves) {
+            const m = (staff.measures as any[]).find((m: any) => m.id === command.measureId)
+            if (m) delete m.tempo
+          }
+        }
+        break
+      }
+
+      case 'CLEAR_CLEF': {
+        const staff = draft.parts.find(p => p.id === command.partId)?.staves.find(s => s.id === command.staffId)
+        if (!staff) break
+        const m = (staff.measures as any[]).find((m: any) => m.id === command.measureId)
+        if (m) delete m.clef
         break
       }
 

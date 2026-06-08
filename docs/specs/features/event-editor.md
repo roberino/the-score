@@ -6,7 +6,7 @@ The Event Editor is an advanced view that exposes the underlying data model of a
 
 The editor is non-destructive: all changes dispatch through the normal command system and are fully undoable.
 
-> **v1 scope (this release):** Read-only inspector — all data is displayed but no cells are editable. Editing, add/delete rows, and selection sync with the score canvas are deferred to v2. The "Editable?" column in the tables below documents the intended v2 behaviour.
+> **v2 scope (this release):** Full editing implemented. All columns marked "Editable?" are now live. Selection sync with the score canvas remains out of scope (see Q1).
 
 ---
 
