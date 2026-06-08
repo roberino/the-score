@@ -99,16 +99,91 @@ Delete all notes in `selectedNoteIds` with a single `Delete`/`Backspace` keypres
 
 ---
 
-## 3. Missing Features — Suggested Additions
+## 3. Copy, Cut & Paste
+
+### 3.1 Overview
+
+The internal clipboard stores either a **note selection** (individual events from a single voice) or a **bar selection** (full measure voice content across one or more parts). OS clipboard is not used — this is an in-app clipboard only.
+
+Clipboard content persists until overwritten by a new copy/cut. Loading or creating a new score clears the clipboard.
+
+### 3.2 Keyboard shortcuts
+
+| Key | Action | Requires |
+|-----|--------|---------|
+| ⌘C / Ctrl+C | Copy selection | Note or bar selection active |
+| ⌘X / Ctrl+X | Cut selection | Note or bar selection active |
+| ⌘V / Ctrl+V | Paste | Clipboard populated; destination selected |
+
+Context menu buttons (Copy, Cut, Paste) mirror these shortcuts.
+
+### 3.3 Copy — note selection
+
+- Copies all events in `selectedNoteIds` to the clipboard, sorted by beat position in score order.
+- Records the source voice index (0 or 1) for paste defaulting.
+- Does not modify the score.
+
+### 3.4 Copy — bar selection
+
+- Copies the full voice content of all measures in the bar selection, for all selected parts.
+- The clipboard holds `data[partIndex][measureIndex][voiceIndex]` = events.
+- Does not modify the score.
+
+### 3.5 Cut — note selection
+
+- Copies to clipboard (as above), then replaces each selected note/chord with a rest of the **same duration**, preserving the rhythmic structure. A single undo step covers all replacements.
+
+### 3.6 Cut — bar selection
+
+- Copies to clipboard, then clears the selected measures to full rests (identical to Delete on a bar selection). Single undo step.
+
+### 3.7 Paste — note clipboard
+
+**Destination:** The first selected note/rest in the current selection defines the paste start: its measure, beat position, part, staff, and voice. If no note is selected, the cursor position is used.
+
+**Overwrite behaviour:** Starting at the destination beat, existing content is overwritten with the pasted events. Any remaining space in the measure after the pasted events is filled with rests. If the pasted content overflows the measure, it continues into subsequent measures from beat 0, overwriting their content. Tie flags are stripped from pasted events (they may no longer be adjacent).
+
+**Cross-stave paste:** Because the destination is determined by the current selection (not the copy source), the user can paste into any staff or part:
+1. Copy notes from Staff A.
+2. Click a note/rest in Staff B to select it as the destination.
+3. Press ⌘V — content is pasted into Staff B from that beat position.
+
+Pitches are preserved exactly; no transposition is applied on paste.
+
+### 3.8 Paste — bar clipboard
+
+**Destination:** The start measure of the current bar selection is used. If no bar selection is active, the cursor measure is used.
+
+**Part mapping:** The clipboard's `data[partIndex]` maps to the destination parts by index. If the clipboard has fewer parts than the destination selection, only those parts are written. If it has more, excess parts are ignored.
+
+**Measure count:** Paste writes `min(clipboardMeasureCount, availableMeasuresInDest)` measures. Content is truncated to each destination measure's capacity; any shortfall is filled with rests. Tie flags are stripped.
+
+### 3.9 Commands
+
+```typescript
+{ type: 'PASTE_NOTES'; partId: string; staffId: string; measureId: string; voiceIndex: 0 | 1; beatPosition: number; events: NoteEvent[] }
+{ type: 'PASTE_BARS';  entries: { partId: string; staffId: string; measureIndex: number; voiceIndex: number; events: NoteEvent[] }[] }
+```
+
+### 3.10 Clipboard state
+
+```typescript
+type Clipboard =
+  | { type: 'notes'; events: NoteEvent[]; totalUnits: number; sourceVoiceIndex: 0 | 1 }
+  | { type: 'bars';  measureCount: number; sourcePartCount: number; data: NoteEvent[][][][] }
+  //                                                  [partIdx][measureIdx][voiceIdx] = NoteEvent[]
+```
+
+Stored in `appStore` as `clipboard: Clipboard | null`.
+
+### 3.11 Missing Features — Suggested Additions
 
 These are not in the user's original list but are strongly implied by multi-select and would be quick to add:
 
 | Feature | Rationale | Effort |
 |---|---|---|
-| **Copy / Paste** (Ctrl+C / Ctrl+V) | Most common use of multi-select in notation apps; once selection is ordered, paste is just ADD_NOTE loop | Medium |
 | **Duration change applies to all selected** | Currently `.` and `1–7` only affect one note; natural to extend | Low |
 | **Articulation toggle on all selected** | Already works per-note; just loop the dispatch | Low |
-| **Select-all in measure** (Ctrl+A) | Instant productivity for bulk ops on a full measure | Low |
 | **Tie across selected range** | Select first and last note, press T | Low (uses TOGGLE_TIE per pair) |
 | **Slur across selected range** | Select first and last note, press L — same as current L shortcut but with pre-filled from/to | Trivial |
 
@@ -169,4 +244,4 @@ New commands:
 
 **Q4 → Defer triplets.** Separate sprint after multi-select is stable.
 
-**Q5 → Select-all (Ctrl+A) and duration-on-all in scope.** Copy/paste deferred.
+**Q5 → Select-all (Ctrl+A) and duration-on-all in scope. Copy/cut/paste implemented** — see §3.

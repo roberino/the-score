@@ -72,6 +72,8 @@ export type Command =
   | { type: 'REMOVE_PEDAL_MARK'; partId: string; staffId: string; measureId: string; markId: string }
   | { type: 'REMOVE_CHORD_PITCH'; partId: string; staffId: string; measureId: string; voiceId: string; noteId: string; pitchIndex: number }
   | { type: 'CLEAR_MEASURES'; targets: { partId: string; staffId: string; measureId: string }[] }
+  | { type: 'PASTE_NOTES'; partId: string; staffId: string; measureId: string; voiceIndex: 0 | 1; beatPosition: number; events: NoteEvent[] }
+  | { type: 'PASTE_BARS';  entries: { partId: string; staffId: string; measureIndex: number; voiceIndex: number; events: NoteEvent[] }[] }
   | { type: 'SET_PART_INPUT_MODE';        partId: string; mode: 'score' | 'sequencer' }
   | { type: 'UPSERT_SEQUENCE_PATTERN';    partId: string; pattern: SequencePattern }
   | { type: 'DELETE_SEQUENCE_PATTERN';    partId: string; patternId: string }
@@ -1031,6 +1033,81 @@ export function applyCommand(score: Score, command: Command): Score {
           for (const voice of (staff.measures[mIdx] as any).voices) {
             voice.events = fillWithRests(capacity)
           }
+        }
+        break
+      }
+
+      case 'PASTE_NOTES': {
+        const { partId, staffId, measureId, voiceIndex, beatPosition, events: src } = command
+        const staff = draft.parts.find(p => p.id === partId)?.staves.find(s => s.id === staffId)
+        if (!staff) break
+        const startMIdx = (staff.measures as any[]).findIndex((m: any) => m.id === measureId)
+        if (startMIdx === -1) break
+
+        const fresh = src.map(e => ({
+          ...e, id: uuid(),
+          ...(e.type === 'note' ? { tieStart: false, tieEnd: false } : {}),
+        }))
+
+        let eIdx = 0
+        let startBeat = beatPosition
+
+        for (let mIdx = startMIdx; mIdx < (staff.measures as any[]).length && eIdx < fresh.length; mIdx++) {
+          const measure = (staff.measures as any[])[mIdx]
+          const voice = measure.voices[voiceIndex] ?? measure.voices[0]
+          if (!voice) continue
+
+          const timeSig  = resolveTimeSig(staff.measures as any[], mIdx, draft.timeSignature)
+          const capacity = measureCapacityUnits(timeSig)
+          const available = capacity - startBeat
+
+          // Keep events that sit entirely before startBeat
+          const before: NoteEvent[] = []
+          let acc = 0
+          for (const e of voice.events as NoteEvent[]) {
+            if (acc >= startBeat) break
+            before.push(e)
+            acc += eventDurationUnits(e)
+          }
+
+          const inserting: NoteEvent[] = []
+          let used = 0
+          while (eIdx < fresh.length) {
+            const eu = eventDurationUnits(fresh[eIdx])
+            if (used + eu > available) break
+            inserting.push(fresh[eIdx++])
+            used += eu
+          }
+
+          voice.events = [...before, ...inserting, ...fillWithRests(available - used)]
+          startBeat = 0
+        }
+        break
+      }
+
+      case 'PASTE_BARS': {
+        for (const { partId, staffId, measureIndex, voiceIndex, events: src } of command.entries) {
+          const staff = draft.parts.find(p => p.id === partId)?.staves.find(s => s.id === staffId)
+          if (!staff) continue
+          const measure = (staff.measures as any[])[measureIndex]
+          if (!measure) continue
+          const voice = measure.voices[voiceIndex] ?? measure.voices[0]
+          if (!voice) continue
+
+          const timeSig  = resolveTimeSig(staff.measures as any[], measureIndex, draft.timeSignature)
+          const capacity = measureCapacityUnits(timeSig)
+
+          let acc = 0
+          const fresh: NoteEvent[] = []
+          for (const e of src) {
+            const eu = eventDurationUnits(e)
+            if (acc + eu > capacity) { fresh.push(...fillWithRests(capacity - acc)); acc = capacity; break }
+            fresh.push({ ...e, id: uuid(), ...(e.type === 'note' ? { tieStart: false, tieEnd: false } : {}) } as NoteEvent)
+            acc += eu
+          }
+          if (acc < capacity) fresh.push(...fillWithRests(capacity - acc))
+
+          voice.events = fresh
         }
         break
       }

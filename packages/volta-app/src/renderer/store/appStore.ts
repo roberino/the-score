@@ -3,7 +3,8 @@ import { immer } from 'zustand/middleware/immer'
 import { createScore, createRest, type Score, type Pitch, type Duration, type Accidental, type HairpinType, type Hairpin, type DynamicLevel, type Volta } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import { applyCommand, type Command } from '@shared/commands'
-import { measureCapacityUnits, resolveTimeSig, dottedUnits, DURATION_UNITS, buildPlaybackSequence, buildMeasureTimeline, firstRestBeat, fillWithRests, eventDurationUnits, DURATION_CYCLE, moveCursorPosition } from '@shared/musicUtils'
+import { measureCapacityUnits, resolveTimeSig, dottedUnits, DURATION_UNITS, buildPlaybackSequence, buildMeasureTimeline, firstRestBeat, fillWithRests, eventDurationUnits, DURATION_CYCLE, moveCursorPosition, findNoteLocation, findStaffContainingMeasure } from '@shared/musicUtils'
+import type { NoteEvent } from '@shared/score'
 import { produce } from 'immer'
 import type { PlaybackController } from '../engine/audioEngine'
 import { playScoreWithSampler } from '../engine/samplerEngine'
@@ -57,6 +58,11 @@ export interface BarSelection {
   partIds: string[] | null  // null = all parts
 }
 
+export type Clipboard =
+  | { type: 'notes'; events: NoteEvent[]; totalUnits: number; sourceVoiceIndex: 0 | 1 }
+  | { type: 'bars'; measureCount: number; sourcePartCount: number; data: NoteEvent[][][][] }
+  // data[partIndex][measureIndex][voiceIndex] = NoteEvent[]
+
 export interface AppState {
   // Score data
   score: Score
@@ -75,6 +81,7 @@ export interface AppState {
   selectedMeasureId: string | null
   selectedBarlineId: string | null   // measure ID whose right barline is selected
   barSelection: BarSelection | null
+  clipboard: Clipboard | null
   inputMode: InputMode
   zoom: number
 
@@ -148,6 +155,9 @@ export interface AppState {
   setSelectedChordPitch: (pitchIndex: number | null) => void
   setBarSelection: (sel: BarSelection | null) => void
   deleteSelectedBars: () => void
+  copySelection: () => void
+  cutSelection: () => void
+  pasteClipboard: () => void
   dispatchBatch: (commands: Command[]) => void
   setSelectedMeasure: (measureId: string | null) => void
   setSelectedBarline: (measureId: string | null) => void
@@ -207,6 +217,7 @@ export const useAppStore = create<AppState>()(
     selectedMeasureId: null,
     selectedBarlineId: null,
     barSelection: null,
+    clipboard: null,
     inputMode: 'note',
     zoom: 1.0,
 
@@ -312,6 +323,7 @@ export const useAppStore = create<AppState>()(
         state.selectedAnchorId = null
         state.selectedBarlineId = null
         state.barSelection = null
+        state.clipboard = null
         state.isPlaying = false
       })
       void window.electronAPI.setWindowTitle('Untitled — Volta', null)
@@ -335,6 +347,7 @@ export const useAppStore = create<AppState>()(
         state.selectedAnchorId = null
         state.selectedBarlineId = null
         state.barSelection = null
+        state.clipboard = null
         state.isPlaying = false
       })
       const fileName = path.split(/[/\\]/).pop() ?? 'Untitled'
@@ -484,6 +497,156 @@ export const useAppStore = create<AppState>()(
       }
       if (targets.length > 0) get().dispatch({ type: 'CLEAR_MEASURES', targets })
     },
+
+    copySelection: () => {
+      const { score, selectedNoteIds, barSelection, activeVoice } = get()
+
+      if (selectedNoteIds.length > 0) {
+        const idSet = new Set(selectedNoteIds)
+        const events: NoteEvent[] = []
+        for (const part of score.parts) {
+          for (const staff of part.staves) {
+            for (const measure of staff.measures) {
+              for (const voice of measure.voices) {
+                for (const event of voice.events) {
+                  if (idSet.has((event as NoteEvent).id)) events.push(event as NoteEvent)
+                }
+              }
+            }
+          }
+        }
+        if (events.length === 0) return
+        const totalUnits = events.reduce((s, e) => s + eventDurationUnits(e), 0)
+        set(s => { s.clipboard = { type: 'notes', events, totalUnits, sourceVoiceIndex: activeVoice as 0 | 1 } })
+        return
+      }
+
+      if (barSelection) {
+        const { startMeasureIndex, endMeasureIndex, partIds } = barSelection
+        const targetParts = partIds ? score.parts.filter(p => partIds.includes(p.id)) : [...score.parts]
+        const measureCount = endMeasureIndex - startMeasureIndex + 1
+        const data: NoteEvent[][][][] = targetParts.map(part => {
+          const staff = part.staves[0]
+          return Array.from({ length: measureCount }, (_, mi) => {
+            const m = staff.measures[startMeasureIndex + mi]
+            return m ? m.voices.map(v => [...v.events] as NoteEvent[]) : [[]]
+          })
+        })
+        set(s => { s.clipboard = { type: 'bars', measureCount, data, sourcePartCount: targetParts.length } })
+      }
+    },
+
+    cutSelection: () => {
+      const { score, selectedNoteIds, barSelection } = get()
+      get().copySelection()
+
+      if (selectedNoteIds.length > 0) {
+        const idSet = new Set(selectedNoteIds)
+        const cmds: Command[] = []
+        for (const part of score.parts) {
+          for (const staff of part.staves) {
+            for (const measure of staff.measures) {
+              for (const voice of measure.voices) {
+                for (const event of voice.events) {
+                  const e = event as NoteEvent
+                  if (idSet.has(e.id)) {
+                    cmds.push({
+                      type: 'REPLACE_NOTE',
+                      partId: part.id, staffId: staff.id, measureId: measure.id, voiceId: voice.id,
+                      noteId: e.id,
+                      event: { id: uuid(), type: 'rest', duration: e.duration, dots: e.dots ?? 0 } as NoteEvent,
+                    })
+                  }
+                }
+              }
+            }
+          }
+        }
+        if (cmds.length > 0) get().dispatchBatch(cmds)
+        get().clearSelection()
+        return
+      }
+
+      if (barSelection) {
+        get().deleteSelectedBars()
+      }
+    },
+
+    pasteClipboard: () => {
+      const { clipboard, selectedNoteIds, barSelection, score, cursorMeasureId, cursorBeatPosition, activeVoice } = get()
+      if (!clipboard) return
+
+      if (clipboard.type === 'notes') {
+        let partId: string | undefined
+        let staffId: string | undefined
+        let measureId: string | undefined
+        let voiceIndex: 0 | 1 = activeVoice as 0 | 1
+        let beatPosition = 0
+
+        if (selectedNoteIds.length > 0) {
+          const loc = findNoteLocation(score, selectedNoteIds[0])
+          if (!loc) return
+          partId = loc.partId; staffId = loc.staffId; measureId = loc.measureId
+          voiceIndex = loc.voiceIndex as 0 | 1; beatPosition = loc.beatPosition
+        } else if (cursorMeasureId) {
+          const loc = findStaffContainingMeasure(score, cursorMeasureId)
+          if (!loc) return
+          partId = loc.partId; staffId = loc.staffId; measureId = cursorMeasureId
+          beatPosition = cursorBeatPosition
+        } else {
+          return
+        }
+
+        get().dispatchBatch([{
+          type: 'PASTE_NOTES',
+          partId: partId!, staffId: staffId!, measureId: measureId!,
+          voiceIndex, beatPosition,
+          events: clipboard.events,
+        }])
+        return
+      }
+
+      // Bar clipboard
+      const { measureCount, data, sourcePartCount } = clipboard
+      let startMeasureIndex = 0
+      let destParts = [...score.parts]
+
+      if (barSelection) {
+        startMeasureIndex = barSelection.startMeasureIndex
+        destParts = barSelection.partIds
+          ? score.parts.filter(p => barSelection.partIds!.includes(p.id))
+          : [...score.parts]
+      } else if (cursorMeasureId) {
+        for (const part of score.parts) {
+          for (const staff of part.staves) {
+            const idx = staff.measures.findIndex(m => m.id === cursorMeasureId)
+            if (idx !== -1) { startMeasureIndex = idx; break }
+          }
+        }
+      } else {
+        return
+      }
+
+      const entries: { partId: string; staffId: string; measureIndex: number; voiceIndex: number; events: NoteEvent[] }[] = []
+      const actualPartCount = Math.min(sourcePartCount, destParts.length)
+
+      for (let pi = 0; pi < actualPartCount; pi++) {
+        const destPart = destParts[pi]
+        const destStaff = destPart.staves[0]
+        for (let mi = 0; mi < measureCount; mi++) {
+          const destMIdx = startMeasureIndex + mi
+          if (destMIdx >= destStaff.measures.length) break
+          const srcVoices = data[pi]?.[mi]
+          if (!srcVoices) continue
+          for (let vi = 0; vi < srcVoices.length; vi++) {
+            entries.push({ partId: destPart.id, staffId: destStaff.id, measureIndex: destMIdx, voiceIndex: vi, events: srcVoices[vi] ?? [] })
+          }
+        }
+      }
+
+      if (entries.length > 0) get().dispatchBatch([{ type: 'PASTE_BARS', entries }])
+    },
+
     dispatchBatch: (commands) => {
       if (commands.length === 0) return
       set(state => {

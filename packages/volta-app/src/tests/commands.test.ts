@@ -1429,3 +1429,134 @@ describe('SET_SCORE_TIME — underflow fill on time-sig increase', () => {
     }
   })
 })
+
+// ── PASTE_NOTES ───────────────────────────────────────────────────────────────
+
+function makePasteScore(measures: { id: string; events: NoteEvent[] }[]): Score {
+  const now = '2024-01-01T00:00:00.000Z'
+  return {
+    id: 'score-paste', metadata: { title:'',subtitle:'',composer:'',arranger:'',lyricist:'',copyright:'',createdAt:now,updatedAt:now },
+    parts: [{ id: PART_ID, name:'Piano', shortName:'Pno.', midiProgram:0, transposeSemitones:0, staves:[{
+      id: STAFF_ID, clef:'treble',
+      measures: measures.map((m, i) => ({ id: m.id, number: i+1, barline: i===measures.length-1?'final':'single' as any, voices:[{id:`v${i+1}`,events:m.events}] }))
+    }], volume:0.8, muted:false, labelVisible:true }],
+    keySignature:  { fifths: 0, mode: 'major' },
+    timeSignature: { numerator: 4, denominator: 4 },
+    tempo: 120, showPartLabels: true, textBoxes: [], version: 1,
+  }
+}
+
+function voiceEvents(score: Score, measureIndex: number): NoteEvent[] {
+  return score.parts[0].staves[0].measures[measureIndex].voices[0].events as NoteEvent[]
+}
+
+describe('PASTE_NOTES — basic overwrite', () => {
+  it('replaces content at beat 0 with pasted events and fills remainder with rests', () => {
+    const quarter = createNote('C', 4, 'quarter') as NoteEvent
+    const score = makePasteScore([
+      { id: 'm1', events: [createRest('whole') as NoteEvent] },
+    ])
+    const result = applyCommand(score, { type: 'PASTE_NOTES', partId: PART_ID, staffId: STAFF_ID, measureId: 'm1', voiceIndex: 0, beatPosition: 0, events: [quarter] })
+    const ev = voiceEvents(result, 0)
+    expect(ev[0].type).toBe('note')
+    expect((ev[0] as Note).pitch.noteName).toBe('C')
+    // Remaining 3 beats should be rests
+    const restUnits = ev.slice(1).reduce((s, e) => s + eventDurationUnits(e), 0)
+    expect(restUnits).toBe(48) // 64 - 16 = 48
+  })
+
+  it('pastes at non-zero beat position, preserving events before it', () => {
+    const existing = createNote('E', 4, 'quarter') as NoteEvent
+    const pasted  = createNote('G', 4, 'quarter') as NoteEvent
+    const score = makePasteScore([
+      { id: 'm1', events: [existing, createRest('half') as NoteEvent, createRest('quarter') as NoteEvent] },
+    ])
+    const result = applyCommand(score, { type: 'PASTE_NOTES', partId: PART_ID, staffId: STAFF_ID, measureId: 'm1', voiceIndex: 0, beatPosition: 16, events: [pasted] })
+    const ev = voiceEvents(result, 0)
+    expect(ev[0].id).toBe(existing.id)           // untouched
+    expect(ev[1].type).toBe('note')
+    expect((ev[1] as Note).pitch.noteName).toBe('G')
+  })
+
+  it('assigns new IDs to pasted events', () => {
+    const note = createNote('D', 4, 'quarter') as NoteEvent
+    const score = makePasteScore([{ id: 'm1', events: [createRest('whole') as NoteEvent] }])
+    const result = applyCommand(score, { type: 'PASTE_NOTES', partId: PART_ID, staffId: STAFF_ID, measureId: 'm1', voiceIndex: 0, beatPosition: 0, events: [note] })
+    expect(voiceEvents(result, 0)[0].id).not.toBe(note.id)
+  })
+
+  it('strips tie flags from pasted notes', () => {
+    const tied = { ...createNote('C', 4, 'quarter'), tieStart: true, tieEnd: true } as Note
+    const score = makePasteScore([{ id: 'm1', events: [createRest('whole') as NoteEvent] }])
+    const result = applyCommand(score, { type: 'PASTE_NOTES', partId: PART_ID, staffId: STAFF_ID, measureId: 'm1', voiceIndex: 0, beatPosition: 0, events: [tied as NoteEvent] })
+    const pasted = voiceEvents(result, 0)[0] as Note
+    expect(pasted.tieStart).toBe(false)
+    expect(pasted.tieEnd).toBe(false)
+  })
+
+  it('spills overflow into the next measure', () => {
+    // m1 has two half rests (beat boundaries at 0 and 32); paste 4 quarters at beat 32
+    // → 2 fit in m1 (beats 32–64), 2 spill to m2 (beats 0–32)
+    const quarters = [createNote('C',4,'quarter'), createNote('D',4,'quarter'), createNote('E',4,'quarter'), createNote('F',4,'quarter')] as NoteEvent[]
+    const score = makePasteScore([
+      { id: 'm1', events: [createRest('half') as NoteEvent, createRest('half') as NoteEvent] },
+      { id: 'm2', events: [createRest('whole') as NoteEvent] },
+    ])
+    const result = applyCommand(score, { type: 'PASTE_NOTES', partId: PART_ID, staffId: STAFF_ID, measureId: 'm1', voiceIndex: 0, beatPosition: 32, events: quarters })
+    const m1ev = voiceEvents(result, 0)
+    const m2ev = voiceEvents(result, 1)
+    // m1: 2 units before paste (32) = half rest, then 2 quarters (32), total 64
+    expect(m1ev.filter(e => e.type === 'note')).toHaveLength(2)
+    // m2: 2 more quarters at start, then rests
+    expect(m2ev.filter(e => e.type === 'note')).toHaveLength(2)
+    // capacity preserved
+    expect(m1ev.reduce((s,e) => s + eventDurationUnits(e), 0)).toBe(64)
+    expect(m2ev.reduce((s,e) => s + eventDurationUnits(e), 0)).toBe(64)
+  })
+})
+
+// ── PASTE_BARS ────────────────────────────────────────────────────────────────
+
+describe('PASTE_BARS — voice replacement', () => {
+  it('replaces the target measure voice with pasted events', () => {
+    const note = createNote('A', 4, 'quarter') as NoteEvent
+    const score = makePasteScore([{ id: 'm1', events: [createRest('whole') as NoteEvent] }])
+    const result = applyCommand(score, { type: 'PASTE_BARS', entries: [{ partId: PART_ID, staffId: STAFF_ID, measureIndex: 0, voiceIndex: 0, events: [note, createRest('half') as NoteEvent, createRest('quarter') as NoteEvent] }] })
+    const ev = voiceEvents(result, 0)
+    expect(ev[0].type).toBe('note')
+    expect((ev[0] as Note).pitch.noteName).toBe('A')
+    expect(ev.reduce((s,e)=>s+eventDurationUnits(e),0)).toBe(64)
+  })
+
+  it('assigns fresh IDs to pasted bar content', () => {
+    const note = createNote('B', 3, 'whole') as NoteEvent
+    const score = makePasteScore([{ id: 'm1', events: [createRest('whole') as NoteEvent] }])
+    const result = applyCommand(score, { type: 'PASTE_BARS', entries: [{ partId: PART_ID, staffId: STAFF_ID, measureIndex: 0, voiceIndex: 0, events: [note] }] })
+    expect(voiceEvents(result, 0)[0].id).not.toBe(note.id)
+  })
+
+  it('truncates pasted content to measure capacity and fills remainder', () => {
+    // Paste 5 quarter notes (80 units) into a 4/4 measure (64 units) — should truncate and fill
+    const fiveQs = Array.from({length:5}, (_,i) => createNote('C', 4+i, 'quarter') as NoteEvent)
+    const score = makePasteScore([{ id: 'm1', events: [createRest('whole') as NoteEvent] }])
+    const result = applyCommand(score, { type: 'PASTE_BARS', entries: [{ partId: PART_ID, staffId: STAFF_ID, measureIndex: 0, voiceIndex: 0, events: fiveQs }] })
+    const ev = voiceEvents(result, 0)
+    expect(ev.reduce((s,e)=>s+eventDurationUnits(e),0)).toBe(64)
+    expect(ev.filter(e=>e.type==='note')).toHaveLength(4) // 4 fit, 5th doesn't
+  })
+
+  it('multiple entries paste into multiple measures in one command', () => {
+    const n1 = createNote('C', 4, 'whole') as NoteEvent
+    const n2 = createNote('G', 4, 'whole') as NoteEvent
+    const score = makePasteScore([
+      { id: 'm1', events: [createRest('whole') as NoteEvent] },
+      { id: 'm2', events: [createRest('whole') as NoteEvent] },
+    ])
+    const result = applyCommand(score, { type: 'PASTE_BARS', entries: [
+      { partId: PART_ID, staffId: STAFF_ID, measureIndex: 0, voiceIndex: 0, events: [n1] },
+      { partId: PART_ID, staffId: STAFF_ID, measureIndex: 1, voiceIndex: 0, events: [n2] },
+    ]})
+    expect((voiceEvents(result, 0)[0] as Note).pitch.noteName).toBe('C')
+    expect((voiceEvents(result, 1)[0] as Note).pitch.noteName).toBe('G')
+  })
+})

@@ -1,5 +1,5 @@
 import { v4 as uuid } from 'uuid'
-import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, Slur, TimeSignature, KeySignature, ClefType, Measure, TupletInfo, Volta, Part, SequenceAssignment } from './score'
+import type { Duration, NoteName, Pitch, Accidental, NoteEvent, Note, Staff, Slur, TimeSignature, KeySignature, ClefType, Measure, TupletInfo, Volta, Part, SequenceAssignment, Score } from './score'
 
 // ── Duration arithmetic (64th-note units) ─────────────────────────────────────
 
@@ -777,4 +777,42 @@ export function buildSequenceSchedule(
   }
 
   return result
+}
+
+// ── Clipboard helpers ─────────────────────────────────────────────────────────
+
+export function findNoteLocation(
+  score: Score,
+  noteId: string,
+): { partId: string; staffId: string; measureId: string; voiceIndex: number; beatPosition: number } | null {
+  for (const part of score.parts) {
+    for (const staff of part.staves) {
+      for (const measure of staff.measures) {
+        for (let vi = 0; vi < measure.voices.length; vi++) {
+          let beat = 0
+          for (const event of measure.voices[vi].events) {
+            if ((event as NoteEvent).id === noteId) {
+              return { partId: part.id, staffId: staff.id, measureId: measure.id, voiceIndex: vi, beatPosition: beat }
+            }
+            beat += eventDurationUnits(event as NoteEvent)
+          }
+        }
+      }
+    }
+  }
+  return null
+}
+
+export function findStaffContainingMeasure(
+  score: Score,
+  measureId: string,
+): { partId: string; staffId: string } | null {
+  for (const part of score.parts) {
+    for (const staff of part.staves) {
+      if (staff.measures.some(m => m.id === measureId)) {
+        return { partId: part.id, staffId: staff.id }
+      }
+    }
+  }
+  return null
 }

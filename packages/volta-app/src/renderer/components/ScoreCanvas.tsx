@@ -586,6 +586,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     lyricCursorNoteId, setLyricCursor,
     isPlaying,
     barSelection, setBarSelection, deleteSelectedBars,
+    clipboard, copySelection, cutSelection, pasteClipboard,
     midiLearnListening, midiLearnBindings, setMidiLearnError,
     scrollToCursorToken,
   } = useAppStore()
@@ -2025,6 +2026,33 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         return
       }
 
+      // Copy (⌘C)
+      if (mod && (e.key === 'c' || e.key === 'C') && inputMode === 'select') {
+        if (selectedNoteIds.length > 0 || barSelection) {
+          e.preventDefault()
+          copySelection()
+          return
+        }
+      }
+
+      // Cut (⌘X)
+      if (mod && (e.key === 'x' || e.key === 'X') && inputMode === 'select') {
+        if (selectedNoteIds.length > 0 || barSelection) {
+          e.preventDefault()
+          cutSelection()
+          return
+        }
+      }
+
+      // Paste (⌘V)
+      if (mod && (e.key === 'v' || e.key === 'V')) {
+        if (clipboard) {
+          e.preventDefault()
+          pasteClipboard()
+          return
+        }
+      }
+
       // Tuplet shortcut: T in note or rest input mode → insert triplet
       if (!mod && !e.shiftKey && e.key === 't' && (inputMode === 'note' || inputMode === 'rest')) {
         insertTuplet(3, 2); return
@@ -2151,6 +2179,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     setInputMode, setSelectedDuration, toggleDot, resizeNote, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
     insertMeasure, setInsertBarsDialogOpen, deleteMeasure, selectedMeasureId, insertTuplet,
     barSelection, deleteSelectedBars, setBarSelection,
+    clipboard, copySelection, cutSelection, pasteClipboard,
     isPlaying,
   ])
 
@@ -3507,6 +3536,10 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
               {selectedNoteIds.length === 3 && <button onClick={() => applyTuplet(3, 2)} title="Make triplet"    style={btnBase}>3</button>}
               {selectedNoteIds.length === 5 && <button onClick={() => applyTuplet(5, 4)} title="Make quintuplet" style={btnBase}>5</button>}
               {selectedNoteIds.length === 6 && <button onClick={() => applyTuplet(6, 4)} title="Make sextuplet"  style={btnBase}>6</button>}
+              <div style={{ width: 1, height: 14, background: '#444', margin: '0 2px', flexShrink: 0 }} />
+              <button onClick={copySelection}  title="Copy (⌘C)"  style={btnBase}>Copy</button>
+              <button onClick={cutSelection}   title="Cut (⌘X)"   style={btnBase}>Cut</button>
+              {clipboard && <button onClick={pasteClipboard} title="Paste (⌘V)" style={btnBase}>Paste</button>}
             </div>
 
             {/* Tab bar */}
