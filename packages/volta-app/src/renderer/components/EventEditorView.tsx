@@ -241,6 +241,15 @@ function NotesTab({ staff, partId, staffId, scoreTs, dispatch, dispatchBatch, fi
       return
     } else if (col === 'dyn') {
       dispatch({ type: 'SET_NOTE_DYNAMIC', noteId: ev.id, dynamic: val === '—' ? undefined : val as DynamicLevel })
+    } else if (col === 'vel') {
+      if (ev.type === 'rest') { cancelEdit(); return }
+      if (val === '—' || val === '') {
+        dispatch({ type: 'SET_NOTE_VELOCITY', noteId: ev.id, velocity: undefined })
+      } else {
+        const v = parseInt(val)
+        if (isNaN(v) || v < 0 || v > 127) { setEditErr('Velocity must be 0–127'); return }
+        dispatch({ type: 'SET_NOTE_VELOCITY', noteId: ev.id, velocity: v })
+      }
     } else if (col === 'lyric') {
       dispatch({ type: 'SET_LYRIC', noteId: ev.id, lyric: val.trim() || undefined })
     } else {
@@ -285,7 +294,7 @@ function NotesTab({ staff, partId, staffId, scoreTs, dispatch, dispatchBatch, fi
 
       <div style={{ overflow: 'auto', flex: 1 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>{['Bar','Beat','Voice','Type','Note','Oct','Acc','Duration','Dots','Tie→','←Tie','Dynamic','Lyric','Articulations','Tuplet'].map(h => <th key={h} style={TH}>{h}</th>)}</tr></thead>
+          <thead><tr>{['Bar','Beat','Voice','Type','Note','Oct','Acc','Duration','Dots','Tie→','←Tie','Dynamic','Velocity','Lyric','Articulations','Tuplet'].map(h => <th key={h} style={TH}>{h}</th>)}</tr></thead>
           <tbody>
             {rows.length === 0 && <tr><td colSpan={15} style={{ ...TD, color: DIM, textAlign: 'center', padding: 24 }}>No events match the filter.</td></tr>}
             {rows.flatMap((r, i) => {
@@ -381,6 +390,19 @@ function NotesTab({ staff, partId, staffId, scoreTs, dispatch, dispatchBatch, fi
                     {dynamic ? <em>{dynamic}</em> : <span style={{ color: DIM }}>—</span>}
                   </span>
 
+              const velocity = (ev as any).velocity as number | undefined
+              const velEditable = ev.type !== 'rest'
+              const velCell = velEditable
+                ? isEditing(r.key, 'vel')
+                  ? <input style={{ ...EDIT_INPUT, width: 42 }} type="number" min={0} max={127} value={editVal} autoFocus
+                      onChange={e => setEditVal(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') commitEdit(r, 'vel', editVal); if (e.key === 'Escape') cancelEdit() }}
+                      onBlur={() => commitEdit(r, 'vel', editVal)} />
+                  : <span style={{ cursor: 'pointer', textDecoration: 'underline dotted #555' }} onClick={() => startEdit(r.key, 'vel', velocity !== undefined ? String(velocity) : '')}>
+                      {velocity !== undefined ? velocity : <span style={{ color: DIM }}>—</span>}
+                    </span>
+                : <span style={{ color: DIM }}>—</span>
+
               const lyric = (ev as any).lyric as string | undefined
               const lyricCell = isEditing(r.key, 'lyric')
                 ? <input style={{ ...EDIT_INPUT, width: 80 }} value={editVal} autoFocus
@@ -431,6 +453,7 @@ function NotesTab({ staff, partId, staffId, scoreTs, dispatch, dispatchBatch, fi
                       : <span style={{ color: DIM }}>—</span>}
                   </td>
                   <td style={td}>{dynCell}</td>
+                  <td style={td}>{velCell}</td>
                   <td style={td}>{lyricCell}</td>
                   <td style={td}>{artCell}</td>
                   <td style={td}>{tuplet ? `${tuplet.actual}:${tuplet.normal}` : <span style={{ color: DIM }}>—</span>}</td>
@@ -443,7 +466,7 @@ function NotesTab({ staff, partId, staffId, scoreTs, dispatch, dispatchBatch, fi
                     <td style={{ ...TD, color: DIM }} /><td style={{ ...TD, color: DIM }} /><td style={{ ...TD, color: DIM }} />
                     <td style={{ ...TD, color: '#4a9eff', paddingLeft: 24 }}>pitch {pi + 1}</td>
                     <td style={TD}>{p.noteName}</td><td style={TD}>{p.octave}</td><td style={TD}>{fmtAcc(p.accidental)}</td>
-                    <td colSpan={8} style={{ ...TD, color: DIM }} />
+                    <td colSpan={9} style={{ ...TD, color: DIM }} />
                   </tr>
                 )) : []
 

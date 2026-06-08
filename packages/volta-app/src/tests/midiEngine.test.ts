@@ -776,3 +776,65 @@ describe('round-trip: export then import', () => {
     expect(score1.tempo).toBe(144)
   })
 })
+
+// ── Velocity — import stores per-note velocity ────────────────────────────────
+
+describe('midiToScore — per-note velocity', () => {
+  it('stores raw velocity on imported note events', () => {
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      t.addNote({ midi: 60, ticks: 0, durationTicks: 480, velocity: 64 / 127 })
+    })
+    const score = midiToScore(bytes)
+    const ev = score.parts[0].staves[0].measures[0].voices[0].events.find(e => e.type === 'note')
+    expect((ev as any)?.velocity).toBe(64)
+  })
+
+  it('stores velocity on chord events', () => {
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      // two simultaneous notes = chord
+      t.addNote({ midi: 60, ticks: 0, durationTicks: 480, velocity: 96 / 127 })
+      t.addNote({ midi: 64, ticks: 0, durationTicks: 480, velocity: 96 / 127 })
+    })
+    const score = midiToScore(bytes)
+    const ev = score.parts[0].staves[0].measures[0].voices[0].events.find(e => e.type === 'chord' || e.type === 'note')
+    expect((ev as any)?.velocity).toBeDefined()
+  })
+
+  it('does not set velocity on rest events', () => {
+    const bytes = buildMidi(m => {
+      const t = m.addTrack()
+      // note at tick 480 — leaves a rest at tick 0
+      t.addNote({ midi: 60, ticks: 480, durationTicks: 480, velocity: 80 / 127 })
+    })
+    const score = midiToScore(bytes)
+    const rest = score.parts[0].staves[0].measures[0].voices[0].events.find(e => e.type === 'rest')
+    expect((rest as any)?.velocity).toBeUndefined()
+  })
+})
+
+// ── Velocity — export uses explicit velocity ──────────────────────────────────
+
+function scoreWithVelocity(velocity: number, dynamic?: string): Midi {
+  const base = createScore('Test')
+  const s    = createStaff('treble')
+  const note = { ...noteEv('C', 4, 'quarter'), velocity, ...(dynamic ? { dynamic } : {}) } as any
+  const m: Measure = { ...createMeasure(1, 'final'), voices: [{ id: 'v', events: [note] }] }
+  const part: Part = { ...base.parts[0], volume: 1.0, staves: [{ ...s, measures: [m] }] }
+  return parseMidi({ ...base, parts: [part] })
+}
+
+describe('scoreToMidi — explicit velocity takes priority', () => {
+  it('note with explicit velocity 32 exports at 32 when part.volume=1', () => {
+    const v127 = Math.round(scoreWithVelocity(32).tracks[0].notes[0].velocity * 127)
+    expect(v127).toBe(32)
+  })
+
+  it('explicit velocity overrides dynamic-derived velocity', () => {
+    // dynamic = mf → 75 normally; explicit velocity = 32 → should use 32
+    const v127 = Math.round(scoreWithVelocity(32, 'mf').tracks[0].notes[0].velocity * 127)
+    expect(v127).toBe(32)
+    expect(v127).not.toBe(75)
+  })
+})

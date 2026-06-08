@@ -111,7 +111,16 @@ If a Directive with a `midiProgram` field appears at a measure boundary, emit an
 
 #### Velocity
 
-Velocity is a 0–127 integer derived from the effective dynamic level at each note.
+Velocity is a 0–127 integer resolved per note using the following priority order:
+
+1. **Explicit `event.velocity`** — if set on the `Note` or `Chord`, used directly (still scaled by articulation modifier and `part.volume`)
+2. **Note-attached dynamic** — `event.dynamic` (e.g. `mf`) maps to a fixed velocity via the table below
+3. **Measure directive dynamic** — nearest `Directive` of category `"dynamic"` scanning backward from the note's measure
+4. **Default** — `mf` (75) if none of the above apply
+
+`event.velocity` is set automatically on `Note` and `Chord` events during MIDI import, preserving per-note velocity with full fidelity. It can also be set manually in the Event Editor.
+
+Velocity is a 0–127 integer derived from the effective dynamic level at each note when no explicit velocity is set.
 
 Dynamic baseline (MIDI velocity):
 

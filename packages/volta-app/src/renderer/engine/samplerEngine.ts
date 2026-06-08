@@ -140,7 +140,11 @@ export async function playScoreWithSampler(
         const hz = pitchToHz(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
         Tone.Transport.schedule((time) => {
           if (isPartMuted?.(partId)) return
-          const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+          const partVol     = getPartVolume?.(partId) ?? part.volume
+          const explicitVel = (n as any).velocity as number | undefined
+          const liveVolume  = explicitVel !== undefined
+            ? partVol * (explicitVel / 127)
+            : dynMultiplier ?? partVol
           sampler.volume.value = 20 * Math.log10(Math.max(0.001, liveVolume)) + volDbBonus
           sampler.triggerAttack(hz, time)
         }, startSec)
@@ -151,7 +155,11 @@ export async function playScoreWithSampler(
           .map(p => pitchToHz(p.noteName, p.octave, p.accidental, part.transposeSemitones))
         Tone.Transport.schedule((time) => {
           if (isPartMuted?.(partId)) return
-          const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
+          const partVol     = getPartVolume?.(partId) ?? part.volume
+          const explicitVel = (event as any).velocity as number | undefined
+          const liveVolume  = explicitVel !== undefined
+            ? partVol * (explicitVel / 127)
+            : dynMultiplier ?? partVol
           sampler.volume.value = 20 * Math.log10(Math.max(0.001, liveVolume)) + volDbBonus
           freqs.forEach(hz => sampler.triggerAttack(hz, time))
         }, startSec)

@@ -68,6 +68,7 @@ One row per `NoteEvent` (Note, Rest, or Chord) across all measures of the select
 | Tie → | `tieStart` | Yes — checkbox |
 | ← Tie | `tieEnd` | Yes — checkbox |
 | Dynamic | `event.dynamic` (`pp`…`ffff` or `—`) | Yes — dropdown |
+| Velocity | `event.velocity` (0–127 or `—`) | Yes — numeric; overrides dynamic-derived velocity when set |
 | Lyric | `lyric` text or `—` | Yes — text input |
 | Articulations | comma-separated list (e.g. `staccato, accent`) | Yes — multi-select |
 | Tuplet | tuplet ratio (e.g. `3:2`) or `—` | Read-only |

@@ -64,7 +64,8 @@ export type Command =
   | { type: 'REMOVE_HAIRPIN';        partId: string; staffId: string; hairpinId: string }
   | { type: 'ADD_TUPLET';    partId: string; staffId: string; measureId: string; voiceId: string; actual: 3 | 5 | 6; normal: 2 | 4; duration: Duration }
   | { type: 'APPLY_TUPLET';  targets: { partId: string; staffId: string; measureId: string; voiceId: string; noteId: string }[]; actual: 3 | 5 | 6; normal: 2 | 4 }
-  | { type: 'SET_NOTE_DYNAMIC'; noteId: string; dynamic: DynamicLevel | undefined }
+  | { type: 'SET_NOTE_DYNAMIC';   noteId: string; dynamic:   DynamicLevel | undefined }
+  | { type: 'SET_NOTE_VELOCITY'; noteId: string; velocity: number | undefined }
   | { type: 'ADD_VOLTA';    volta: Volta }
   | { type: 'REMOVE_VOLTA'; voltaId: string }
   | { type: 'ADD_VOICE';        partId: string; staffId: string; measureId: string; voiceId: string }
@@ -962,6 +963,26 @@ export function applyCommand(score: Score, command: Command): Score {
                     event.dynamic = command.dynamic
                   } else {
                     delete event.dynamic
+                  }
+                }
+              }
+            }
+          }
+        }
+        break
+      }
+
+      case 'SET_NOTE_VELOCITY': {
+        for (const part of draft.parts as any[]) {
+          for (const staff of part.staves) {
+            for (const measure of staff.measures) {
+              for (const voice of measure.voices) {
+                const event = (voice.events as any[]).find((e: any) => e.id === command.noteId)
+                if (event && event.type !== 'rest') {
+                  if (command.velocity !== undefined) {
+                    event.velocity = command.velocity
+                  } else {
+                    delete event.velocity
                   }
                 }
               }

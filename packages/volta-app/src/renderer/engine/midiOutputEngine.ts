@@ -241,8 +241,11 @@ class MidiOutputEngine {
           const midiNum = pitchToMidi(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
           Tone.Transport.schedule((time) => {
             if (isPartMuted?.(partId)) return
-            const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
-            const liveVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(20 * Math.log10(Math.max(0.001, liveVolume))) * velFactor * hairpinFactor)))
+            const partVol    = getPartVolume?.(partId) ?? part.volume
+            const explicitVel = (n as any).velocity as number | undefined
+            const liveVel = explicitVel !== undefined
+              ? Math.max(1, Math.min(127, Math.round(explicitVel * partVol * velFactor * hairpinFactor)))
+              : Math.max(1, Math.min(127, Math.round(velocityFromDb(20 * Math.log10(Math.max(0.001, dynMultiplier ?? partVol))) * velFactor * hairpinFactor)))
             const noteOnTs = midiTs(time)
             output.send([0x90 | channel, midiNum, liveVel], noteOnTs)
             output.send([0x80 | channel, midiNum, 0], noteOnTs + noteOffRelMs)
@@ -253,8 +256,11 @@ class MidiOutputEngine {
           )
           Tone.Transport.schedule((time) => {
             if (isPartMuted?.(partId)) return
-            const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
-            const liveVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(20 * Math.log10(Math.max(0.001, liveVolume))) * velFactor * hairpinFactor)))
+            const partVol     = getPartVolume?.(partId) ?? part.volume
+            const explicitVel = (event as any).velocity as number | undefined
+            const liveVel = explicitVel !== undefined
+              ? Math.max(1, Math.min(127, Math.round(explicitVel * partVol * velFactor * hairpinFactor)))
+              : Math.max(1, Math.min(127, Math.round(velocityFromDb(20 * Math.log10(Math.max(0.001, dynMultiplier ?? partVol))) * velFactor * hairpinFactor)))
             const noteOnTs = midiTs(time)
             midiNums.forEach(n => {
               output.send([0x90 | channel, n, liveVel], noteOnTs)

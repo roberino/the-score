@@ -310,12 +310,18 @@ function assignChannels(parts: readonly Part[]): Map<string, number> {
 }
 
 // Effective MIDI velocity for a note in a given measure of a staff.
+// Priority: explicit event.velocity > note dynamic > measure directive dynamic > default mf (75).
 function resolveVelocity(
   measures: readonly Measure[],
   mIdx: number,
   event: NoteEvent,
   partVolume: number,
 ): number {
+  const mods = articulationPlaybackMods(event)
+  const explicitVel = (event as any).velocity as number | undefined
+  if (explicitVel !== undefined) {
+    return Math.max(1, Math.min(127, Math.round(explicitVel * mods.velFactor * partVolume)))
+  }
   const evDynamic = (event as any).dynamic as DynamicLevel | undefined
   let base = 75
   if (evDynamic) {
@@ -326,7 +332,6 @@ function resolveVelocity(
       if (d) { base = DYNAMIC_VELOCITY[d.text] ?? 75; break }
     }
   }
-  const mods = articulationPlaybackMods(event)
   return Math.max(1, Math.min(127, Math.round(base * mods.velFactor * partVolume)))
 }
 
@@ -903,11 +908,13 @@ function packIntoMeasures(
   function makeNoteEvent(ev: FlatEvent, units: number, tieStart: boolean, tieEnd: boolean): NoteEvent {
     const q = Math.abs(units - ev.units) < 0.5 ? ev : quantise(units)
     if (ev.type === 'rest') return createRest(q.duration) as Rest
+    const vel = ev.velocity > 0 ? ev.velocity : undefined
     if (ev.type === 'note') {
       const p    = ev.pitches![0]
       const base = createNote(p.noteName, p.octave, q.duration, p.accidental)
       return {
         ...base, id: uuid(), dots: q.dots, tieStart, tieEnd,
+        ...(vel !== undefined ? { velocity: vel } : {}),
         ...(ev.tuplet ? { tuplet: ev.tuplet } : {}),
       } as Note
     }
@@ -915,6 +922,7 @@ function packIntoMeasures(
       id: uuid(), type: 'chord',
       pitches: ev.pitches!, duration: q.duration, dots: q.dots as (0 | 1 | 2),
       articulations: [],
+      ...(vel !== undefined ? { velocity: vel } : {}),
       ...(ev.tuplet ? { tuplet: ev.tuplet } : {}),
     } as Chord
   }

@@ -1560,3 +1560,43 @@ describe('PASTE_BARS — voice replacement', () => {
     expect((voiceEvents(result, 1)[0] as Note).pitch.noteName).toBe('G')
   })
 })
+
+// ── SET_NOTE_VELOCITY ─────────────────────────────────────────────────────────
+
+describe('SET_NOTE_VELOCITY', () => {
+  it('sets velocity on a note event', () => {
+    const n = makeNote('n1')
+    const score = makeScore([n])
+    const result = applyCommand(score, { type: 'SET_NOTE_VELOCITY', noteId: 'n1', velocity: 96 })
+    expect((events(result)[0] as any).velocity).toBe(96)
+  })
+
+  it('clears velocity when undefined is passed', () => {
+    const n = { ...makeNote('n1'), velocity: 64 } as any
+    const score = makeScore([n])
+    const result = applyCommand(score, { type: 'SET_NOTE_VELOCITY', noteId: 'n1', velocity: undefined })
+    expect((events(result)[0] as any).velocity).toBeUndefined()
+  })
+
+  it('clamps velocity to 0–127', () => {
+    // The command stores whatever value is passed; caller is responsible for clamping
+    const n = makeNote('n1')
+    const score = makeScore([n])
+    const result = applyCommand(score, { type: 'SET_NOTE_VELOCITY', noteId: 'n1', velocity: 127 })
+    expect((events(result)[0] as any).velocity).toBe(127)
+  })
+
+  it('does not set velocity on a rest event', () => {
+    const r = createRest('quarter') as NoteEvent
+    const score = makeScore([r])
+    const result = applyCommand(score, { type: 'SET_NOTE_VELOCITY', noteId: r.id, velocity: 80 })
+    expect((events(result)[0] as any).velocity).toBeUndefined()
+  })
+
+  it('does not mutate the original score', () => {
+    const n = makeNote('n1')
+    const score = makeScore([n])
+    applyCommand(score, { type: 'SET_NOTE_VELOCITY', noteId: 'n1', velocity: 64 })
+    expect((events(score)[0] as any).velocity).toBeUndefined()
+  })
+})

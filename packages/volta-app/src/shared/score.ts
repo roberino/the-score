@@ -40,6 +40,7 @@ export interface Note {
   readonly articulations: Articulation[]
   readonly tuplet?: TupletInfo
   readonly dynamic?: DynamicLevel
+  readonly velocity?: number   // explicit MIDI velocity 0–127; overrides dynamic-derived velocity when set
   readonly lyric?: string
 }
 
@@ -61,6 +62,7 @@ export interface Chord {
   readonly articulations: Articulation[]
   readonly tuplet?: TupletInfo
   readonly dynamic?: DynamicLevel
+  readonly velocity?: number   // explicit MIDI velocity 0–127; overrides dynamic-derived velocity when set
   readonly lyric?: string
 }
 
