@@ -353,6 +353,16 @@ export function resolveDirectiveDynamic(measures: readonly Measure[], idx: numbe
   return null
 }
 
+// Like resolveDirectiveDynamic but returns a MIDI velocity (0–127) using DYNAMIC_VELOCITY.
+// Used by midiOutputEngine so that dynamics map to the same velocity table as per-note dynamics.
+export function resolveDirectiveVelocity(measures: readonly Measure[], idx: number): number | null {
+  for (let i = idx; i >= 0; i--) {
+    const d = measures[i].directives?.find(d => d.category === 'dynamic')
+    if (d) return DYNAMIC_VELOCITY[d.text] ?? null
+  }
+  return null
+}
+
 export function resolveDirectiveMidiProgram(measures: readonly Measure[], idx: number, partMidiProgram: number): number {
   for (let i = idx; i >= 0; i--) {
     const d = measures[i].directives?.find(d => d.category === 'expression' && d.midiProgram != null)

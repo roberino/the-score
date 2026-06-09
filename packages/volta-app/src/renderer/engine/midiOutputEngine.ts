@@ -1,6 +1,6 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord, Hairpin } from '@shared/score'
-import { resolveDirectiveDynamic, resolveDirectiveTempo, resolveKeySig, resolveTimeSig, measureCapacityUnits, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, articulationPlaybackMods, expandOrnamentNotes, DYNAMIC_VELOCITY, type FlatScheduleEntry } from '@shared/musicUtils'
+import { resolveDirectiveVelocity, resolveDirectiveTempo, resolveKeySig, resolveTimeSig, measureCapacityUnits, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, articulationPlaybackMods, expandOrnamentNotes, DYNAMIC_VELOCITY, type FlatScheduleEntry } from '@shared/musicUtils'
 import { type PlaybackController } from './audioEngine'
 import { midiService } from '../services/midiService'
 
@@ -208,7 +208,10 @@ class MidiOutputEngine {
         if (fe.skip) continue
         const { event, mIdx, startSec, playDurSec } = fe
 
-        const dynMultiplier  = resolveDirectiveDynamic(staff.measures, mIdx)
+        // dynVelocity: MIDI velocity (0–127) for the nearest measure dynamic directive.
+        // Using DYNAMIC_VELOCITY directly (not the DYNAMIC_VOLUME→velocityFromDb path) so
+        // that 'ff' (101) is audibly louder than the default baseline (~75–100), not quieter.
+        const dynVelocity    = resolveDirectiveVelocity(staff.measures, mIdx)
         const hairpinFactor  = hairpinFactors.get(event.id) ?? 1.0
 
         const keySig     = resolveKeySig(staff.measures, mIdx, score.keySignature)
@@ -220,8 +223,10 @@ class MidiOutputEngine {
             const noteOffMs = Math.max(20, on.durSec * 1000 - 20)
             Tone.Transport.schedule((time) => {
               if (isPartMuted?.(partId)) return
-              const liveVolume = dynMultiplier ?? (getPartVolume?.(partId) ?? part.volume)
-              const liveVel = Math.max(1, Math.min(127, Math.round(velocityFromDb(20 * Math.log10(Math.max(0.001, liveVolume))) * hairpinFactor)))
+              const partVol = getPartVolume?.(partId) ?? part.volume
+              const liveVel = Math.max(1, Math.min(127, Math.round(
+                (dynVelocity ?? velocityFromDb(20 * Math.log10(Math.max(0.001, partVol)))) * hairpinFactor
+              )))
               const noteOnTs = midiTs(time)
               output.send([0x90 | channel, midiNum, liveVel], noteOnTs)
               output.send([0x80 | channel, midiNum, 0], noteOnTs + noteOffMs)
@@ -243,16 +248,18 @@ class MidiOutputEngine {
           Tone.Transport.schedule((time) => {
             if (isPartMuted?.(partId)) return
             const partVol     = getPartVolume?.(partId) ?? part.volume
-            const explicitVel = (n as any).velocity as number | undefined
-            // Per-note dynamic wins outright; explicit velocity is scaled by the effective dynamic
-            // context (measure directive or part volume) so dynamics apply even to imported notes.
+            const explicitVel = n.velocity
+            // Priority: per-note dynamic > explicit velocity (scaled by directive) > directive > partVol baseline
             let baseVel: number
             if (noteDynVel !== null) {
               baseVel = noteDynVel
             } else if (explicitVel !== undefined) {
-              baseVel = explicitVel * (dynMultiplier ?? partVol)
+              // Treat explicit velocity as a fraction within the dynamic context: 127 → full directive level
+              baseVel = dynVelocity !== null
+                ? explicitVel * (dynVelocity / 127)
+                : explicitVel * partVol
             } else {
-              baseVel = velocityFromDb(20 * Math.log10(Math.max(0.001, dynMultiplier ?? partVol)))
+              baseVel = dynVelocity ?? velocityFromDb(20 * Math.log10(Math.max(0.001, partVol)))
             }
             const liveVel = Math.max(1, Math.min(127, Math.round(baseVel * velFactor * hairpinFactor)))
             const noteOnTs = midiTs(time)
@@ -268,14 +275,16 @@ class MidiOutputEngine {
           Tone.Transport.schedule((time) => {
             if (isPartMuted?.(partId)) return
             const partVol     = getPartVolume?.(partId) ?? part.volume
-            const explicitVel = (event as any).velocity as number | undefined
+            const explicitVel = c.velocity
             let baseVel: number
             if (noteDynVel !== null) {
               baseVel = noteDynVel
             } else if (explicitVel !== undefined) {
-              baseVel = explicitVel * (dynMultiplier ?? partVol)
+              baseVel = dynVelocity !== null
+                ? explicitVel * (dynVelocity / 127)
+                : explicitVel * partVol
             } else {
-              baseVel = velocityFromDb(20 * Math.log10(Math.max(0.001, dynMultiplier ?? partVol)))
+              baseVel = dynVelocity ?? velocityFromDb(20 * Math.log10(Math.max(0.001, partVol)))
             }
             const liveVel = Math.max(1, Math.min(127, Math.round(baseVel * velFactor * hairpinFactor)))
             const noteOnTs = midiTs(time)

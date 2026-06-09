@@ -304,7 +304,7 @@ function assignChannels(parts: readonly Part[]): Map<string, number> {
 }
 
 // Effective MIDI velocity for a note in a given measure of a staff.
-// Priority: explicit event.velocity > note dynamic > measure directive dynamic > default mf (75).
+// Priority: per-note dynamic > explicit velocity (scaled by context) > measure directive > default mf (75).
 function resolveVelocity(
   measures: readonly Measure[],
   mIdx: number,
@@ -312,20 +312,28 @@ function resolveVelocity(
   partVolume: number,
 ): number {
   const mods = articulationPlaybackMods(event)
+  const evDynamic = (event as any).dynamic as DynamicLevel | undefined
+  if (evDynamic) {
+    return Math.max(1, Math.min(127, Math.round((DYNAMIC_VELOCITY[evDynamic] ?? 75) * mods.velFactor)))
+  }
+
+  // Resolve measure directive velocity
+  let dirVelocity: number | null = null
+  for (let i = mIdx; i >= 0; i--) {
+    const d = measures[i].directives?.find(d => d.category === 'dynamic')
+    if (d) { dirVelocity = DYNAMIC_VELOCITY[d.text] ?? null; break }
+  }
+
   const explicitVel = (event as any).velocity as number | undefined
   if (explicitVel !== undefined) {
-    return Math.max(1, Math.min(127, Math.round(explicitVel * mods.velFactor * partVolume)))
+    // Scale explicit velocity within the directive context so dynamics affect imported notes too
+    const base = dirVelocity !== null
+      ? explicitVel * (dirVelocity / 127)
+      : explicitVel * partVolume
+    return Math.max(1, Math.min(127, Math.round(base * mods.velFactor)))
   }
-  const evDynamic = (event as any).dynamic as DynamicLevel | undefined
-  let base = 75
-  if (evDynamic) {
-    base = DYNAMIC_VELOCITY[evDynamic] ?? 75
-  } else {
-    for (let i = mIdx; i >= 0; i--) {
-      const d = measures[i].directives?.find(d => d.category === 'dynamic')
-      if (d) { base = DYNAMIC_VELOCITY[d.text] ?? 75; break }
-    }
-  }
+
+  const base = dirVelocity ?? 75
   return Math.max(1, Math.min(127, Math.round(base * mods.velFactor * partVolume)))
 }
 
