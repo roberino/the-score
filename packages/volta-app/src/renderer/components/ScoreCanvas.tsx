@@ -1,11 +1,11 @@
-import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
+import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { useAppStore, MIDI_LEARN_FUNCTIONS } from '../store/appStore'
 import type { Command } from '@shared/commands'
 import { INSTRUMENTS } from '@shared/instruments'
 import * as Tone from 'tone'
 import {
   computeLayout,
-  computeSliceOffsets,
+  computeRowSliceOffsets,
   computeSliceLayouts,
   computeTotalHeight,
   renderScoreMulti,
@@ -13,7 +13,7 @@ import {
   type CanvasSlice,
   DEFAULT_RENDER_OPTIONS,
   LABEL_MARGIN_X,
-  HEADING_MARGIN_Y,
+  VEXFLOW_HEADROOM_PX,
   STAVE_HEIGHT_PX,
   LYRIC_Y_OFFSET,
   PEDAL_BASE_BELOW_STAVE,
@@ -62,6 +62,98 @@ import { useMidiInput } from '../hooks/useMidiInput'
 import { useMidiLearn } from '../hooks/useMidiLearn'
 import type { NoteInput } from '../services/midiService'
 import { TextBoxLayer, makeTextBox } from './TextBoxLayer'
+
+// ── Note-input preview (overlay canvas) ──────────────────────────────────────
+
+function clearNoteInputPreview(previewArea: HTMLDivElement): void {
+  for (const c of Array.from(previewArea.childNodes)) {
+    if (c instanceof HTMLCanvasElement) {
+      c.getContext('2d')?.clearRect(0, 0, c.width, c.height)
+    }
+  }
+}
+
+interface CanvasSliceLike { yOffset: number }
+
+function drawNoteInputPreview(
+  previewArea: HTMLDivElement,
+  slices: CanvasSliceLike[],
+  layout: MeasureLayout,
+  canvasX: number,
+  canvasY: number,
+  notePositions: Map<string, number>,
+  voiceEvents: readonly NoteEvent[],
+  isNoteMode: boolean,
+): void {
+  const STEP_PX    = LINE_SPACING_PX / 2   // 5 px per half-step
+  const STAVE_H    = 4 * LINE_SPACING_PX   // 40 px
+
+  // Find the canvas slice that contains this layout
+  let sliceIdx = 0
+  for (let i = 0; i < slices.length; i++) {
+    const nextOff = slices[i + 1]?.yOffset ?? Infinity
+    if (layout.staveY >= slices[i].yOffset && layout.staveY < nextOff) { sliceIdx = i; break }
+  }
+  const slice = slices[sliceIdx]
+  if (!slice) return
+
+  const previewCanvases = Array.from(previewArea.childNodes)
+    .filter((n): n is HTMLCanvasElement => n instanceof HTMLCanvasElement)
+
+  const dpr = window.devicePixelRatio || 1
+
+  // Clear all preview canvases (cursor may have moved to a different row)
+  for (const c of previewCanvases) {
+    const cx = c.getContext('2d')
+    if (cx) cx.clearRect(0, 0, c.width, c.height)
+  }
+
+  const canvas = previewCanvases[sliceIdx]
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  // canvasY and layout.staveTopY are both in absolute score coords.
+  const yOff          = slice.yOffset
+  const step          = yToStep(canvasY, layout.staveTopY, LINE_SPACING_PX)
+  const localStaveTop = layout.staveTopY - yOff          // staveTopY in this canvas's local coords
+  const snappedY      = localStaveTop + step * STEP_PX
+
+  // Beat-column X: snap to nearest event within 20 px, else follow cursor
+  let beatX = canvasX
+  for (const ev of voiceEvents) {
+    const nx = notePositions.get(ev.id)
+    if (nx !== undefined && Math.abs(canvasX - nx) <= 20) { beatX = nx; break }
+  }
+
+  ctx.save()
+  // Apply DPR transform so logical coordinates match CSS pixels (same as drawOverlay)
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+  if (isNoteMode) {
+    // Layer 1 — horizontal staff-slot highlight
+    ctx.fillStyle = 'rgba(99, 179, 237, 0.18)'
+    ctx.fillRect(layout.x, snappedY - STEP_PX / 2, layout.width, STEP_PX)
+  }
+
+  // Layer 3 — vertical beat-column line
+  ctx.strokeStyle = 'rgba(59, 130, 246, 0.55)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(beatX + 0.5, localStaveTop - 25)
+  ctx.lineTo(beatX + 0.5, localStaveTop + STAVE_H + 25)
+  ctx.stroke()
+
+  if (isNoteMode) {
+    // Layer 2 — ghost note head
+    ctx.fillStyle = 'rgba(59, 130, 246, 0.45)'
+    ctx.beginPath()
+    ctx.ellipse(beatX, snappedY, 6, 4, -0.3, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  ctx.restore()
+}
 
 // ── Pencil cursor (note/rest insertion hover) ─────────────────────────────────
 // Material Design edit icon scaled to 20×20; hotspot at pencil tip (bottom-left).
@@ -310,11 +402,18 @@ function findClickedLayout(
 ): MeasureLayout | undefined {
   const LEDGER_MARGIN = 50
   const STAVE_HEIGHT  = 4 * LINE_SPACING_PX   // 40px
-  return layouts.find(l =>
+  const candidates = layouts.filter(l =>
     x >= l.x &&
     x <= l.x + l.width &&
     y >= l.staveTopY - LEDGER_MARGIN &&
     y <= l.staveTopY + STAVE_HEIGHT + LEDGER_MARGIN
+  )
+  if (!candidates.length) return undefined
+  // When multiple staves overlap at this Y (e.g. grand staff), prefer the one
+  // whose vertical centre is closest to the click so we resolve to the right stave.
+  const centre = (l: MeasureLayout) => l.staveTopY + STAVE_HEIGHT / 2
+  return candidates.reduce((best, l) =>
+    Math.abs(y - centre(l)) < Math.abs(y - centre(best)) ? l : best
   )
 }
 
@@ -519,20 +618,28 @@ const ARTICULATION_BUTTONS: { art: Articulation; label: string; title: string }[
 
 interface ScoreCanvasProps {
   onOpenSequencer?: (partId: string, patternId?: string) => void
+  active?: boolean   // false = skip VexFlow renders (e.g. while sequencer or another view is visible)
 }
 
-export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Element {
+export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps = {}): JSX.Element {
   // Container div that holds all canvas slices for multi-canvas rendering
   const canvasAreaRef = useRef<HTMLDivElement>(null)
   // Overlay div — same stacking geometry as canvasAreaRef; holds transparent canvases
   // for selection/cursor highlights drawn independently of the VexFlow base render.
   const overlayCanvasAreaRef = useRef<HTMLDivElement>(null)
+  // Preview canvas layer — drawn per-mousemove for note-input ghost head / beat column.
+  const previewCanvasAreaRef = useRef<HTMLDivElement>(null)
   // Current slice metadata — kept in sync with the canvas elements in canvasAreaRef
   const canvasSlicesRef = useRef<CanvasSlice[]>([])
   const notePositionsRef    = useRef(new Map<string, number>())
   const noteStartXRef       = useRef(new Map<string, number>())
   const noteToMeasureKeyRef = useRef(new Map<string, string>())
   const layoutsRef          = useRef<MeasureLayout[]>([])
+  // Previous state for incremental render diffing
+  const prevScoreRef        = useRef<typeof score | null>(null)
+  const prevLayoutsRef      = useRef<MeasureLayout[]>([])
+  const prevZoomRef         = useRef<number>(1)
+  const prevChordPitchRef   = useRef<SelectedChordPitchInfo | null>(null)
   const playbackTimelineRef = useRef<MeasureTimeEntry[]>([])
   const playbackCursorElRef = useRef<HTMLDivElement>(null)
   const shiftHeldRef = useRef(false)
@@ -566,7 +673,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     lastEnteredPitch, selectedNoteId, selectedNoteIds, selectedAnchorId,
     dispatch, dispatchBatch, setInputMode,
     setSelectedDuration, setIsDotted, toggleDot, setPrimedAccidental,
-    setCursor, setLastEnteredPitch,
+    setCursor, afterNoteInput,
     setSelectedNote, setSelectedNotes, toggleSelectedNote, clearSelection,
     selectedChordPitchIndex, setSelectedChordPitch,
     setSelectedBarline,
@@ -575,7 +682,6 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     keyboardVisible, toggleKeyboard,
     soundOnInput, audioMode,
     pendingResize, resizeError, resizeNote, confirmResize, cancelResize, clearResizeError,
-    insertMeasure,
     setInsertBarsDialogOpen,
     deleteMeasure,
     addHairpin,
@@ -594,6 +700,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
   // ── Articulation state ──────────────────────────────────────────────────────
 
   const selectedEventLocations = useMemo(() => {
+    if (selectedNoteIds.length === 0) return []
     const idSet = new Set(selectedNoteIds)
     const found: { event: NoteEvent; partId: string; staffId: string; measureId: string; voiceId: string }[] = []
     for (const part of score.parts) {
@@ -649,25 +756,31 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     [selectedNoteId, selectedChordPitchIndex]
   )
 
-  // ── Base render effect: full VexFlow re-render ────────────────────────────────
-  // Only fires when score content, zoom, or chord-pitch cycling changes.
-  // Selection, cursor, and bar-selection highlights are drawn by the overlay effect.
+  // ── Base render effect: VexFlow render with row-level incremental updates ──────
+  // Uses one canvas per system row so only the row(s) containing changed measures
+  // need to be re-rendered on note input (typically 1 row out of 8+).
   useEffect(() => {
+    if (!active) {
+      // Reset diff state so the next re-activation triggers a full render
+      prevScoreRef.current  = null
+      prevLayoutsRef.current = []
+      return
+    }
     const canvasArea = canvasAreaRef.current
     if (!canvasArea) return
     const options = getRenderOptions(zoom, score.showPartLabels)
 
-    const layouts = computeLayout(score, options)
-    const sliceOffsets = computeSliceOffsets(layouts, options)
+    const layouts   = computeLayout(score, options)
+    const rowOffsets = computeRowSliceOffsets(layouts)  // one offset per system row
     const totalHeight = computeTotalHeight(layouts, options)
 
-    // Sync canvas element count to slice count
+    // Sync canvas count to row count
     const existingCanvases = Array.from(canvasArea.childNodes)
       .filter((n): n is HTMLCanvasElement => n instanceof HTMLCanvasElement)
-    while (existingCanvases.length > sliceOffsets.length) {
+    while (existingCanvases.length > rowOffsets.length) {
       canvasArea.removeChild(existingCanvases.pop()!)
     }
-    while (existingCanvases.length < sliceOffsets.length) {
+    while (existingCanvases.length < rowOffsets.length) {
       const c = document.createElement('canvas')
       c.style.display = 'block'
       const firstNonCanvas = Array.from(canvasArea.childNodes)
@@ -677,25 +790,83 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       existingCanvases.push(c)
     }
 
-    const slices: CanvasSlice[] = existingCanvases.map((canvas, i) => ({
+    const allSlices: CanvasSlice[] = existingCanvases.map((canvas, i) => ({
       canvas,
-      yOffset: sliceOffsets[i],
-      height: (sliceOffsets[i + 1] ?? totalHeight) - sliceOffsets[i],
+      yOffset: rowOffsets[i],
+      height: (rowOffsets[i + 1] ?? totalHeight) - rowOffsets[i],
     }))
-    canvasSlicesRef.current = slices
+    canvasSlicesRef.current = allSlices
 
-    const result = renderScoreMulti(slices, score, options, chordPitchInfo, layouts)
-    notePositionsRef.current    = result.notePositions
-    noteStartXRef.current       = result.noteStartX
-    noteToMeasureKeyRef.current = result.noteToMeasureKey
-    layoutsRef.current          = result.layouts
-  }, [score, zoom, chordPitchInfo])
+    // ── Incremental render: detect which rows contain changed measures ───────────
+    const prevScore   = prevScoreRef.current
+    const prevLayouts = prevLayoutsRef.current
+    prevScoreRef.current   = score
+    prevLayoutsRef.current = layouts
+
+    let slicesToRender = allSlices
+    let useExistingMaps = false
+
+    if (
+      prevScore !== null &&
+      prevScore !== score &&
+      zoom === prevZoomRef.current &&
+      chordPitchInfo === prevChordPitchRef.current &&
+      prevLayouts.length === layouts.length &&
+      // Quick check: did any measure's position shift? If so, full re-render.
+      !layouts.some((l, i) => l.systemRow !== prevLayouts[i]?.systemRow || l.x !== prevLayouts[i]?.x)
+    ) {
+      // Find measures that changed using Immer's structural sharing
+      const changedMeasureIds = new Set<string>()
+      let structuralChange = false
+
+      outer: for (let pi = 0; pi < score.parts.length; pi++) {
+        const newPart = score.parts[pi]
+        const oldPart = prevScore.parts[pi]
+        if (!oldPart) { structuralChange = true; break }
+        for (let si = 0; si < newPart.staves.length; si++) {
+          const newStaff = newPart.staves[si]
+          const oldStaff = oldPart.staves[si]
+          if (!oldStaff || newStaff.measures.length !== oldStaff.measures.length) { structuralChange = true; break outer }
+          for (let mi = 0; mi < newStaff.measures.length; mi++) {
+            if (newStaff.measures[mi] !== oldStaff.measures[mi]) changedMeasureIds.add(newStaff.measures[mi].id)
+          }
+        }
+      }
+
+      if (!structuralChange && changedMeasureIds.size > 0) {
+        // Map changed measureIds to systemRow indices
+        const changedRows = new Set<number>()
+        for (const l of layouts) {
+          if (changedMeasureIds.has(l.measureId)) changedRows.add(l.systemRow)
+        }
+        // slicesToRender = only the canvases for changed rows
+        slicesToRender = allSlices.filter((_, i) => changedRows.has(i))
+        useExistingMaps = true
+      }
+    }
+    prevZoomRef.current        = zoom
+    prevChordPitchRef.current  = chordPitchInfo
+
+    const result = renderScoreMulti(
+      slicesToRender, score, options, chordPitchInfo, layouts,
+      useExistingMaps
+        ? { notePositions: notePositionsRef.current, noteStartX: noteStartXRef.current, noteToMeasureKey: noteToMeasureKeyRef.current }
+        : undefined,
+    )
+    if (!useExistingMaps) {
+      notePositionsRef.current    = result.notePositions
+      noteStartXRef.current       = result.noteStartX
+      noteToMeasureKeyRef.current = result.noteToMeasureKey
+    }
+    layoutsRef.current = result.layouts
+  }, [score, zoom, chordPitchInfo, active])
 
   // ── Overlay effect: selection/cursor highlights ───────────────────────────────
   // Redraws only the cheap Canvas2D overlay; VexFlow base render is untouched.
   // Also runs after the base effect (both score and zoom are in deps) so overlay
   // canvases are always re-synced when base canvases are recreated.
   useEffect(() => {
+    if (!active) return
     const canvasArea = canvasAreaRef.current
     const overlayArea = overlayCanvasAreaRef.current
     if (!canvasArea || !overlayArea) return
@@ -713,6 +884,30 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       c.style.display = 'block'
       overlayArea.appendChild(c)
       overlayCanvases.push(c)
+    }
+
+    // Sync preview canvas count and dimensions with base (preview is drawn per-mousemove)
+    const previewArea = previewCanvasAreaRef.current
+    if (previewArea) {
+      const previewCanvases = Array.from(previewArea.childNodes)
+        .filter((n): n is HTMLCanvasElement => n instanceof HTMLCanvasElement)
+      while (previewCanvases.length > baseCanvases.length) previewArea.removeChild(previewCanvases.pop()!)
+      while (previewCanvases.length < baseCanvases.length) {
+        const c = document.createElement('canvas')
+        c.style.display = 'block'
+        previewArea.appendChild(c)
+        previewCanvases.push(c)
+      }
+      for (let i = 0; i < baseCanvases.length; i++) {
+        const base = baseCanvases[i]
+        const preview = previewCanvases[i]
+        if (preview.width !== base.width || preview.height !== base.height) {
+          preview.width  = base.width
+          preview.height = base.height
+        }
+        if (preview.style.width  !== base.style.width)  preview.style.width  = base.style.width
+        if (preview.style.height !== base.style.height) preview.style.height = base.style.height
+      }
     }
 
     const slices = canvasSlicesRef.current
@@ -748,7 +943,14 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         cursor, selectedMeasureId, lyricCursorNoteId, inputMode === 'select' ? barSelection : null,
       )
     }
-  }, [score, zoom, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId, barSelection, inputMode, isPlaying])
+  }, [score, zoom, selectedNoteIds, cursorMeasureId, cursorBeatPosition, selectedMeasureId, lyricCursorNoteId, barSelection, inputMode, isPlaying, active])
+
+  // Clear note-input preview when leaving note/rest mode
+  useEffect(() => {
+    if (inputMode !== 'note' && inputMode !== 'rest' && previewCanvasAreaRef.current) {
+      clearNoteInputPreview(previewCanvasAreaRef.current)
+    }
+  }, [inputMode])
 
   // ── Playback cursor ──────────────────────────────────────────────────────────
 
@@ -897,17 +1099,13 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
             const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
             triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
           }
-          setPrimedAccidental(null)
-          setLastEnteredPitch(noteWithDot.pitch)
-          setSelectedMeasure(null)
           const newBeat = cursorBeatPosition + units
           if (newBeat >= capacity) {
             const measureIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
             const nextMeasure = staff.measures[measureIdx + 1]
-            if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
-            else             setCursor(null, 0)
+            afterNoteInput(nextMeasure?.id ?? null, nextMeasure ? firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []) : 0, noteWithDot.pitch)
           } else {
-            setCursor(cursorMeasureId, newBeat)
+            afterNoteInput(cursorMeasureId, newBeat, noteWithDot.pitch)
           }
           return
         }
@@ -966,20 +1164,16 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
               : (newEvent as Note).pitch
             triggerInputPreview(previewPitch.noteName, previewPitch.octave, previewPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
           }
-          setPrimedAccidental(null)
           const lastPitch = newEvent.type === 'chord'
             ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
             : (newEvent as Note).pitch
-          setLastEnteredPitch(lastPitch)
-          setSelectedMeasure(null)
           const newBeat = cursorBeatPosition + units
           if (newBeat >= capacity) {
             const measureIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
             const nextMeasure = staff.measures[measureIdx + 1]
-            if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
-            else             setCursor(null, 0)
+            afterNoteInput(nextMeasure?.id ?? null, nextMeasure ? firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []) : 0, lastPitch)
           } else {
-            setCursor(cursorMeasureId, newBeat)
+            afterNoteInput(cursorMeasureId, newBeat, lastPitch)
           }
           return
         }
@@ -1022,31 +1216,21 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
         }
 
-        setPrimedAccidental(null)
-        setLastEnteredPitch(noteWithDot.pitch)
-        setSelectedMeasure(null)
-
         // Advance cursor
         const newBeat = cursorBeatPosition + units
         if (newBeat >= capacity) {
           const measureIdx  = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const nextMeasure = staff.measures[measureIdx + 1]
-          if (nextMeasure) {
-            const nextVoice = nextMeasure.voices[activeVoice]
-            setCursor(nextMeasure.id, firstRestBeat(nextVoice?.events ?? []))
-          } else {
-            setCursor(null, 0)
-          }
+          afterNoteInput(nextMeasure?.id ?? null, nextMeasure ? firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []) : 0, noteWithDot.pitch)
         } else {
-          setCursor(cursorMeasureId, newBeat)
+          afterNoteInput(cursorMeasureId, newBeat, noteWithDot.pitch)
         }
         return
       }
     }
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
       primedAccidental, lastEnteredPitch, activeVoice, dispatch, dispatchBatch,
-      setPrimedAccidental, setLastEnteredPitch, setCursor, setSelectedMeasure,
-      soundOnInput, audioMode])
+      afterNoteInput, soundOnInput, audioMode])
 
   // Explicit-octave variant used by virtual keyboard and MIDI input
   const enterNoteAtPitch = useCallback((noteName: NoteName, octave: number, accidental?: Accidental) => {
@@ -1086,16 +1270,13 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
             const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
             triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
           }
-          setLastEnteredPitch(noteWithDot.pitch)
-          setSelectedMeasure(null)
           const newBeat = cursorBeatPosition + units
           if (newBeat >= capacity) {
             const mIdx        = staff.measures.findIndex(m => m.id === cursorMeasureId)
             const nextMeasure = staff.measures[mIdx + 1]
-            if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
-            else             setCursor(null, 0)
+            afterNoteInput(nextMeasure?.id ?? null, nextMeasure ? firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []) : 0, noteWithDot.pitch)
           } else {
-            setCursor(cursorMeasureId, newBeat)
+            afterNoteInput(cursorMeasureId, newBeat, noteWithDot.pitch)
           }
           return
         }
@@ -1132,9 +1313,8 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
               const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
               triggerInputPreview(newPitch.noteName, newPitch.octave, newPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
             }
-            setLastEnteredPitch(newPitch)
-            setSelectedMeasure(null)
-            // cursor stays — no setCursor call
+            // cursor stays — only update pitch/accidental state
+            afterNoteInput(cursorMeasureId, cursorBeatPosition, newPitch)
             return
           }
 
@@ -1156,15 +1336,12 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
             const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
             triggerInputPreview(newEvent.pitch.noteName, newEvent.pitch.octave, newEvent.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
           }
-          setLastEnteredPitch(newEvent.pitch)
-          setSelectedMeasure(null)
           const newBeat = cursorBeatPosition + units
           if (newBeat >= capacity) {
             const nextMeasure = staff.measures[mIdx + 1]
-            if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
-            else             setCursor(null, 0)
+            afterNoteInput(nextMeasure?.id ?? null, nextMeasure ? firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []) : 0, newEvent.pitch)
           } else {
-            setCursor(cursorMeasureId, newBeat)
+            afterNoteInput(cursorMeasureId, newBeat, newEvent.pitch)
           }
           return
         }
@@ -1202,22 +1379,19 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
           triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
         }
-        setLastEnteredPitch(noteWithDot.pitch)
-        setSelectedMeasure(null)
         const newBeat = cursorBeatPosition + units
         if (newBeat >= capacity) {
           const mIdx        = staff.measures.findIndex(m => m.id === cursorMeasureId)
           const nextMeasure = staff.measures[mIdx + 1]
-          if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
-          else             setCursor(null, 0)
+          afterNoteInput(nextMeasure?.id ?? null, nextMeasure ? firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []) : 0, noteWithDot.pitch)
         } else {
-          setCursor(cursorMeasureId, newBeat)
+          afterNoteInput(cursorMeasureId, newBeat, noteWithDot.pitch)
         }
         return
       }
     }
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted, activeVoice,
-      noteInputMode, dispatch, dispatchBatch, setLastEnteredPitch, setCursor, setInputMode, setSelectedMeasure,
+      noteInputMode, dispatch, dispatchBatch, afterNoteInput, setInputMode,
       soundOnInput, audioMode])
 
   // Multi-pitch variant for chord entry from MIDI
@@ -1271,9 +1445,9 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
               const top = merged[merged.length - 1]
               triggerInputPreview(top.noteName, top.octave, top.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
             }
-            setLastEnteredPitch(merged[merged.length - 1])
-            setSelectedMeasure(null)
-            return  // cursor stays
+            // cursor stays — only update pitch/accidental state
+            afterNoteInput(cursorMeasureId, cursorBeatPosition, merged[merged.length - 1])
+            return
           }
 
           // Overwrite mode: replace with new chord at selected duration
@@ -1294,16 +1468,13 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
             const top = newPitches[newPitches.length - 1]
             triggerInputPreview(top.noteName, top.octave, top.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
           }
-          setLastEnteredPitch(newPitches[newPitches.length - 1])
-          setSelectedMeasure(null)
           const capacity2 = measureCapacityUnits(timeSig)
           const newBeat2  = cursorBeatPosition + units
           if (newBeat2 >= capacity2) {
             const nextMeasure = staff.measures[mIdx + 1]
-            if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
-            else             setCursor(null, 0)
+            afterNoteInput(nextMeasure?.id ?? null, nextMeasure ? firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []) : 0, newPitches[newPitches.length - 1])
           } else {
-            setCursor(cursorMeasureId, newBeat2)
+            afterNoteInput(cursorMeasureId, newBeat2, newPitches[newPitches.length - 1])
           }
           return
         }
@@ -1333,22 +1504,19 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           const top = newPitches[newPitches.length - 1]
           triggerInputPreview(top.noteName, top.octave, top.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
         }
-        setLastEnteredPitch(newPitches[newPitches.length - 1])
-        setSelectedMeasure(null)
         const newBeat  = cursorBeatPosition + units
         const capacity = measureCapacityUnits(timeSig)
         if (newBeat >= capacity) {
           const nextMeasure = staff.measures[mIdx + 1]
-          if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
-          else             setCursor(null, 0)
+          afterNoteInput(nextMeasure?.id ?? null, nextMeasure ? firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []) : 0, newPitches[newPitches.length - 1])
         } else {
-          setCursor(cursorMeasureId, newBeat)
+          afterNoteInput(cursorMeasureId, newBeat, newPitches[newPitches.length - 1])
         }
         return
       }
     }
   }, [score, cursorMeasureId, cursorBeatPosition, activeVoice, selectedDuration, isDotted,
-      noteInputMode, dispatch, dispatchBatch, setLastEnteredPitch, setCursor, setInputMode, setSelectedMeasure,
+      noteInputMode, dispatch, dispatchBatch, afterNoteInput, setInputMode,
       soundOnInput, audioMode])
 
   // ── Chord assembly buffer for MIDI input ─────────────────────────────────────
@@ -1981,6 +2149,26 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
   // ── Keyboard handler ────────────────────────────────────────────────────────
 
+  // Ref holding all volatile state/callbacks used by the keyboard handler.
+  // Updated on every render so the listener never needs to be re-registered.
+  const kbRef = useRef({
+    inputMode, score, selectedNoteId, selectedNoteIds, slurPendingId, selectedMeasureId,
+    barSelection, clipboard,
+    enterNote, enterRest, deleteSelectedNotes, nudgeOctave,
+    moveSelectedNotes, navigateSelection, moveCursorByEvent, selectAllInMeasure,
+    toggleTie, handleSlurKey, insertTuplet,
+  })
+  // useLayoutEffect with no deps runs after every commit, before paint — always current.
+  useLayoutEffect(() => {
+    kbRef.current = {
+      inputMode, score, selectedNoteId, selectedNoteIds, slurPendingId, selectedMeasureId,
+      barSelection, clipboard,
+      enterNote, enterRest, deleteSelectedNotes, nudgeOctave,
+      moveSelectedNotes, navigateSelection, moveCursorByEvent, selectAllInMeasure,
+      toggleTie, handleSlurKey, insertTuplet,
+    }
+  })
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       // Skip if user is typing in an input or a rich-text editor
@@ -1988,10 +2176,18 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
       if ((e.target as HTMLElement).isContentEditable) return
 
+      const {
+        inputMode, score, selectedNoteId, selectedNoteIds, selectedMeasureId,
+        barSelection, clipboard,
+        enterNote, enterRest, deleteSelectedNotes, nudgeOctave,
+        moveSelectedNotes, navigateSelection, moveCursorByEvent, selectAllInMeasure,
+        toggleTie, handleSlurKey, insertTuplet,
+      } = kbRef.current
+
       const mod = e.metaKey || e.ctrlKey
 
       // During playback: allow escape/select-mode switch and navigation; block mutations
-      if (isPlaying) {
+      if (isPlayingRef.current) {
         if (e.key === 'Escape') { setInputMode('select'); setSlurPendingId(null); setSelectedMeasure(null); setBarSelection(null); setSelectionMenuPos(null); setSeqAssignMenu(null); return }
         if (!mod && (e.key === 's' || e.key === 'S')) { setInputMode('select'); return }
         if (!mod && (e.key === 'k' || e.key === 'K')) { toggleKeyboard(); return }
@@ -2171,17 +2367,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [
-    inputMode, score, selectedNoteId, selectedNoteIds, slurPendingId,
-    enterNote, enterRest, deleteSelectedNotes, nudgeOctave,
-    moveSelectedNotes, navigateSelection, moveCursorByEvent, selectAllInMeasure,
-    toggleTie, handleSlurKey,
-    setInputMode, setSelectedDuration, toggleDot, resizeNote, setPrimedAccidental, dispatch, dispatchBatch, toggleKeyboard,
-    insertMeasure, setInsertBarsDialogOpen, deleteMeasure, selectedMeasureId, insertTuplet,
-    barSelection, deleteSelectedBars, setBarSelection,
-    clipboard, copySelection, cutSelection, pasteClipboard,
-    isPlaying,
-  ])
+  }, [])  // empty deps — reads volatile state via kbRef, registered once
 
   // Set cursor when first entering note/rest mode
   useEffect(() => {
@@ -2211,10 +2397,12 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     const canvas = canvasAreaRef.current
     if (!canvas) return
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
+    // Convert to absolute score Y so comparisons against layout coords (staveTopY etc.) are correct
+    const absCanvasY = canvasY + (canvasSlicesRef.current[0]?.yOffset ?? 0)
 
     // ── Shift+hover: chord-building indicator (note mode only) ─────────────
     if (inputMode === 'note' && shiftHeldRef.current) {
-      const layout = findClickedLayout(canvasX, canvasY, layoutsRef.current)
+      const layout = findClickedLayout(canvasX, absCanvasY, layoutsRef.current)
       if (layout) {
         const part    = score.parts.find(p => p.id === layout.partId)
         const staff   = part?.staves.find(s => s.id === layout.staffId)
@@ -2238,14 +2426,16 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
     // ── Hover cursor: note/rest insertion mode ──────────────────────────────
     if (inputMode === 'note' || inputMode === 'rest') {
-      const layout = findClickedLayout(canvasX, canvasY, layoutsRef.current)
+      const layout = findClickedLayout(canvasX, absCanvasY, layoutsRef.current)
       if (!layout) {
         if (hoverCursor !== 'default') setHoverCursor('default')
+        if (previewCanvasAreaRef.current) clearNoteInputPreview(previewCanvasAreaRef.current)
         return
       }
       const part    = score.parts.find(p => p.id === layout.partId)
       if (part?.inputMode === 'sequencer') {
         if (hoverCursor !== 'default') setHoverCursor('default')
+        if (previewCanvasAreaRef.current) clearNoteInputPreview(previewCanvasAreaRef.current)
         return
       }
       const staff   = part?.staves.find(s => s.id === layout.staffId)
@@ -2258,12 +2448,30 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       const hasRest = voiceEvents.length === 0 || voiceEvents.some(e => e.type === 'rest')
       const next = hasRest ? 'valid' : 'invalid'
       if (hoverCursor !== next) setHoverCursor(next)
+
+      // Draw preview on the preview canvas layer
+      if (previewCanvasAreaRef.current && canvasSlicesRef.current.length > 0) {
+        if (hasRest) {
+          drawNoteInputPreview(
+            previewCanvasAreaRef.current,
+            canvasSlicesRef.current,
+            layout,
+            canvasX,
+            absCanvasY,
+            notePositionsRef.current,
+            voiceEvents,
+            inputMode === 'note',
+          )
+        } else {
+          clearNoteInputPreview(previewCanvasAreaRef.current)
+        }
+      }
       return
     }
 
     // ── Hover cursor: select mode ───────────────────────────────────────────
     if (inputMode === 'select') {
-      const layout = findClickedLayout(canvasX, canvasY, layoutsRef.current)
+      const layout = findClickedLayout(canvasX, absCanvasY, layoutsRef.current)
       if (layout) {
         const part    = score.parts.find(p => p.id === layout.partId)
         const staff   = part?.staves.find(s => s.id === layout.staffId)
@@ -2291,7 +2499,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         const staveBottom = l.staveTopY + STAVE_HEIGHT_PX
         return (
           canvasX >= l.x && canvasX <= l.x + l.width &&
-          canvasY >= staveBottom + 2 && canvasY <= staveBottom + PEDAL_BASE_BELOW_STAVE + 42
+          absCanvasY >= staveBottom + 2 && absCanvasY <= staveBottom + PEDAL_BASE_BELOW_STAVE + 42
         )
       })
       const next = overMidiZone ? 'valid' : 'default'
@@ -2310,9 +2518,11 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
 
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
     const options = getRenderOptions(zoom, score.showPartLabels)
+    // Convert canvas-local Y to absolute score Y for comparisons against layout coords
+    const absCanvasY = canvasY + (canvasSlicesRef.current[0]?.yOffset ?? 0)
 
-    // ── Heading area (above all staves) ─────────────────────────────────────
-    if (canvasY < HEADING_MARGIN_Y) {
+    // ── Heading area (above the first stave, within VEXFLOW_HEADROOM_PX of canvas top) ─
+    if (canvasY < VEXFLOW_HEADROOM_PX) {
       const bounds = headingFieldBounds(options.canvasWidth, options.marginX)
       const hit = bounds.find(b =>
         canvasX >= b.x && canvasX <= b.x + b.width &&
@@ -2328,7 +2538,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     if (inputMode === 'text' && !isPlaying) for (const l of layouts) {
       if (
         canvasX >= l.x && canvasX <= l.x + l.width &&
-        canvasY >= l.staveY && canvasY < l.staveTopY
+        absCanvasY >= l.staveY && absCanvasY < l.staveTopY
       ) {
         const part  = score.parts.find(p => p.id === l.partId)
         if (part?.inputMode === 'sequencer') continue
@@ -2355,7 +2565,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       const staveBottom = l.staveTopY + STAVE_HEIGHT_PX
       if (
         canvasX >= l.x && canvasX <= l.x + l.width &&
-        canvasY >= staveBottom + 2 && canvasY <= staveBottom + PEDAL_BASE_BELOW_STAVE + 20
+        absCanvasY >= staveBottom + 2 && absCanvasY <= staveBottom + PEDAL_BASE_BELOW_STAVE + 20
       ) {
         const part  = score.parts.find(p => p.id === l.partId)
         if (part?.inputMode === 'sequencer') continue
@@ -2394,7 +2604,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       const staveBottom = l.staveTopY + STAVE_HEIGHT_PX
       if (
         canvasX >= l.x && canvasX <= l.x + l.width &&
-        canvasY >= staveBottom + 2 && canvasY <= staveBottom + PEDAL_BASE_BELOW_STAVE + 42
+        absCanvasY >= staveBottom + 2 && absCanvasY <= staveBottom + PEDAL_BASE_BELOW_STAVE + 42
       ) {
         const part  = score.parts.find(p => p.id === l.partId)
         const staff = part?.staves.find(s => s.id === l.staffId)
@@ -2429,7 +2639,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     if (inputMode === 'lyric') {
       for (const l of layouts) {
         const lyricY = l.staveTopY + LYRIC_Y_OFFSET
-        if (Math.abs(canvasY - lyricY) > 14) continue
+        if (Math.abs(absCanvasY - lyricY) > 14) continue
         const lPart   = score.parts.find(p => p.id === l.partId)
         const lStaff  = lPart?.staves.find(s => s.id === l.staffId)
         const lMeasure = lStaff?.measures.find(m => m.id === l.measureId)
@@ -2452,7 +2662,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       }
     }
 
-    const layout  = findClickedLayout(canvasX, canvasY, layouts)
+    const layout  = findClickedLayout(canvasX, absCanvasY, layouts)
     if (!layout) {
       // Clicked outside all measures — clear all selections and context menus
       clearSelection()
@@ -2495,7 +2705,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
             if (ev.type === 'note' || ev.type === 'chord') {
               if (event.shiftKey) {
                 // Shift+click: build chord or change duration on this note
-                const step      = yToStep(canvasY, layout.staveTopY, LINE_SPACING_PX)
+                const step      = yToStep(absCanvasY, layout.staveTopY, LINE_SPACING_PX)
                 const pitchInfo = stepToPitch(step, layout.clef)
                 const clickAccidental = primedAccidental as Accidental
                 const existingEvent = ev
@@ -2542,19 +2752,16 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
                     : (newEvent as Note).pitch
                   triggerInputPreview(previewPitch.noteName, previewPitch.octave, previewPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
                 }
-                setPrimedAccidental(null)
                 const lastPitch = newEvent.type === 'chord'
                   ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
                   : (newEvent as Note).pitch
-                setLastEnteredPitch(lastPitch)
                 const newBeat = beatAcc + units
                 if (newBeat >= capacity) {
                   const mIdx = staff!.measures.findIndex(m => m.id === layout.measureId)
                   const nextMeasure = staff!.measures[mIdx + 1]
-                  if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
-                  else             setCursor(null, 0)
+                  afterNoteInput(nextMeasure?.id ?? null, nextMeasure ? firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []) : 0, lastPitch)
                 } else {
-                  setCursor(layout.measureId, newBeat)
+                  afterNoteInput(layout.measureId, newBeat, lastPitch)
                 }
               } else {
                 // Plain click: position cursor at this note for chord-building via keyboard
@@ -2563,7 +2770,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
               return
             }
             if (ev.type === 'rest') {
-              const step      = yToStep(canvasY, layout.staveTopY, LINE_SPACING_PX)
+              const step      = yToStep(absCanvasY, layout.staveTopY, LINE_SPACING_PX)
               const pitchInfo = stepToPitch(step, layout.clef)
               const accidental = primedAccidental as Accidental
               const note        = createNote(pitchInfo.noteName, pitchInfo.octave, selectedDuration, accidental)
@@ -2580,16 +2787,13 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
                 const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
                 triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
               }
-              setPrimedAccidental(null)
-              setLastEnteredPitch(noteWithDot.pitch)
               const newBeat = beatAcc + units
               if (newBeat >= capacity) {
                 const mIdx = staff!.measures.findIndex(m => m.id === layout.measureId)
                 const nextMeasure = staff!.measures[mIdx + 1]
-                if (nextMeasure) setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
-                else             setCursor(null, 0)
+                afterNoteInput(nextMeasure?.id ?? null, nextMeasure ? firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []) : 0, noteWithDot.pitch)
               } else {
-                setCursor(layout.measureId, newBeat)
+                afterNoteInput(layout.measureId, newBeat, noteWithDot.pitch)
               }
               return
             }
@@ -2603,7 +2807,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       if (freeAt >= capacity) return
       setCursor(layout.measureId, freeAt)
 
-      const step      = yToStep(canvasY, layout.staveTopY, LINE_SPACING_PX)
+      const step      = yToStep(absCanvasY, layout.staveTopY, LINE_SPACING_PX)
       const pitchInfo = stepToPitch(step, layout.clef)
       if (remainingUnits(voiceEvents, timeSig) < units) return
 
@@ -2643,20 +2847,13 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         }
       }
 
-      setPrimedAccidental(null)
-      setLastEnteredPitch(noteWithDot.pitch)
-
       const newBeat = freeAt + units
       if (newBeat >= capacity) {
         const measureIdx  = staff!.measures.findIndex(m => m.id === layout.measureId)
         const nextMeasure = staff!.measures[measureIdx + 1]
-        if (nextMeasure) {
-          setCursor(nextMeasure.id, firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []))
-        } else {
-          setCursor(null, 0)
-        }
+        afterNoteInput(nextMeasure?.id ?? null, nextMeasure ? firstRestBeat(nextMeasure.voices[activeVoice]?.events ?? []) : 0, noteWithDot.pitch)
       } else {
-        setCursor(layout.measureId, newBeat)
+        afterNoteInput(layout.measureId, newBeat, noteWithDot.pitch)
       }
       return
     }
@@ -2718,7 +2915,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         if (
           l.showClef &&
           canvasX >= l.x && canvasX <= l.x + CLEF_HIT_WIDTH &&
-          canvasY >= l.staveTopY - 20 && canvasY <= l.staveTopY + STAVE_HEIGHT + 20 &&
+          absCanvasY >= l.staveTopY - 20 && absCanvasY <= l.staveTopY + STAVE_HEIGHT + 20 &&
           score.parts.find(p => p.id === l.partId)?.inputMode !== 'sequencer'
         ) {
           if (isPlaying) return
@@ -2740,7 +2937,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       for (const l of layouts) {
         if (
           canvasX >= l.x && canvasX <= l.x + 90 &&
-          canvasY >= l.staveTopY - 30 && canvasY <= l.staveTopY + STAVE_HEIGHT + 30
+          absCanvasY >= l.staveTopY - 30 && absCanvasY <= l.staveTopY + STAVE_HEIGHT + 30
         ) {
           const part  = score.parts.find(p => p.id === l.partId)
           if (part?.inputMode === 'sequencer') continue
@@ -2775,7 +2972,7 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
       for (const l of layouts) {
         if (
           canvasX >= l.x && canvasX <= l.x + 70 &&
-          canvasY >= l.staveTopY - 30 && canvasY <= l.staveTopY + STAVE_HEIGHT + 30
+          absCanvasY >= l.staveTopY - 30 && absCanvasY <= l.staveTopY + STAVE_HEIGHT + 30
         ) {
           const part  = score.parts.find(p => p.id === l.partId)
           if (part?.inputMode === 'sequencer') continue
@@ -2819,8 +3016,8 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
         const barlineCanvasX = l.x + l.width
         if (
           Math.abs(canvasX - barlineCanvasX) <= BARLINE_HIT_RADIUS &&
-          canvasY >= l.staveTopY - 30 &&
-          canvasY <= l.staveTopY + STAVE_HEIGHT + 30
+          absCanvasY >= l.staveTopY - 30 &&
+          absCanvasY <= l.staveTopY + STAVE_HEIGHT + 30
         ) {
           const part  = score.parts.find(p => p.id === l.partId)
           const staff = part?.staves.find(s => s.id === l.staffId)
@@ -3018,9 +3215,10 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
     const canvas = canvasAreaRef.current
     if (!canvas) return
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
+    const absCanvasY = canvasY + (canvasSlicesRef.current[0]?.yOffset ?? 0)
     // Don't create a text box if we're in the heading area or on notation
-    if (canvasY < HEADING_MARGIN_Y) return
-    const layout  = findClickedLayout(canvasX, canvasY, layoutsRef.current)
+    if (canvasY < VEXFLOW_HEADROOM_PX) return
+    const layout  = findClickedLayout(canvasX, absCanvasY, layoutsRef.current)
     if (layout) return  // clicked on a stave — not empty space
     const box = makeTextBox(canvasX / zoom, canvasY / zoom)
     dispatch({ type: 'ADD_TEXT_BOX', box })
@@ -3214,12 +3412,21 @@ export function ScoreCanvas({ onOpenSequencer }: ScoreCanvasProps = {}): JSX.Ele
           onClick={handleCanvasClick}
           onDoubleClick={handleCanvasDblClick}
           onMouseMove={handleCanvasMouseMove}
-          onMouseLeave={() => { setShiftHoverOnNote(false); setHoverCursor('default') }}
+          onMouseLeave={() => {
+            setShiftHoverOnNote(false)
+            setHoverCursor('default')
+            if (previewCanvasAreaRef.current) clearNoteInputPreview(previewCanvasAreaRef.current)
+          }}
           style={{ cursor: cursorStyle, display: 'block' }}
         />
         {/* Overlay canvas layer: selection/cursor highlights drawn without VexFlow */}
         <div
           ref={overlayCanvasAreaRef}
+          style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', display: 'block' }}
+        />
+        {/* Preview canvas layer: note-input ghost head / beat column drawn per-mousemove */}
+        <div
+          ref={previewCanvasAreaRef}
           style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', display: 'block' }}
         />
         <TextBoxLayer zoom={zoom} />

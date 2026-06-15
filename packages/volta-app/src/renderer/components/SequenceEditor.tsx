@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useAppStore } from '../store/appStore'
 import { v4 as uuid } from 'uuid'
 import type { SequencePattern } from '@shared/score'
@@ -151,6 +151,19 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
 
   const patternHasCells = currentPattern?.steps.some(col => col.length > 0) ?? false
 
+  // Pre-computed O(1) cell lookup — avoids .some() scan on every cell render.
+  const committedCellSet = useMemo(() => {
+    const s = new Set<string>()
+    if (!currentPattern) return s
+    currentPattern.steps.forEach((col, step) => col.forEach(c => s.add(`${step}_${c.pitch}`)))
+    return s
+  }, [currentPattern])
+
+  // Local pending cells during drag — written to the store only on mouseup.
+  // This prevents store updates (and re-renders of ScoreCanvas) on every cell hover.
+  const pendingCellsRef = useRef<Map<string, boolean>>(new Map())
+  const [, setDragTick] = useState(0)
+
   function applyRhythm(rhythm: DrumRhythm): void {
     if (!currentPattern) return
     pushUndoSnapshot()
@@ -174,21 +187,39 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
     pushUndoSnapshot()
     const turningOn = !currentlyOn
     dragRef.current = { on: turningOn }
-    dispatchSilent({ type: 'SET_SEQUENCE_CELL', partId, patternId: currentPattern.id, step, pitch, on: turningOn })
+    pendingCellsRef.current = new Map([[`${step}_${pitch}`, turningOn]])
+    setDragTick(t => t + 1)
     if (turningOn) previewCell(pitch)
-  }, [currentPattern, partId, dispatchSilent, pushUndoSnapshot, previewCell])
+  }, [currentPattern, pushUndoSnapshot, previewCell])
 
   const handleCellMouseEnter = useCallback((step: number, pitch: number) => {
     if (!dragRef.current || !currentPattern) return
-    dispatchSilent({ type: 'SET_SEQUENCE_CELL', partId, patternId: currentPattern.id, step, pitch, on: dragRef.current.on })
+    const key = `${step}_${pitch}`
+    const already = pendingCellsRef.current.get(key)
+    if (already === dragRef.current.on) return
+    pendingCellsRef.current.set(key, dragRef.current.on)
+    setDragTick(t => t + 1)
     if (dragRef.current.on) previewCell(pitch)
-  }, [currentPattern, partId, dispatchSilent, previewCell])
+  }, [currentPattern, previewCell])
 
   useEffect(() => {
-    const up = () => { dragRef.current = null }
+    const up = () => {
+      if (!dragRef.current) return
+      dragRef.current = null
+      if (pendingCellsRef.current.size === 0) return
+      const pending = pendingCellsRef.current
+      pendingCellsRef.current = new Map()
+      const patId = currentPattern?.id
+      if (!patId) return
+      // Flush all pending cells to the store in one synchronous burst on mouseup.
+      for (const [key, on] of pending) {
+        const [step, pitch] = key.split('_').map(Number)
+        dispatchSilent({ type: 'SET_SEQUENCE_CELL', partId, patternId: patId, step, pitch, on })
+      }
+    }
     document.addEventListener('mouseup', up)
     return () => document.removeEventListener('mouseup', up)
-  }, [])
+  }, [currentPattern, partId, dispatchSilent])
 
   useEffect(() => {
     if (!rhythmPickerOpen) return
@@ -204,8 +235,10 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
   const rows = isDrum ? DRUM_NOTES : buildPianoRows(PIANO_LO, PIANO_HI)
 
   function isCellOn(step: number, pitch: number): boolean {
-    if (!currentPattern?.steps[step]) return false
-    return currentPattern.steps[step].some(c => c.pitch === pitch)
+    const key = `${step}_${pitch}`
+    const pending = pendingCellsRef.current.get(key)
+    if (pending !== undefined) return pending
+    return committedCellSet.has(key)
   }
 
   const isFirstPattern = patternIdx <= 0

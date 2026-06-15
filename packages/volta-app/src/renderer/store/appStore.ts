@@ -176,6 +176,7 @@ export interface AppState {
   setCursor: (measureId: string | null, beatPosition: number) => void
   requestScrollToCursor: () => void
   setLastEnteredPitch: (pitch: Pitch | null) => void
+  afterNoteInput: (cursorMeasureId: string | null, cursorBeatPosition: number, lastPitch: Pitch | null) => void
   moveCursorToFirstAvailable: () => void
   checkAndAutoAddBar: () => void
   insertMeasure: (opts?: { count?: number; position?: 'after-cursor' | 'end'; partId?: string | null }) => void
@@ -909,6 +910,13 @@ export const useAppStore = create<AppState>()(
     }),
     requestScrollToCursor: () => set(s => { s.scrollToCursorToken += 1 }),
     setLastEnteredPitch: (pitch) => set(s => { s.lastEnteredPitch = pitch as any }),
+    afterNoteInput: (cursorMeasureId, cursorBeatPosition, lastPitch) => set(s => {
+      s.primedAccidental = null
+      s.lastEnteredPitch = lastPitch as any
+      s.selectedMeasureId = null
+      s.cursorMeasureId = cursorMeasureId
+      s.cursorBeatPosition = cursorBeatPosition
+    }),
 
     moveCursorToFirstAvailable: () => {
       set(state => {

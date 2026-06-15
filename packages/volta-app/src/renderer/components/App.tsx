@@ -178,7 +178,10 @@ export function App(): JSX.Element {
         {/* Both score/routing views stay mounted — toggle via display to avoid expensive remount renders during playback */}
         <main style={{ flex: 1, overflow: 'auto', display: !sequencerPartId && activeView === 'score' ? 'block' : 'none' }}>
           <div style={{ padding: '24px' }}>
-            <ScoreCanvas onOpenSequencer={(partId, patternId) => { setSequencerPartId(partId); setSequencerPatternId(patternId) }} />
+            <ScoreCanvas
+              onOpenSequencer={(partId, patternId) => { setSequencerPartId(partId); setSequencerPatternId(patternId) }}
+              active={!sequencerPartId && activeView === 'score'}
+            />
           </div>
         </main>
         <main style={{ flex: 1, overflow: 'auto', display: !sequencerPartId && activeView === 'routing' ? 'block' : 'none' }}>

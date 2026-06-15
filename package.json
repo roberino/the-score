@@ -5,9 +5,9 @@
     "packages/*"
   ],
   "scripts": {
-    "dev":       "npm run dev       --workspace=packages/volta-app",
-    "build":     "npm run build     --workspace=packages/volta-app",
-    "test":      "npm run test      --workspace=packages/volta-app",
+    "dev": "npm run dev       --workspace=packages/volta-app",
+    "build": "npm run build     --workspace=packages/volta-app",
+    "test": "npm run test      --workspace=packages/volta-app",
     "typecheck": "npm run typecheck --workspace=packages/volta-app"
   }
 }

@@ -472,7 +472,7 @@ export interface MeasureLayout {
 }
 
 // VexFlow 5 default: spaceAboveStaffLn = 4, spacingBetweenLinesPx = 10
-const VEXFLOW_HEADROOM_PX = 40
+export const VEXFLOW_HEADROOM_PX = 40
 
 export function computeLayout(score: Score, options: RenderOptions): MeasureLayout[] {
   const layouts: MeasureLayout[] = []
