@@ -23,6 +23,7 @@ import {
   type SelectedChordPitchInfo,
 } from '../engine/notationRenderer'
 import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta, type Duration, type MidiScoreEvent, type PedalMark, type SequenceAssignment } from '@shared/score'
+import { DRUM_MAP_BY_PITCH, pitchKey as drumPitchKey } from '@shared/drumMap'
 import { v4 as uuid } from 'uuid'
 import {
   DURATION_UNITS,
@@ -49,6 +50,7 @@ import {
 } from '@shared/musicUtils'
 import { pitchToHz } from '../engine/audioEngine'
 import { previewNote } from '../engine/notePreview'
+import { previewDrumHit } from '../engine/drumSamplerEngine'
 import { noteInputToMidi } from '../services/midiService'
 import { pitchToMidi, midiOutputEngine } from '../engine/midiOutputEngine'
 import { TimeSignaturePicker, TimeSignaturePickerContent } from './TimeSignaturePicker'
@@ -175,6 +177,25 @@ function triggerInputPreview(
   } else {
     const hz = pitchToHz(noteName, octave, accidental ?? null, transposeSemitones)
     void previewNote(hz, volDb, isPizz)
+  }
+}
+
+function triggerDrumInputPreview(
+  pitch: { noteName: string; octave: number; accidental: string | null | undefined },
+  midiDrumNote: number | undefined,
+  volDb: number,
+  audioMode: 'builtin' | 'midi-out',
+  midiChannel: number,
+): void {
+  if (audioMode === 'midi-out') {
+    const midi     = midiDrumNote ?? 38
+    const velocity = Math.max(1, Math.min(127, Math.round(Math.pow(10, volDb / 20) * 100)))
+    midiOutputEngine.previewNote(midi, velocity, midiChannel, 0)
+  } else {
+    const midi = midiDrumNote
+      ?? DRUM_MAP_BY_PITCH.get(drumPitchKey({ ...pitch, accidental: pitch.accidental ?? null } as import('@shared/score').Pitch))?.midiNote
+      ?? 38
+    previewDrumHit(midi, volDb)
   }
 }
 
@@ -643,6 +664,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
   const playbackTimelineRef = useRef<MeasureTimeEntry[]>([])
   const playbackCursorElRef = useRef<HTMLDivElement>(null)
   const shiftHeldRef = useRef(false)
+  const lastDrumHoverKeyRef = useRef<string | null>(null)
   const [shiftHoverOnNote, setShiftHoverOnNote] = useState(false)
   const [hoverCursor, setHoverCursor] = useState<'default' | 'valid' | 'invalid' | 'hand'>('default')
   // Chord pitch cycling: tracks which chord is being cycled and the next pitch index to select
@@ -668,6 +690,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
   const {
     score, zoom, inputMode,
     selectedDuration, isDotted, primedAccidental,
+    selectedNoteheadType, setNoteheadType,
     activeVoice, noteInputMode,
     cursorMeasureId, cursorBeatPosition,
     lastEnteredPitch, selectedNoteId, selectedNoteIds, selectedAnchorId,
@@ -1082,7 +1105,8 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
 
         if (atCursor?.event.type === 'rest') {
           const note        = createNote(noteName, octave, selectedDuration, accidental)
-          const noteWithDot = { ...note, dots } as Note
+          const noteheadExt = selectedNoteheadType !== 'normal' ? { noteheadType: selectedNoteheadType } : {}
+          const noteWithDot = { ...note, dots, ...noteheadExt } as Note
           const result = buildRestReplaceCommands(voiceEvents, atCursor.index, units, noteWithDot, part.id, staff.id, measure.id, existingVoice.id)
           if (!result) {
             canvasAreaRef.current?.classList.add('cursor-reject')
@@ -1097,7 +1121,13 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
             const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
             const partIdx = score.parts.indexOf(part)
             const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+            const hasDrumStave = staff.clef === 'percussion'
+            const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+            if (isDrumPart) {
+              triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
+            } else {
+              triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+            }
           }
           const newBeat = cursorBeatPosition + units
           if (newBeat >= capacity) {
@@ -1162,7 +1192,13 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
             const previewPitch = newEvent.type === 'chord'
               ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
               : (newEvent as Note).pitch
-            triggerInputPreview(previewPitch.noteName, previewPitch.octave, previewPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+            const hasDrumStave = staff.clef === 'percussion'
+            const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+            if (isDrumPart) {
+              triggerDrumInputPreview(previewPitch, undefined, volDb, audioMode, ch)
+            } else {
+              triggerInputPreview(previewPitch.noteName, previewPitch.octave, previewPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+            }
           }
           const lastPitch = newEvent.type === 'chord'
             ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
@@ -1185,7 +1221,8 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
         }
 
         const note        = createNote(noteName, octave, selectedDuration, accidental)
-        const noteWithDot = { ...note, dots } as Note
+        const noteheadExt = selectedNoteheadType !== 'normal' ? { noteheadType: selectedNoteheadType } : {}
+        const noteWithDot = { ...note, dots, ...noteheadExt } as Note
 
         const targetVoiceId = existingVoice?.id ?? uuid()
         const addNoteCmd: Command = {
@@ -1213,7 +1250,13 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
           const partIdx = score.parts.indexOf(part)
           const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+          const hasDrumStave = staff.clef === 'percussion'
+          const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+          if (isDrumPart) {
+            triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
+          } else {
+            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+          }
         }
 
         // Advance cursor
@@ -1230,7 +1273,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
     }
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted,
       primedAccidental, lastEnteredPitch, activeVoice, dispatch, dispatchBatch,
-      afterNoteInput, soundOnInput, audioMode])
+      afterNoteInput, soundOnInput, audioMode, selectedNoteheadType])
 
   // Explicit-octave variant used by virtual keyboard and MIDI input
   const enterNoteAtPitch = useCallback((noteName: NoteName, octave: number, accidental?: Accidental) => {
@@ -1253,7 +1296,8 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
 
         if (atCursor?.event.type === 'rest') {
           const note        = createNote(noteName, octave, selectedDuration, accidental ?? null)
-          const noteWithDot = { ...note, dots } as Note
+          const noteheadExt = selectedNoteheadType !== 'normal' ? { noteheadType: selectedNoteheadType } : {}
+          const noteWithDot = { ...note, dots, ...noteheadExt } as Note
           const result = buildRestReplaceCommands(voiceEvents, atCursor.index, units, noteWithDot, part.id, staff.id, measure.id, existingVoice.id)
           if (!result) {
             canvasAreaRef.current?.classList.add('cursor-reject')
@@ -1268,7 +1312,13 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
             const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
             const partIdx = score.parts.indexOf(part)
             const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+            const hasDrumStave = staff.clef === 'percussion'
+            const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+            if (isDrumPart) {
+              triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
+            } else {
+              triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+            }
           }
           const newBeat = cursorBeatPosition + units
           if (newBeat >= capacity) {
@@ -1311,7 +1361,13 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
               const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
               const partIdx = score.parts.indexOf(part)
               const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-              triggerInputPreview(newPitch.noteName, newPitch.octave, newPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+              const hasDrumStave = staff.clef === 'percussion'
+              const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+              if (isDrumPart) {
+                triggerDrumInputPreview(newPitch, undefined, volDb, audioMode, ch)
+              } else {
+                triggerInputPreview(newPitch.noteName, newPitch.octave, newPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+              }
             }
             // cursor stays — only update pitch/accidental state
             afterNoteInput(cursorMeasureId, cursorBeatPosition, newPitch)
@@ -1319,8 +1375,9 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           }
 
           // Overwrite mode: replace with new single note at selected duration
-          const note     = createNote(noteName, octave, selectedDuration, accidental ?? null)
-          const newEvent = { ...note, dots } as Note
+          const note        = createNote(noteName, octave, selectedDuration, accidental ?? null)
+          const noteheadExt = selectedNoteheadType !== 'normal' ? { noteheadType: selectedNoteheadType } : {}
+          const newEvent    = { ...note, dots, ...noteheadExt } as Note
           const result   = buildNoteInsertCommands(voiceEvents, atCursor.index, units, newEvent, part.id, staff.id, measure.id, existingVoice.id)
           if (!result) {
             canvasAreaRef.current?.classList.add('cursor-reject')
@@ -1334,7 +1391,13 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
             const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
             const partIdx = score.parts.indexOf(part)
             const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-            triggerInputPreview(newEvent.pitch.noteName, newEvent.pitch.octave, newEvent.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+            const hasDrumStave = staff.clef === 'percussion'
+            const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+            if (isDrumPart) {
+              triggerDrumInputPreview(newEvent.pitch, (newEvent as any).midiDrumNote, volDb, audioMode, ch)
+            } else {
+              triggerInputPreview(newEvent.pitch.noteName, newEvent.pitch.octave, newEvent.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+            }
           }
           const newBeat = cursorBeatPosition + units
           if (newBeat >= capacity) {
@@ -1352,7 +1415,8 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           return
         }
         const note        = createNote(noteName, octave, selectedDuration, accidental ?? null)
-        const noteWithDot = { ...note, dots } as Note
+        const noteheadExt = selectedNoteheadType !== 'normal' ? { noteheadType: selectedNoteheadType } : {}
+        const noteWithDot = { ...note, dots, ...noteheadExt } as Note
         const targetVoiceId = existingVoice?.id ?? uuid()
         const addNoteCmd: Command = {
           type: 'ADD_NOTE',
@@ -1377,7 +1441,13 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
           const partIdx = score.parts.indexOf(part)
           const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+          const hasDrumStave = staff.clef === 'percussion'
+          const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+          if (isDrumPart) {
+            triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
+          } else {
+            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+          }
         }
         const newBeat = cursorBeatPosition + units
         if (newBeat >= capacity) {
@@ -1392,7 +1462,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
     }
   }, [score, cursorMeasureId, cursorBeatPosition, selectedDuration, isDotted, activeVoice,
       noteInputMode, dispatch, dispatchBatch, afterNoteInput, setInputMode,
-      soundOnInput, audioMode])
+      soundOnInput, audioMode, selectedNoteheadType])
 
   // Multi-pitch variant for chord entry from MIDI
   const enterChordAtPitch = useCallback((inputs: import('../services/midiService').NoteInput[]) => {
@@ -2430,13 +2500,29 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
       if (!layout) {
         if (hoverCursor !== 'default') setHoverCursor('default')
         if (previewCanvasAreaRef.current) clearNoteInputPreview(previewCanvasAreaRef.current)
+        lastDrumHoverKeyRef.current = null
         return
       }
       const part    = score.parts.find(p => p.id === layout.partId)
       if (part?.inputMode === 'sequencer') {
         if (hoverCursor !== 'default') setHoverCursor('default')
         if (previewCanvasAreaRef.current) clearNoteInputPreview(previewCanvasAreaRef.current)
+        lastDrumHoverKeyRef.current = null
         return
+      }
+
+      // On percussion staves, suggest the canonical notehead for the drum at this position
+      if (layout.clef === 'percussion' && inputMode === 'note') {
+        const step      = yToStep(absCanvasY, layout.staveTopY, LINE_SPACING_PX)
+        const pitchInfo = stepToPitch(step, layout.clef)
+        const hoverKey  = drumPitchKey({ ...pitchInfo, accidental: null })
+        if (hoverKey !== lastDrumHoverKeyRef.current) {
+          lastDrumHoverKeyRef.current = hoverKey
+          const drumEntry = DRUM_MAP_BY_PITCH.get(hoverKey)
+          if (drumEntry) setNoteheadType(drumEntry.noteheadType)
+        }
+      } else if (lastDrumHoverKeyRef.current !== null) {
+        lastDrumHoverKeyRef.current = null
       }
       const staff   = part?.staves.find(s => s.id === layout.staffId)
       const measure = staff?.measures.find(m => m.id === layout.measureId)
@@ -2750,7 +2836,13 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
                   const previewPitch = newEvent.type === 'chord'
                     ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
                     : (newEvent as Note).pitch
-                  triggerInputPreview(previewPitch.noteName, previewPitch.octave, previewPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+                  const hasDrumStave = staff!.clef === 'percussion'
+                  const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+                  if (isDrumPart) {
+                    triggerDrumInputPreview(previewPitch, undefined, volDb, audioMode, ch)
+                  } else {
+                    triggerInputPreview(previewPitch.noteName, previewPitch.octave, previewPitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+                  }
                 }
                 const lastPitch = newEvent.type === 'chord'
                   ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
@@ -2774,7 +2866,8 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
               const pitchInfo = stepToPitch(step, layout.clef)
               const accidental = primedAccidental as Accidental
               const note        = createNote(pitchInfo.noteName, pitchInfo.octave, selectedDuration, accidental)
-              const noteWithDot = { ...note, dots } as Note
+              const noteheadExt = selectedNoteheadType !== 'normal' ? { noteheadType: selectedNoteheadType } : {}
+              const noteWithDot = { ...note, dots, ...noteheadExt } as Note
               const result = buildRestReplaceCommands(voiceEvents, i, units, noteWithDot, layout.partId, layout.staffId, layout.measureId, existingVoice.id)
               if (!result) return
               dispatchBatch(result.cmds)
@@ -2785,7 +2878,13 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
                 const midi  = resolveDirectiveMidiProgram(staff!.measures, mIdx, part.midiProgram)
                 const partIdx = score.parts.indexOf(part)
                 const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-                triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+                const hasDrumStave = staff!.clef === 'percussion'
+                const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+                if (isDrumPart) {
+                  triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
+                } else {
+                  triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+                }
               }
               const newBeat = beatAcc + units
               if (newBeat >= capacity) {
@@ -2813,7 +2912,8 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
 
       const accidental  = primedAccidental as Accidental
       const note        = createNote(pitchInfo.noteName, pitchInfo.octave, selectedDuration, accidental)
-      const noteWithDot = { ...note, dots } as Note
+      const noteheadExt = selectedNoteheadType !== 'normal' ? { noteheadType: selectedNoteheadType } : {}
+      const noteWithDot = { ...note, dots, ...noteheadExt } as Note
       const targetVoiceId = existingVoice?.id ?? uuid()
       const addNoteCmd: Command = {
         type: 'ADD_NOTE',
@@ -2843,7 +2943,13 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           const midi  = resolveDirectiveMidiProgram(clickStaff.measures, mIdx, clickPart.midiProgram)
           const partIdx = score.parts.indexOf(clickPart)
           const ch = Math.min((clickPart.midiChannel ?? (partIdx + 1)) - 1, 15)
-          triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, clickPart.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+          const hasDrumStave = clickStaff.clef === 'percussion'
+          const isDrumPart   = (clickPart.midiChannel ?? 1) === 10 || hasDrumStave
+          if (isDrumPart) {
+            triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
+          } else {
+            triggerInputPreview(noteWithDot.pitch.noteName, noteWithDot.pitch.octave, noteWithDot.pitch.accidental, volDb, midi === 45, clickPart.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+          }
         }
       }
 

@@ -14,7 +14,7 @@ import type {
   Score, Part, Staff, Measure, Voice, NoteEvent, Note, Rest, Chord,
   Pitch, NoteName, Duration, Accidental, ClefType, BarlineType, Articulation,
   Directive, Slur, Hairpin, ScoreMetadata, TimeSignature, KeySignature, TupletInfo, DynamicLevel, Volta,
-  TabConfig,
+  TabConfig, NoteheadType,
 } from '@shared/score'
 import { pitchToMidi, pitchToTabPosition, chordToTabPositions } from '@shared/tabUtils'
 import { activeAssignmentAt } from '@shared/musicUtils'
@@ -758,21 +758,51 @@ function xmlClef(clefEl: Element): ClefType {
 }
 
 function xmlPitch(noteEl: Element): Pitch {
-  const pitchEl  = noteEl.querySelector('pitch')
-  const noteName = (pitchEl?.querySelector('step')?.textContent?.trim() ?? 'C') as NoteName
-  const octave   = parseInt(pitchEl?.querySelector('octave')?.textContent ?? '4')
-  const alterRaw = pitchEl?.querySelector('alter')?.textContent?.trim()
-  const alter    = alterRaw !== undefined && alterRaw !== '' ? Math.round(parseFloat(alterRaw)) : null
-  const hasNatural = noteEl.querySelector('accidental')?.textContent?.trim() === 'natural'
+  const pitchEl      = noteEl.querySelector('pitch')
+  const unpitchedEl  = noteEl.querySelector('unpitched')
 
-  let accidental: Accidental = null
-  if (alter === 2)       accidental = 'doubleSharp'
-  else if (alter === 1)  accidental = 'sharp'
-  else if (alter === -1) accidental = 'flat'
-  else if (alter === -2) accidental = 'doubleFlat'
-  else if (alter === 0 && hasNatural) accidental = 'natural'
+  if (pitchEl) {
+    const noteName = (pitchEl.querySelector('step')?.textContent?.trim() ?? 'C') as NoteName
+    const octave   = parseInt(pitchEl.querySelector('octave')?.textContent ?? '4')
+    const alterRaw = pitchEl.querySelector('alter')?.textContent?.trim()
+    const alter    = alterRaw !== undefined && alterRaw !== '' ? Math.round(parseFloat(alterRaw)) : null
+    const hasNatural = noteEl.querySelector('accidental')?.textContent?.trim() === 'natural'
 
-  return { noteName, octave, accidental }
+    let accidental: Accidental = null
+    if (alter === 2)       accidental = 'doubleSharp'
+    else if (alter === 1)  accidental = 'sharp'
+    else if (alter === -1) accidental = 'flat'
+    else if (alter === -2) accidental = 'doubleFlat'
+    else if (alter === 0 && hasNatural) accidental = 'natural'
+
+    return { noteName, octave, accidental }
+  }
+
+  if (unpitchedEl) {
+    const noteName = (unpitchedEl.querySelector('display-step')?.textContent?.trim() ?? 'C') as NoteName
+    const octave   = parseInt(unpitchedEl.querySelector('display-octave')?.textContent ?? '5', 10)
+    return { noteName, octave, accidental: null }
+  }
+
+  return { noteName: 'C', octave: 4, accidental: null }
+}
+
+const XML_NOTEHEAD_MAP: Record<string, NoteheadType> = {
+  'normal':           'normal',
+  'x':                'x',
+  'circle-x':         'circle-x',
+  'diamond':          'diamond',
+  'slash':            'slash',
+  'triangle':         'triangle',
+  'cross':            'x',
+  'cluster':          'normal',
+  'inverted triangle': 'triangle',
+}
+
+function xmlNoteheadType(noteEl: Element): NoteheadType | undefined {
+  const text = noteEl.querySelector('notehead')?.textContent?.trim().toLowerCase()
+  if (!text) return undefined
+  return XML_NOTEHEAD_MAP[text]
 }
 
 function xmlDuration(noteEl: Element): Duration {
@@ -818,19 +848,33 @@ function xmlSlurPlacement(slurEl: Element): 'above' | 'below' | null {
   return null
 }
 
+function buildInstrumentMap(partListEl: Element, partId: string): Map<string, number> {
+  const map = new Map<string, number>()
+  const scorePartEl = partListEl.querySelector(`score-part[id="${partId}"]`)
+  if (!scorePartEl) return map
+  for (const mi of Array.from(scorePartEl.querySelectorAll('midi-instrument'))) {
+    const instrId   = mi.getAttribute('id') ?? ''
+    const unpitched = mi.querySelector('midi-unpitched')?.textContent?.trim()
+    if (unpitched) map.set(instrId, parseInt(unpitched, 10))
+  }
+  return map
+}
+
 function parseMusicXmlPart(
   partEl: Element,
   scoreKeyFifths: number,
   scoreKeyMode: 'major' | 'minor',
   scoreTsNum: number,
   scoreTsDen: number,
-): { staff: Staff; voltas: Volta[] } {
+  instrumentMap: Map<string, number>,
+): { staff: Staff; voltas: Volta[]; hasUnpitched: boolean } {
   const measureEls = Array.from(partEl.querySelectorAll('measure'))
   const measures: Measure[] = []
   const slurs: Slur[] = []
   const hairpins: Hairpin[] = []
   const voltas: Volta[] = []
   let pendingVoltaStart: { number: 1 | 2 | 3; startMIdx: number } | null = null
+  let hasUnpitched = false
 
   let staffClef: ClefType = 'treble'
   let prevKeyFifths = scoreKeyFifths
@@ -997,6 +1041,21 @@ function parseMusicXmlPart(
         }
       }
 
+      // Parse notehead type and unpitched drum data
+      if (!isRest) {
+        const firstEl = noteBuffer[0]
+        if (firstEl.querySelector('unpitched')) hasUnpitched = true
+        const noteheadType = xmlNoteheadType(firstEl)
+        if (noteheadType && noteheadType !== 'normal') {
+          ;(event as any).noteheadType = noteheadType
+        }
+        const instrId = firstEl.querySelector('instrument')?.getAttribute('id')
+        if (instrId) {
+          const drumMidi = instrumentMap.get(instrId)
+          if (drumMidi !== undefined) { (event as any).midiDrumNote = drumMidi }
+        }
+      }
+
       if (pendingDynamic) { (event as any).dynamic = pendingDynamic; pendingDynamic = null }
       if (hp.awaiting) { hp.open = { type: hp.awaiting, fromNoteId: event.id }; hp.awaiting = null }
       getVoiceEvents(currentVoiceNum).push(event)
@@ -1088,6 +1147,7 @@ function parseMusicXmlPart(
       ...(hairpins.length > 0 ? { hairpins } : {}),
     },
     voltas,
+    hasUnpitched,
   }
 }
 
@@ -1210,16 +1270,18 @@ export function musicxmlToScore(xml: string): Score {
     const chromatic = transposeEl ? parseInt(transposeEl.querySelector('chromatic')?.textContent ?? '0') : 0
     const transposeSemitones = transposeEl ? -chromatic : 0
 
-    const { staff, voltas } = parseMusicXmlPart(partEl, scoreKeyFifths, scoreKeyMode, scoreTsNum, scoreTsDen)
+    const instrumentMap = partListEl ? buildInstrumentMap(partListEl, partId) : new Map<string, number>()
+    const { staff, voltas, hasUnpitched } = parseMusicXmlPart(partEl, scoreKeyFifths, scoreKeyMode, scoreTsNum, scoreTsDen, instrumentMap)
     if (parts.length === 0) scoreVoltas = voltas  // voltas are score-level; collect from first part only
     const groupInfo = partGroupMap.get(partId)
+    const effectiveMidiChannel = hasUnpitched ? 10 : info.midiChannel
 
     parts.push({
       id: uuid(),
       name: info.name,
       shortName: info.shortName,
       midiProgram: info.midiProgram,
-      midiChannel: info.midiChannel,
+      midiChannel: effectiveMidiChannel,
       transposeSemitones,
       staves: [staff],
       volume: info.volume,

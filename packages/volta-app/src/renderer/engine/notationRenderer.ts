@@ -25,7 +25,7 @@ import {
   type RenderContext
 } from 'vexflow'
 
-import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Accidental, NoteName, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, SequencePattern, TabConfig } from '@shared/score'
+import type { Score, Part, Staff, Measure, NoteEvent, Note, Rest, Chord, Duration, ClefType, TimeSignature, KeySignature, Accidental, NoteName, Articulation, GroupSymbol, TupletInfo, DynamicLevel, Volta, MidiScoreEvent, SequencePattern, TabConfig, NoteheadType } from '@shared/score'
 import { pitchToMidi, pitchToTabPosition, chordToTabPositions } from '@shared/tabUtils'
 import { resolveTimeSig, timeSigsEqual, resolveClef, transposeKeyFifths, measureCapacityUnits, resolveDirectiveTempo, eventDurationUnits, activeAssignmentAt, keyAccidental } from '@shared/musicUtils'
 
@@ -57,10 +57,18 @@ const END_BARLINE_MAP: Record<string, number> = {
   'repeat-end':  BarlineType.REPEAT_END,
 }
 
-// ── Pitch → VexFlow key string ────────────────────────────────────────────────
+const NOTEHEAD_SUFFIX: Record<NoteheadType, string> = {
+  'normal':   '',
+  'x':        '/x',
+  'circle-x': '/cx',
+  'diamond':  '/d',
+  'slash':    '/s',
+  'triangle': '/ti',
+}
 
-function pitchToVexKey(pitch: { noteName: string; octave: number; accidental: string | null }): string {
-  return `${pitch.noteName.toLowerCase()}/${pitch.octave}`
+function buildKey(pitch: { noteName: string; octave: number; accidental: string | null }, noteheadType?: NoteheadType): string {
+  const suffix = noteheadType ? NOTEHEAD_SUFFIX[noteheadType] : ''
+  return `${pitch.noteName.toLowerCase()}/${pitch.octave}${suffix}`
 }
 
 export const HEADING_MARGIN_Y = 100   // canvas top reserved for the heading block
@@ -227,7 +235,7 @@ function noteEventToStaveNote(
       const n = event as Note
       const staveNote = new StaveNote({
         clef,
-        keys: [pitchToVexKey(n.pitch)],
+        keys: [buildKey(n.pitch, n.noteheadType)],
         duration: DURATION_MAP[n.duration] + (n.dots > 0 ? 'd'.repeat(n.dots) : ''),
         ...stemOpts,
       })
@@ -254,7 +262,7 @@ function noteEventToStaveNote(
       const c = event as Chord
       const staveNote = new StaveNote({
         clef,
-        keys: c.pitches.map(pitchToVexKey),
+        keys: c.pitches.map(p => buildKey(p, c.noteheadType)),
         duration: DURATION_MAP[c.duration] + (c.dots > 0 ? 'd'.repeat(c.dots) : ''),
         ...stemOpts,
       })

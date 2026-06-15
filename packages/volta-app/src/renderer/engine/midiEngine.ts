@@ -20,6 +20,7 @@ import {
   type BarlineType, type TimeSignature, type KeySignature, type DynamicLevel,
   type Hairpin, type TupletInfo,
 } from '@shared/score'
+import { DRUM_MAP_BY_MIDI } from '@shared/drumMap'
 import {
   measureCapacityUnits, resolveTimeSig, resolveDirectiveTempo,
   articulationPlaybackMods, buildPlaybackSequence, fillWithRests,
@@ -63,34 +64,10 @@ const KEY_TO_FIFTHS: Record<string, number> = {
   F: -1, Bb: -2, Eb: -3, Ab: -4, Db: -5, Gb: -6, Cb: -7,
 }
 
-// ── GM Drum map ────────────────────────────────────────────────────────────────
-
-// MuseScore-convention staff positions for standard GM drum pitches
-const GM_DRUM_MAP: Partial<Record<number, Pitch>> = {
-  35: { noteName: 'B', octave: 1, accidental: null },    // Bass Drum 2
-  36: { noteName: 'C', octave: 2, accidental: null },    // Bass Drum 1
-  37: { noteName: 'C', octave: 3, accidental: 'sharp' }, // Side Stick
-  38: { noteName: 'D', octave: 3, accidental: null },    // Acoustic Snare
-  40: { noteName: 'E', octave: 3, accidental: null },    // Electric Snare
-  41: { noteName: 'F', octave: 2, accidental: null },    // Low Floor Tom
-  42: { noteName: 'F', octave: 4, accidental: 'sharp' }, // Closed Hi-Hat
-  43: { noteName: 'G', octave: 2, accidental: null },    // High Floor Tom
-  44: { noteName: 'A', octave: 4, accidental: null },    // Pedal Hi-Hat
-  45: { noteName: 'A', octave: 2, accidental: null },    // Low Tom
-  46: { noteName: 'B', octave: 4, accidental: null },    // Open Hi-Hat
-  47: { noteName: 'B', octave: 2, accidental: null },    // Low-Mid Tom
-  48: { noteName: 'C', octave: 3, accidental: null },    // Hi-Mid Tom
-  49: { noteName: 'A', octave: 5, accidental: null },    // Crash Cymbal 1
-  50: { noteName: 'D', octave: 3, accidental: null },    // High Tom
-  51: { noteName: 'E', octave: 5, accidental: null },    // Ride Cymbal 1
-  52: { noteName: 'F', octave: 5, accidental: null },    // Chinese Cymbal
-  55: { noteName: 'G', octave: 5, accidental: null },    // Splash Cymbal
-  57: { noteName: 'A', octave: 5, accidental: 'sharp' }, // Crash Cymbal 2
-  59: { noteName: 'B', octave: 5, accidental: null },    // Ride Cymbal 2
-}
+// ── GM Drum pitch lookup ───────────────────────────────────────────────────────
 
 function drumPitch(midiNum: number): Pitch {
-  return GM_DRUM_MAP[midiNum] ?? { noteName: 'C', octave: Math.floor(midiNum / 12) - 1, accidental: null }
+  return DRUM_MAP_BY_MIDI.get(midiNum)?.pitch ?? { noteName: 'C', octave: Math.floor(midiNum / 12) - 1, accidental: null }
 }
 
 // ── Pitch helpers ──────────────────────────────────────────────────────────────

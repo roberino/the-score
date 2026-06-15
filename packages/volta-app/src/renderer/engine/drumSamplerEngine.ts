@@ -7,18 +7,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as Tone from 'tone'
+import { DRUM_MAP } from '@shared/drumMap'
 
 // ── Sample map: MIDI note → bundled file ──────────────────────────────────────
 
-// Notes not listed here fall through to the synthesised fallback.
-const DRUM_SAMPLE_NOTES: readonly number[] = [
-  35, 36,             // bass drum
-  37, 38, 39, 40,     // snare / side stick / hand clap
-  41, 43,             // floor toms
-  42, 44, 46,         // hi-hats
-  45, 47,             // mid toms
-  48, 50,             // high toms
-]
+// Derived from DRUM_MAP so coverage stays in sync automatically.
+// Notes with no sample file fall through to the synthesised fallback.
+const DRUM_SAMPLE_NOTES: readonly number[] = DRUM_MAP.map(d => d.midiNote)
 
 function sampleUrl(note: number): string {
   return `./samples/drums/${note}.mp3`

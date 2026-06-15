@@ -303,6 +303,141 @@ Ensure imported percussion parts have `midiChannel` set to 10. In `parseMusicXml
 
 ---
 
+## Part 4: Realistic Drum Sample Playback
+
+### Background
+
+`drumSamplerEngine.ts` has a `Tone.Players` loader that references `./samples/drums/{midiNote}.mp3`, but the `public/samples/` directory does not exist in the repo. The synthesised Web Audio fallback (oscillators and noise generators) is therefore always used. While the fallback prevents silence, it produces toy-sounding drums that make the app feel unpolished.
+
+Additionally, note-input preview on percussion staves calls `triggerInputPreview` which routes to `previewNote` (the piano sampler). Drum notes during step input should sound like drums.
+
+### 4.1 Sample sourcing
+
+Obtain free, CC-licensed acoustic drum samples for each of the 24 instruments in `DRUM_MAP`. Recommended source: **[freesound.org](https://freesound.org)** CC0 packs, or the **[Sonatina Drumkit](http://sso.mattiaswestlund.net/)** (CC-BY 3.0), which provides high-quality multi-velocity acoustic drum samples. Another ready-made option is the **gleitz/midi-js-soundfonts** percussion channel, which ships pre-converted MP3s for all 128 GM percussion notes.
+
+Required MIDI notes (from `DRUM_MAP`):
+
+| MIDI | Name | MIDI | Name |
+|---|---|---|---|
+| 35 | Bass Drum 2 | 46 | Open Hi-Hat |
+| 36 | Bass Drum 1 | 47 | Low-Mid Tom |
+| 37 | Side Stick | 48 | Hi-Mid Tom |
+| 38 | Acoustic Snare | 49 | Crash Cymbal 1 |
+| 39 | Hand Clap | 50 | High Tom |
+| 40 | Electric Snare | 51 | Ride Cymbal 1 |
+| 41 | Low Floor Tom | 52 | Chinese Cymbal |
+| 42 | Closed Hi-Hat | 53 | Ride Bell |
+| 43 | High Floor Tom | 54 | Tambourine |
+| 44 | Pedal Hi-Hat | 55 | Splash Cymbal |
+| 45 | Low Tom | 56 | Cowbell |
+| — | — | 57 | Crash Cymbal 2 |
+| — | — | 59 | Ride Cymbal 2 |
+
+**Format requirements:**
+- MP3 at 128 kbps (or OGG Vorbis q5 as a size-equivalent alternative)
+- Mono
+- Normalised to −3 dBFS peak
+- Silence before the transient trimmed to ≤ 5 ms
+- Natural release tail retained (do not hard-chop)
+
+Files that cannot be sourced (rare instruments like cowbell, tambourine) may remain absent; the existing synthesised fallback handles them gracefully.
+
+### 4.2 File layout
+
+Place converted files at:
+
+```
+packages/volta-app/public/samples/drums/{midiNote}.mp3
+```
+
+Examples:
+```
+public/samples/drums/36.mp3   ← Bass Drum 1
+public/samples/drums/38.mp3   ← Acoustic Snare
+public/samples/drums/42.mp3   ← Closed Hi-Hat
+public/samples/drums/46.mp3   ← Open Hi-Hat
+public/samples/drums/49.mp3   ← Crash Cymbal 1
+public/samples/drums/51.mp3   ← Ride Cymbal 1
+```
+
+This matches the URL pattern already in `drumSamplerEngine.ts`:
+```typescript
+function sampleUrl(note: number): string {
+  return `./samples/drums/${note}.mp3`
+}
+```
+
+No code change is needed for the URL pattern itself.
+
+### 4.3 Engine changes — expanded coverage
+
+In `drumSamplerEngine.ts`, replace the hand-coded `DRUM_SAMPLE_NOTES` list with a derived list from `DRUM_MAP` so coverage stays in sync automatically:
+
+```typescript
+import { DRUM_MAP } from '@shared/drumMap'
+
+const DRUM_SAMPLE_NOTES: readonly number[] = DRUM_MAP.map(d => d.midiNote)
+```
+
+The rest of the loading logic (`Tone.Players`, `onload`, `onerror`) and the scheduling logic (`scheduleDrumHit`, `previewDrumHit`) need no structural changes. Missing sample files trigger `onerror` per player and fall back to synthesis transparently.
+
+### 4.4 Note-input preview routing
+
+`triggerInputPreview` in `ScoreCanvas.tsx` always calls `previewNote` (the piano sampler). On percussion staves it should instead call `previewDrumHit`.
+
+Add a helper at the top of `ScoreCanvas.tsx` alongside `triggerInputPreview`:
+
+```typescript
+function triggerDrumInputPreview(
+  pitch: { noteName: string; octave: number; accidental: string | null | undefined },
+  midiDrumNote: number | undefined,
+  volDb: number,
+  audioMode: 'builtin' | 'midi-out',
+  midiChannel: number,
+): void {
+  if (audioMode === 'midi-out') {
+    const velocity = Math.max(1, Math.min(127, Math.round(Math.pow(10, volDb / 20) * 100)))
+    midiOutputEngine.previewNote(midiDrumNote ?? 38, velocity, midiChannel, 0)
+  } else {
+    const resolvedMidi = midiDrumNote
+      ?? DRUM_MAP_BY_PITCH.get(drumPitchKey({ ...pitch, accidental: pitch.accidental ?? null }))?.midiNote
+      ?? 38
+    previewDrumHit(resolvedMidi, volDb)
+  }
+}
+```
+
+In each `soundOnInput` block in `ScoreCanvas.tsx`, detect whether the current staff is a drum part and branch:
+
+```typescript
+const hasDrumStave = staff.measures.length > 0 && staff.clef === 'percussion'
+const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+
+if (isDrumPart) {
+  triggerDrumInputPreview(
+    noteWithDot.pitch,
+    (noteWithDot as any).midiDrumNote,
+    volDb,
+    audioMode,
+    ch,
+  )
+} else {
+  triggerInputPreview(
+    noteWithDot.pitch.noteName, noteWithDot.pitch.octave,
+    noteWithDot.pitch.accidental, volDb,
+    midi === 45, part.transposeSemitones, audioMode, ch, Math.max(0, midi - 1),
+  )
+}
+```
+
+Apply this pattern in all six `soundOnInput` blocks inside `enterNote`, `enterNoteAtPitch`, and the canvas click handler. The `isDrumPart` check is the same one already used in `samplerEngine.ts`.
+
+### 4.5 Loading order
+
+`loadDrumSampler()` should be called at app startup alongside `loadSampler()` (the piano sampler), so samples are ready before the user starts playback. Find the call site where `loadSampler()` is called on app init (likely in `App.tsx` or the playback hook) and add `loadDrumSampler()` there.
+
+---
+
 ## Acceptance Criteria
 
 ### Notehead types
@@ -327,6 +462,13 @@ Ensure imported percussion parts have `midiChannel` set to 10. In `parseMusicXml
 12. Imported percussion parts have `midiChannel === 10` set automatically.
 13. Re-export of an imported drum part to MusicXML produces valid `<unpitched>` elements (existing export path already handles this).
 
+### Realistic drum samples
+
+14. Playback of a drum part uses sampled audio (not synthesis) for at minimum: bass drum, snare, closed hi-hat, open hi-hat, crash cymbal, ride cymbal, and all toms.
+15. Note-input preview on a percussion stave sounds like the correct drum instrument (not piano).
+16. Drum sounds load in the background at app start; playback is not blocked waiting for them.
+17. If a sample file is absent for a less-common instrument (e.g., cowbell), the synthesised fallback fires silently with no error shown to the user.
+
 ---
 
 ## Out of Scope
@@ -334,6 +476,7 @@ Ensure imported percussion parts have `midiChannel` set to 10. In `parseMusicXml
 - Ghost notes (parenthesised noteheads) — a separate articulation feature
 - Buzz roll (`z`) noteheads
 - Per-pitch notehead overrides within a chord
+- Multi-velocity drum samples (pp/mf/ff layers)
 - Drum input palette / one-click drum-note insertion by instrument name
 - Automatic voice assignment (stem-up vs stem-down by instrument family)
 - Drum part creation wizard

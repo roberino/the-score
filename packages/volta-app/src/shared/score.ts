@@ -15,6 +15,8 @@ export type BarlineType = 'single' | 'double' | 'final' | 'repeat-start' | 'repe
 
 export type ClefType = 'treble' | 'bass' | 'alto' | 'tenor' | 'percussion'
 
+export type NoteheadType = 'normal' | 'x' | 'circle-x' | 'diamond' | 'slash' | 'triangle'
+
 export type DynamicLevel = 'pppp' | 'ppp' | 'pp' | 'p' | 'mp' | 'mf' | 'f' | 'ff' | 'fff' | 'ffff' | 'sfz' | 'fp'
 
 // ── Pitch ─────────────────────────────────────────────────────────────────────
@@ -42,6 +44,8 @@ export interface Note {
   readonly dynamic?: DynamicLevel
   readonly velocity?: number   // explicit MIDI velocity 0–127; overrides dynamic-derived velocity when set
   readonly lyric?: string
+  readonly noteheadType?: NoteheadType   // undefined = 'normal'
+  readonly midiDrumNote?: number         // MIDI drum note number when imported from MusicXML <midi-unpitched>
 }
 
 export interface Rest {
@@ -64,6 +68,7 @@ export interface Chord {
   readonly dynamic?: DynamicLevel
   readonly velocity?: number   // explicit MIDI velocity 0–127; overrides dynamic-derived velocity when set
   readonly lyric?: string
+  readonly noteheadType?: NoteheadType   // applies to all noteheads in the chord
 }
 
 export type NoteEvent = Note | Rest | Chord

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import { createScore, createRest, type Score, type Pitch, type Duration, type Accidental, type HairpinType, type Hairpin, type DynamicLevel, type Volta } from '@shared/score'
+import { createScore, createRest, type Score, type Pitch, type Duration, type Accidental, type HairpinType, type Hairpin, type DynamicLevel, type Volta, type NoteheadType } from '@shared/score'
 import { v4 as uuid } from 'uuid'
 import { applyCommand, type Command } from '@shared/commands'
 import { measureCapacityUnits, resolveTimeSig, dottedUnits, DURATION_UNITS, buildPlaybackSequence, buildMeasureTimeline, firstRestBeat, fillWithRests, eventDurationUnits, DURATION_CYCLE, moveCursorPosition, findNoteLocation, findStaffContainingMeasure } from '@shared/musicUtils'
@@ -89,6 +89,7 @@ export interface AppState {
   selectedDuration: Duration
   isDotted: boolean
   primedAccidental: Accidental | null
+  selectedNoteheadType: NoteheadType
   activeVoice: 0 | 1
   noteInputMode: 'overwrite' | 'chord'
   lyricCursorNoteId: string | null
@@ -165,6 +166,7 @@ export interface AppState {
   setSelectedDuration: (duration: Duration) => void
   setIsDotted: (dotted: boolean) => void
   toggleDot: () => void
+  setNoteheadType: (type: NoteheadType) => void
   resizeNote: (newDuration: Duration, newDots?: 0 | 1 | 2) => void
   confirmResize: () => void
   cancelResize: () => void
@@ -225,6 +227,7 @@ export const useAppStore = create<AppState>()(
     selectedDuration: 'quarter',
     isDotted: false,
     primedAccidental: null,
+    selectedNoteheadType: 'normal' as NoteheadType,
     activeVoice: 0,
     noteInputMode: 'overwrite',
     lyricCursorNoteId: null,
@@ -770,6 +773,7 @@ export const useAppStore = create<AppState>()(
 
     setSelectedDuration: (duration) => set(s => { s.selectedDuration = duration }),
     setIsDotted: (dotted) => set(s => { s.isDotted = dotted }),
+    setNoteheadType: (type) => set(s => { s.selectedNoteheadType = type }),
     toggleDot: () => {
       const { score, selectedNoteIds, inputMode } = get()
       if (inputMode === 'select' && selectedNoteIds.length === 1) {

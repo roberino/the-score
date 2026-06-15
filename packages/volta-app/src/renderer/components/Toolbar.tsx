@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useAppStore, type InputMode } from '../store/appStore'
 import { DURATION_LABELS, KEY_TO_DURATION, resolveTimeSig, resolveKeySig, keyLabel, measureCapacityUnits, usedUnits } from '@shared/musicUtils'
-import type { Duration, TimeSignature, KeySignature } from '@shared/score'
+import type { Duration, TimeSignature, KeySignature, NoteheadType } from '@shared/score'
 import { TimeSignaturePicker } from './TimeSignaturePicker'
 import { CircleOfFifths } from './CircleOfFifths'
 import { AudioSettingsPanel } from './AudioSettingsPanel'
@@ -51,6 +51,15 @@ const DURATION_BUTTONS: { duration: Duration; key: string }[] = Object.entries(K
   .map(([key, duration]) => ({ key, duration }))
   .sort((a, b) => Number(a.key) - Number(b.key))
 
+const NOTEHEAD_BUTTONS: { type: NoteheadType; label: string; title: string }[] = [
+  { type: 'normal',   label: '●', title: 'Normal' },
+  { type: 'x',        label: '✕', title: 'X (hi-hat, cymbal)' },
+  { type: 'circle-x', label: '⊗', title: 'Circle-X (open hi-hat)' },
+  { type: 'diamond',  label: '◇', title: 'Diamond (ride bell)' },
+  { type: 'slash',    label: '╱', title: 'Slash (comping)' },
+  { type: 'triangle', label: '△', title: 'Triangle (cowbell)' },
+]
+
 
 interface ToolbarProps {
   onTogglePartsPanel: () => void
@@ -64,6 +73,7 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     undoStack, redoStack,
     selectedDuration,
     isDotted, toggleDot, resizeNote,
+    selectedNoteheadType, setNoteheadType,
     activeVoice, setActiveVoice,
     noteInputMode, setNoteInputMode,
     score, cursorMeasureId, dispatch,
@@ -230,7 +240,8 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
     setTimeSigPickerPos(null)
   }
 
-  const showDurationRow = inputMode === 'note' || inputMode === 'rest' || inputMode === 'select'
+  const showDurationRow   = inputMode === 'note' || inputMode === 'rest' || inputMode === 'select'
+  const showNoteheadRow  = inputMode === 'note' || inputMode === 'rest'
 
   return (
     <div style={{
@@ -617,6 +628,41 @@ export function Toolbar({ onTogglePartsPanel, partsPanelOpen }: ToolbarProps): J
               onClose={() => setMidiLearnPos(null)}
             />
           )}
+        </div>
+      )}
+
+      {/* ── Notehead row ── */}
+      {showNoteheadRow && (
+        <div style={{
+          height: 36,
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 12px',
+          paddingLeft: 0,
+          gap: 4,
+          borderTop: '1px solid #3e3e3e',
+        }}>
+          <span style={{ fontSize: 11, color: '#777', marginRight: 4 }}>Notehead:</span>
+          {NOTEHEAD_BUTTONS.map(({ type, label, title }) => (
+            <button
+              key={type}
+              onClick={() => setNoteheadType(type)}
+              title={title}
+              style={{
+                padding: '3px 8px',
+                fontSize: 13,
+                borderRadius: 3,
+                border: 'none',
+                cursor: 'pointer',
+                background: selectedNoteheadType === type ? '#0e639c' : '#1e1e1e',
+                color: selectedNoteheadType === type ? '#fff' : '#9d9d9d',
+                transition: 'background 0.1s',
+                minWidth: 28,
+              }}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       )}
 
