@@ -18,6 +18,7 @@ import type {
 } from '@shared/score'
 import { pitchToMidi, pitchToTabPosition, chordToTabPositions } from '@shared/tabUtils'
 import { activeAssignmentAt } from '@shared/musicUtils'
+import { DRUM_MAP_BY_MIDI } from '@shared/drumMap'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -1045,14 +1046,13 @@ function parseMusicXmlPart(
       if (!isRest) {
         const firstEl = noteBuffer[0]
         if (firstEl.querySelector('unpitched')) hasUnpitched = true
+        const instrId  = firstEl.querySelector('instrument')?.getAttribute('id')
+        const drumMidi = instrId !== null && instrId !== undefined ? instrumentMap.get(instrId) : undefined
+        if (drumMidi !== undefined) { (event as any).midiDrumNote = drumMidi }
         const noteheadType = xmlNoteheadType(firstEl)
+          ?? (drumMidi !== undefined ? DRUM_MAP_BY_MIDI.get(drumMidi)?.noteheadType : undefined)
         if (noteheadType && noteheadType !== 'normal') {
           ;(event as any).noteheadType = noteheadType
-        }
-        const instrId = firstEl.querySelector('instrument')?.getAttribute('id')
-        if (instrId) {
-          const drumMidi = instrumentMap.get(instrId)
-          if (drumMidi !== undefined) { (event as any).midiDrumNote = drumMidi }
         }
       }
 
