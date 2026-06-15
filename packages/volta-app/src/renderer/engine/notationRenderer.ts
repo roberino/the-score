@@ -798,7 +798,10 @@ export function computeRowSliceOffsets(layouts: MeasureLayout[]): number[] {
     const cur = rowMinY.get(l.systemRow)
     if (cur === undefined || l.staveY < cur) rowMinY.set(l.systemRow, l.staveY)
   }
-  return [...rowMinY.entries()].sort((a, b) => a[0] - b[0]).map(([, y]) => y)
+  const rowStarts = [...rowMinY.entries()].sort((a, b) => a[0] - b[0]).map(([, y]) => y)
+  // First offset must be 0 so the heading block (title/subtitle/composer, drawn
+  // at canvas-local Y ≈ 0–80) is included in canvas 0 above the first stave.
+  return [0, ...rowStarts.slice(1)]
 }
 
 export function renderScoreMulti(
@@ -838,7 +841,7 @@ export function renderScoreMulti(
     const lyricYMap = renderFromLayouts(
       ctx, score, sliceLayouts, new Set(), notePositions, noteStartX, noteToMeasureKey, selectedChordPitchInfo,
     )
-    if (si === 0) drawHeadings(ctx, score, options)
+    if (slice.yOffset === 0) drawHeadings(ctx, score, options)
 
     const nativeCtx = slice.canvas.getContext('2d')
     // Draw lyric text with no cursor (cursor highlight goes to the overlay canvas)

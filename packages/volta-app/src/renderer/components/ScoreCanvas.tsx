@@ -13,7 +13,7 @@ import {
   type CanvasSlice,
   DEFAULT_RENDER_OPTIONS,
   LABEL_MARGIN_X,
-  VEXFLOW_HEADROOM_PX,
+  HEADING_MARGIN_Y,
   STAVE_HEIGHT_PX,
   LYRIC_Y_OFFSET,
   PEDAL_BASE_BELOW_STAVE,
@@ -2521,12 +2521,12 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
     // Convert canvas-local Y to absolute score Y for comparisons against layout coords
     const absCanvasY = canvasY + (canvasSlicesRef.current[0]?.yOffset ?? 0)
 
-    // ── Heading area (above the first stave, within VEXFLOW_HEADROOM_PX of canvas top) ─
-    if (canvasY < VEXFLOW_HEADROOM_PX) {
+    // ── Heading area (title/subtitle/composer block above the first stave) ─────
+    if (absCanvasY < HEADING_MARGIN_Y) {
       const bounds = headingFieldBounds(options.canvasWidth, options.marginX)
       const hit = bounds.find(b =>
         canvasX >= b.x && canvasX <= b.x + b.width &&
-        canvasY >= b.y && canvasY <= b.y + b.height
+        absCanvasY >= b.y && absCanvasY <= b.y + b.height
       )
       if (hit) setEditingHeading(hit)
       return
@@ -3217,7 +3217,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
     const { x: canvasX, y: canvasY } = canvasCoords(event, canvas)
     const absCanvasY = canvasY + (canvasSlicesRef.current[0]?.yOffset ?? 0)
     // Don't create a text box if we're in the heading area or on notation
-    if (canvasY < VEXFLOW_HEADROOM_PX) return
+    if (absCanvasY < HEADING_MARGIN_Y) return
     const layout  = findClickedLayout(canvasX, absCanvasY, layoutsRef.current)
     if (layout) return  // clicked on a stave — not empty space
     const box = makeTextBox(canvasX / zoom, canvasY / zoom)
