@@ -3,6 +3,7 @@ import type { Score, Note, Chord, Hairpin } from '@shared/score'
 import { resolveDirectiveVelocity, resolveDirectiveTempo, resolveKeySig, resolveTimeSig, measureCapacityUnits, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, articulationPlaybackMods, expandOrnamentNotes, DYNAMIC_VELOCITY, type FlatScheduleEntry } from '@shared/musicUtils'
 import { type PlaybackController } from './audioEngine'
 import { midiService } from '../services/midiService'
+import { DRUM_MAP_BY_PITCH, pitchKey } from '@shared/drumMap'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -176,13 +177,18 @@ class MidiOutputEngine {
       if (!staff || !tempoStaff) return
 
       const partId = part.id
-      // midiChannel is 1-based (1–16); fall back to partIndex+1 for old scores
-      const channel = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+      const hasDrumStave = part.staves.some(s => s.clef === 'percussion')
+      const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+      // midiChannel is 1-based (1–16); fall back to partIndex+1 for old scores.
+      // Drum parts always use channel 9 (GM channel 10) regardless of stored value.
+      const channel = isDrumPart ? 9 : Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
 
-      const pgm = Math.max(0, Math.min(127, part.midiProgram - 1))
-      Tone.Transport.schedule((time) => {
-        output.send([0xC0 | channel, pgm], midiTs(time))
-      }, 0)
+      if (!isDrumPart) {
+        const pgm = Math.max(0, Math.min(127, part.midiProgram - 1))
+        Tone.Transport.schedule((time) => {
+          output.send([0xC0 | channel, pgm], midiTs(time))
+        }, 0)
+      }
 
       if (part.inputMode === 'sequencer') {
         const seqEntries = buildSequenceSchedule(part, sequence, tempoStaff, bpm, score.timeSignature)
@@ -243,7 +249,9 @@ class MidiOutputEngine {
 
         if (event.type === 'note') {
           const n       = event as Note
-          const midiNum = pitchToMidi(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
+          const midiNum = isDrumPart
+            ? ((n as any).midiDrumNote ?? DRUM_MAP_BY_PITCH.get(pitchKey(n.pitch))?.midiNote ?? 38)
+            : pitchToMidi(n.pitch.noteName, n.pitch.octave, n.pitch.accidental, part.transposeSemitones)
           const noteDynVel = n.dynamic != null ? (DYNAMIC_VELOCITY[n.dynamic] ?? null) : null
           Tone.Transport.schedule((time) => {
             if (isPartMuted?.(partId)) return
@@ -268,9 +276,9 @@ class MidiOutputEngine {
           }, startSec)
         } else if (event.type === 'chord') {
           const c = event as Chord
-          const midiNums = c.pitches.map(
-            p => pitchToMidi(p.noteName, p.octave, p.accidental, part.transposeSemitones)
-          )
+          const midiNums = isDrumPart
+            ? c.pitches.map(p => DRUM_MAP_BY_PITCH.get(pitchKey(p))?.midiNote ?? 38)
+            : c.pitches.map(p => pitchToMidi(p.noteName, p.octave, p.accidental, part.transposeSemitones))
           const noteDynVel = c.dynamic != null ? (DYNAMIC_VELOCITY[c.dynamic] ?? null) : null
           Tone.Transport.schedule((time) => {
             if (isPartMuted?.(partId)) return
