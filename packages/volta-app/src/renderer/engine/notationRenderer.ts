@@ -786,16 +786,34 @@ export function computeSliceOffsets(
  * Pass `precomputedLayouts` (from a prior `computeLayout` call) to avoid
  * recomputing the layout a second time.
  */
+/**
+ * Returns one Y-offset per system row, suitable for row-based canvas slicing.
+ * This allows ScoreCanvas to allocate one canvas per visual row and re-render
+ * only the rows containing changed measures.
+ */
+export function computeRowSliceOffsets(layouts: MeasureLayout[]): number[] {
+  if (!layouts.length) return [0]
+  const rowMinY = new Map<number, number>()
+  for (const l of layouts) {
+    const cur = rowMinY.get(l.systemRow)
+    if (cur === undefined || l.staveY < cur) rowMinY.set(l.systemRow, l.staveY)
+  }
+  return [...rowMinY.entries()].sort((a, b) => a[0] - b[0]).map(([, y]) => y)
+}
+
 export function renderScoreMulti(
   slices: readonly CanvasSlice[],
   score: Score,
   options: RenderOptions = DEFAULT_RENDER_OPTIONS,
   selectedChordPitchInfo: SelectedChordPitchInfo | null = null,
   precomputedLayouts?: MeasureLayout[],
+  // When provided, maps are updated in-place rather than created fresh.
+  // Use this for incremental renders to preserve entries for unchanged rows.
+  existingMaps?: { notePositions: Map<string, number>; noteStartX: Map<string, number>; noteToMeasureKey: Map<string, string> },
 ): RenderScoreResult {
-  const notePositions    = new Map<string, number>()
-  const noteStartX       = new Map<string, number>()
-  const noteToMeasureKey = new Map<string, string>()
+  const notePositions    = existingMaps?.notePositions    ?? new Map<string, number>()
+  const noteStartX       = existingMaps?.noteStartX       ?? new Map<string, number>()
+  const noteToMeasureKey = existingMaps?.noteToMeasureKey ?? new Map<string, string>()
 
   if (!score.parts[0] || !slices.length) return { notePositions, noteStartX, layouts: [], noteToMeasureKey }
 
@@ -1088,7 +1106,7 @@ function drawTabMeasure(
 
 // ── Render all measures from precomputed layouts ──────────────────────────────
 
-function renderFromLayouts(
+export function renderFromLayouts(
   ctx: RenderContext,
   score: Score,
   layouts: MeasureLayout[],
@@ -1688,8 +1706,8 @@ function renderMeasure(
     }
   }
 
-  // Key sig: show at system starts (if non-C in written key) and when concert key changes. Suppressed for sequencer rows.
-  const showKeySig = ((isLineStart && writtenFifths !== 0) || keyChanged) && !sequencerMode
+  // Key sig: show at system starts (if non-C in written key) and when concert key changes. Suppressed for sequencer rows and percussion staves.
+  const showKeySig = ((isLineStart && writtenFifths !== 0) || keyChanged) && !sequencerMode && clefType !== 'percussion'
   if (showKeySig) stave.addKeySignature(FIFTHS_TO_VEX_KEY[writtenFifths] ?? 'C')
 
   // Time sig: show on first measure, when it changes, or when repeated at system start
