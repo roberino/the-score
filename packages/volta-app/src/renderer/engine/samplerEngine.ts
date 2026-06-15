@@ -1,5 +1,6 @@
 import * as Tone from 'tone'
 import type { Score, Note, Chord } from '@shared/score'
+import { partIsDrum } from '@shared/score'
 import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, articulationPlaybackMods, expandOrnamentNotes, DYNAMIC_VOLUME } from '@shared/musicUtils'
 import { pitchToHz, type PlaybackController } from './audioEngine'
 import { scheduleDrumHit, releaseDrumSampler } from './drumSamplerEngine'
@@ -83,8 +84,7 @@ export async function playScoreWithSampler(
 
     const partId = part.id
 
-    const hasDrumStave = part.staves.some(s => s.clef === 'percussion')
-    const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+    const isDrumPart = partIsDrum(part)
 
     if (part.inputMode === 'sequencer') {
       const seqEntries = buildSequenceSchedule(part, sequence, tempoStaff, bpm, score.timeSignature)

@@ -26,6 +26,7 @@ import {
   articulationPlaybackMods, buildPlaybackSequence, fillWithRests,
   activeAssignmentAt, DYNAMIC_VELOCITY,
 } from '@shared/musicUtils'
+import { partIsDrum as _partIsDrum } from '@shared/score'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -244,9 +245,9 @@ function populateConductorEvents(
   return emittedKeys
 }
 
-// True when the part should use MIDI channel 10 (percussion).
+// True when the part should use drum MIDI routing and channel 10 by default.
 function isDrumPart(part: Part): boolean {
-  return part.midiChannel === 10 || part.staves[0]?.clef === 'percussion'
+  return _partIsDrum(part)
 }
 
 // Build a collision-free channel assignment for all non-muted parts.

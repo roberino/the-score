@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useAppStore } from '../store/appStore'
 import { v4 as uuid } from 'uuid'
 import type { SequencePattern } from '@shared/score'
+import { partIsDrum } from '@shared/score'
 import { previewNote } from '../engine/notePreview'
 import { midiOutputEngine } from '../engine/midiOutputEngine'
 import { previewDrumHit } from '../engine/drumSamplerEngine'
@@ -84,7 +85,7 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
   const previewCell = useCallback((midiPitch: number) => {
     if (!soundOnInput || !part) return
     const volDb    = 20 * Math.log10(Math.max(0.001, part.volume))
-    const isDrum   = (part.midiChannel ?? 1) === 10
+    const isDrum   = partIsDrum(part)
     if (audioMode === 'midi-out') {
       const channel = (part.midiChannel ?? 1) - 1
       midiOutputEngine.previewNote(midiPitch, 100, channel, part.midiProgram)
@@ -96,7 +97,7 @@ export function SequenceEditor({ partId, initialPatternId, onBack }: SequenceEdi
     }
   }, [soundOnInput, audioMode, part])
 
-  const isDrum  = part ? (part.midiChannel === 10) : false
+  const isDrum  = part ? partIsDrum(part) : false
   const patterns = part?.sequencePatterns ?? []
 
   const timeSig     = score.timeSignature

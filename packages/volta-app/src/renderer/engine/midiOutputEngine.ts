@@ -4,6 +4,7 @@ import { resolveDirectiveVelocity, resolveDirectiveTempo, resolveKeySig, resolve
 import { type PlaybackController } from './audioEngine'
 import { midiService } from '../services/midiService'
 import { DRUM_MAP_BY_PITCH, pitchKey } from '@shared/drumMap'
+import { partIsDrum } from '@shared/score'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -177,11 +178,11 @@ class MidiOutputEngine {
       if (!staff || !tempoStaff) return
 
       const partId = part.id
-      const hasDrumStave = part.staves.some(s => s.clef === 'percussion')
-      const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
-      // midiChannel is 1-based (1–16); fall back to partIndex+1 for old scores.
-      // Drum parts always use channel 9 (GM channel 10) regardless of stored value.
-      const channel = isDrumPart ? 9 : Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
+      const isDrumPart = partIsDrum(part)
+      // midiChannel is 1-based (1–16); drum parts default to GM channel 10 when not explicitly set.
+      const channel = isDrumPart
+        ? Math.min((part.midiChannel ?? 10) - 1, 15)
+        : Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
 
       if (!isDrumPart) {
         const pgm = Math.max(0, Math.min(127, part.midiProgram - 1))

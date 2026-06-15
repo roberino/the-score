@@ -7,6 +7,7 @@
 
 import * as Tone from 'tone'
 import type { Score, Note, Chord, Hairpin } from '@shared/score'
+import { partIsDrum } from '@shared/score'
 import { resolveDirectiveDynamic, resolveDirectiveMidiProgram, resolveDirectiveTempo, resolveKeySig, buildPlaybackSequence, buildFlatSchedule, buildSequenceSchedule, eventToSeconds, articulationPlaybackMods, expandOrnamentNotes, DYNAMIC_VOLUME, type FlatScheduleEntry } from '@shared/musicUtils'
 import { scheduleDrumHit, releaseDrumSampler } from './drumSamplerEngine'
 
@@ -95,7 +96,7 @@ export async function playScore(
     // Sequencer parts: schedule cells directly from sequence data
     if (part.inputMode === 'sequencer') {
       const seqEntries = buildSequenceSchedule(part, sequence, tempoStaff, bpm, score.timeSignature)
-      const isDrumPart = (part.midiChannel ?? 1) === 10
+      const isDrumPart = partIsDrum(part)
       const vol = part.volume
       for (const entry of seqEntries) {
         if (entry.startSec < resumeFrom) continue

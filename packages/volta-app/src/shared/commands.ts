@@ -44,7 +44,7 @@ export type Command =
   | { type: 'ADD_PART';             name: string; shortName: string; clef: ClefType; midiProgram: number; transposeSemitones: number; midiChannel?: number; inputMode?: 'score' | 'sequencer'; tabConfig?: TabConfig }
   | { type: 'DELETE_PART';          partId: string }
   | { type: 'MOVE_PART';            partId: string; direction: 'up' | 'down' }
-  | { type: 'SET_PART_METADATA';    partId: string; name?: string; shortName?: string; midiProgram?: number; midiChannel?: number | null; transposeSemitones?: number; labelVisible?: boolean; volume?: number; muted?: boolean; showTab?: boolean; tabConfig?: TabConfig | null }
+  | { type: 'SET_PART_METADATA';    partId: string; name?: string; shortName?: string; midiProgram?: number; midiChannel?: number | null; transposeSemitones?: number; labelVisible?: boolean; volume?: number; muted?: boolean; drumPart?: boolean | null; showTab?: boolean; tabConfig?: TabConfig | null }
   | { type: 'SET_PART_GROUP';       partId: string; groupId: string | null; groupSymbol?: GroupSymbol }
   | { type: 'SET_SCORE_SHOW_LABELS'; visible: boolean }
   | { type: 'ADD_DIRECTIVE';         partId: string; staffId: string; measureId: string; directive: Directive }
@@ -640,6 +640,10 @@ export function applyCommand(score: Score, command: Command): Score {
         if (command.labelVisible       !== undefined) part.labelVisible       = command.labelVisible
         if (command.volume             !== undefined) part.volume             = command.volume
         if (command.muted              !== undefined) part.muted              = command.muted
+        if (command.drumPart           !== undefined) {
+          if (command.drumPart === null) delete part.drumPart
+          else part.drumPart = command.drumPart
+        }
         if (command.showTab            !== undefined) part.showTab            = command.showTab
         if (command.tabConfig          !== undefined) {
           if (command.tabConfig === null) delete part.tabConfig

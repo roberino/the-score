@@ -22,7 +22,7 @@ import {
   type HeadingFieldBound,
   type SelectedChordPitchInfo,
 } from '../engine/notationRenderer'
-import { createNote, createRest, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta, type Duration, type MidiScoreEvent, type PedalMark, type SequenceAssignment } from '@shared/score'
+import { createNote, createRest, partIsDrum, type NoteName, type Accidental, type Articulation, type Note, type Chord, type Pitch, type NoteEvent, type BarlineType, type TimeSignature, type KeySignature, type ClefType, type Directive, type Slur, type DynamicLevel, type Volta, type Duration, type MidiScoreEvent, type PedalMark, type SequenceAssignment } from '@shared/score'
 import { DRUM_MAP_BY_PITCH, pitchKey as drumPitchKey } from '@shared/drumMap'
 import { v4 as uuid } from 'uuid'
 import {
@@ -1121,8 +1121,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
             const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
             const partIdx = score.parts.indexOf(part)
             const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-            const hasDrumStave = staff.clef === 'percussion'
-            const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+            const isDrumPart = partIsDrum(part)
             if (isDrumPart) {
               triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
             } else {
@@ -1192,8 +1191,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
             const previewPitch = newEvent.type === 'chord'
               ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
               : (newEvent as Note).pitch
-            const hasDrumStave = staff.clef === 'percussion'
-            const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+            const isDrumPart = partIsDrum(part)
             if (isDrumPart) {
               triggerDrumInputPreview(previewPitch, undefined, volDb, audioMode, ch)
             } else {
@@ -1250,8 +1248,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
           const partIdx = score.parts.indexOf(part)
           const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-          const hasDrumStave = staff.clef === 'percussion'
-          const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+          const isDrumPart = partIsDrum(part)
           if (isDrumPart) {
             triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
           } else {
@@ -1312,8 +1309,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
             const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
             const partIdx = score.parts.indexOf(part)
             const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-            const hasDrumStave = staff.clef === 'percussion'
-            const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+            const isDrumPart = partIsDrum(part)
             if (isDrumPart) {
               triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
             } else {
@@ -1361,8 +1357,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
               const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
               const partIdx = score.parts.indexOf(part)
               const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-              const hasDrumStave = staff.clef === 'percussion'
-              const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+              const isDrumPart = partIsDrum(part)
               if (isDrumPart) {
                 triggerDrumInputPreview(newPitch, undefined, volDb, audioMode, ch)
               } else {
@@ -1391,8 +1386,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
             const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
             const partIdx = score.parts.indexOf(part)
             const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-            const hasDrumStave = staff.clef === 'percussion'
-            const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+            const isDrumPart = partIsDrum(part)
             if (isDrumPart) {
               triggerDrumInputPreview(newEvent.pitch, (newEvent as any).midiDrumNote, volDb, audioMode, ch)
             } else {
@@ -1441,8 +1435,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
           const partIdx = score.parts.indexOf(part)
           const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-          const hasDrumStave = staff.clef === 'percussion'
-          const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+          const isDrumPart = partIsDrum(part)
           if (isDrumPart) {
             triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
           } else {
@@ -1513,8 +1506,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
               const partIdx = score.parts.indexOf(part)
               const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
               const top = merged[merged.length - 1]
-              const hasDrumStave = staff.clef === 'percussion'
-              const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+              const isDrumPart = partIsDrum(part)
               if (isDrumPart) {
                 triggerDrumInputPreview(top, undefined, volDb, audioMode, ch)
               } else {
@@ -1542,8 +1534,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
             const partIdx = score.parts.indexOf(part)
             const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
             const top = newPitches[newPitches.length - 1]
-            const hasDrumStave = staff.clef === 'percussion'
-            const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+            const isDrumPart = partIsDrum(part)
             if (isDrumPart) {
               triggerDrumInputPreview(top, undefined, volDb, audioMode, ch)
             } else {
@@ -1584,8 +1575,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           const partIdx = score.parts.indexOf(part)
           const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
           const top = newPitches[newPitches.length - 1]
-          const hasDrumStave = staff.clef === 'percussion'
-          const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+          const isDrumPart = partIsDrum(part)
           if (isDrumPart) {
             triggerDrumInputPreview(top, undefined, volDb, audioMode, ch)
           } else {
@@ -2098,8 +2088,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
               const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
               const partIdx = score.parts.indexOf(part)
               const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-              const hasDrumStave = staff.clef === 'percussion'
-              const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+              const isDrumPart = partIsDrum(part)
               if (isDrumPart) {
                 triggerDrumInputPreview(updated.pitch, (updated as any).midiDrumNote, volDb, audioMode, ch)
               } else {
@@ -2159,8 +2148,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
               const midi  = resolveDirectiveMidiProgram(staff.measures, mIdx, part.midiProgram)
               const partIdx = score.parts.indexOf(part)
               const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-              const hasDrumStave = staff.clef === 'percussion'
-              const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+              const isDrumPart = partIsDrum(part)
               if (isDrumPart) {
                 triggerDrumInputPreview(newPitch, undefined, volDb, audioMode, ch)
               } else {
@@ -2867,8 +2855,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
                   const previewPitch = newEvent.type === 'chord'
                     ? (newEvent as Chord).pitches[(newEvent as Chord).pitches.length - 1]
                     : (newEvent as Note).pitch
-                  const hasDrumStave = staff!.clef === 'percussion'
-                  const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+                  const isDrumPart = partIsDrum(part)
                   if (isDrumPart) {
                     triggerDrumInputPreview(previewPitch, undefined, volDb, audioMode, ch)
                   } else {
@@ -2909,8 +2896,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
                 const midi  = resolveDirectiveMidiProgram(staff!.measures, mIdx, part.midiProgram)
                 const partIdx = score.parts.indexOf(part)
                 const ch = Math.min((part.midiChannel ?? (partIdx + 1)) - 1, 15)
-                const hasDrumStave = staff!.clef === 'percussion'
-                const isDrumPart   = (part.midiChannel ?? 1) === 10 || hasDrumStave
+                const isDrumPart = partIsDrum(part)
                 if (isDrumPart) {
                   triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
                 } else {
@@ -2974,8 +2960,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           const midi  = resolveDirectiveMidiProgram(clickStaff.measures, mIdx, clickPart.midiProgram)
           const partIdx = score.parts.indexOf(clickPart)
           const ch = Math.min((clickPart.midiChannel ?? (partIdx + 1)) - 1, 15)
-          const hasDrumStave = clickStaff.clef === 'percussion'
-          const isDrumPart   = (clickPart.midiChannel ?? 1) === 10 || hasDrumStave
+          const isDrumPart = partIsDrum(clickPart)
           if (isDrumPart) {
             triggerDrumInputPreview(noteWithDot.pitch, (noteWithDot as any).midiDrumNote, volDb, audioMode, ch)
           } else {
@@ -3270,8 +3255,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
                     const isPizz = midi === 45
                     const partIdx = score.parts.indexOf(selPart)
                     const ch = Math.min((selPart.midiChannel ?? (partIdx + 1)) - 1, 15)
-                    const hasDrumStave = selStaff.clef === 'percussion'
-                    const isDrumPart   = (selPart.midiChannel ?? 1) === 10 || hasDrumStave
+                    const isDrumPart = partIsDrum(selPart)
                     if (ev.type === 'note') {
                       if (isDrumPart) {
                         triggerDrumInputPreview(ev.pitch, (ev as any).midiDrumNote, volDb, audioMode, ch)

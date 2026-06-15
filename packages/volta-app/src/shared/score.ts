@@ -225,11 +225,19 @@ export interface Part {
   readonly labelVisible: boolean     // show label on score
   readonly groupId?: string          // parts sharing the same groupId are in one bracket/brace group
   readonly groupSymbol?: GroupSymbol // visual symbol drawn for the group (bracket or brace)
+  readonly drumPart?: boolean         // true = treat as drum part regardless of midiChannel
   readonly inputMode?: 'score' | 'sequencer'  // defaults to 'score' when absent
   readonly sequencePatterns?: readonly SequencePattern[]
   readonly sequenceAssignments?: readonly SequenceAssignment[]
   readonly showTab?:   boolean     // render tab staff below standard staff
   readonly tabConfig?: TabConfig   // set when instrument supports tab
+}
+
+/** Returns true when a part should use drum MIDI routing and drum audio preview. */
+export function partIsDrum(part: Part): boolean {
+  return part.drumPart === true
+    || part.staves.some(s => s.clef === 'percussion')
+    || part.midiChannel === 10
 }
 
 export interface ScoreMetadata {

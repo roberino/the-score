@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import { useAppStore } from '../store/appStore'
 import { midiOutputEngine, type MidiOutputInfo } from '../engine/midiOutputEngine'
 import { INSTRUMENTS, type InstrumentFamily } from '@shared/instruments'
+import { partIsDrum } from '@shared/score'
 import { VolumeSlider } from './VolumeSlider'
 
 // ── Instrument icons ──────────────────────────────────────────────────────────
@@ -300,6 +301,24 @@ export function RoutingView(): JSX.Element {
                         }}
                       >
                         {part.muted ? 'Muted' : 'Mute'}
+                      </button>
+                    </div>
+
+                    {/* Drum Part */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 11, color: '#666', width: 60 }}>Drums</span>
+                      <button
+                        onClick={() => dispatch({ type: 'SET_PART_METADATA', partId: part.id, drumPart: partIsDrum(part) ? null : true })}
+                        title="Mark as drum part — uses drum MIDI mapping and audio preview regardless of channel"
+                        style={{
+                          padding: '2px 10px', borderRadius: 3, fontSize: 11, cursor: 'pointer',
+                          border: '1px solid',
+                          borderColor: partIsDrum(part) ? '#8870c8' : '#3a3a3a',
+                          background:  partIsDrum(part) ? 'rgba(136,112,200,0.15)' : 'none',
+                          color:       partIsDrum(part) ? '#b09ae0' : '#666',
+                        }}
+                      >
+                        {partIsDrum(part) ? 'Drum part' : 'Set as drums'}
                       </button>
                     </div>
 

@@ -16,6 +16,7 @@ import type {
   Directive, Slur, Hairpin, ScoreMetadata, TimeSignature, KeySignature, TupletInfo, DynamicLevel, Volta,
   TabConfig, NoteheadType,
 } from '@shared/score'
+import { partIsDrum } from '@shared/score'
 import { pitchToMidi, pitchToTabPosition, chordToTabPositions } from '@shared/tabUtils'
 import { activeAssignmentAt } from '@shared/musicUtils'
 import { DRUM_MAP_BY_MIDI } from '@shared/drumMap'
@@ -581,7 +582,7 @@ function partLines(score: Score, partIdx: number): string[] {
       const assignments = (part as any).sequenceAssignments ?? []
       const patterns    = (part as any).sequencePatterns ?? []
       const timeSig     = measure.timeSignature ?? score.timeSignature
-      const isPercChannel = (part.midiChannel ?? 1) === 10
+      const isPercChannel = partIsDrum(part as Part)
 
       // divisions per bar for this time signature
       const measureDivs = DIVISIONS * 4 * timeSig.numerator / timeSig.denominator
@@ -1276,6 +1277,7 @@ export function musicxmlToScore(xml: string): Score {
     const groupInfo = partGroupMap.get(partId)
     const effectiveMidiChannel = hasUnpitched ? 10 : info.midiChannel
 
+    const isDrumImport = hasUnpitched || staff.clef === 'percussion'
     parts.push({
       id: uuid(),
       name: info.name,
@@ -1287,6 +1289,7 @@ export function musicxmlToScore(xml: string): Score {
       volume: info.volume,
       muted: false,
       labelVisible: true,
+      ...(isDrumImport ? { drumPart: true } : {}),
       ...(groupInfo ? { groupId: groupInfo.groupId, groupSymbol: groupInfo.groupSymbol } : {}),
     })
   }
