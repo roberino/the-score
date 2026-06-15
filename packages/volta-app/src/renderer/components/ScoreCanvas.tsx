@@ -2530,14 +2530,14 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
       if (!layout) {
         if (hoverCursor !== 'default') setHoverCursor('default')
         if (previewCanvasAreaRef.current) clearNoteInputPreview(previewCanvasAreaRef.current)
-        lastDrumHoverKeyRef.current = null
+        if (lastDrumHoverKeyRef.current !== null) { lastDrumHoverKeyRef.current = null; setNoteheadType('normal') }
         return
       }
       const part    = score.parts.find(p => p.id === layout.partId)
       if (part?.inputMode === 'sequencer') {
         if (hoverCursor !== 'default') setHoverCursor('default')
         if (previewCanvasAreaRef.current) clearNoteInputPreview(previewCanvasAreaRef.current)
-        lastDrumHoverKeyRef.current = null
+        if (lastDrumHoverKeyRef.current !== null) { lastDrumHoverKeyRef.current = null; setNoteheadType('normal') }
         return
       }
 
@@ -2553,6 +2553,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
         }
       } else if (lastDrumHoverKeyRef.current !== null) {
         lastDrumHoverKeyRef.current = null
+        setNoteheadType('normal')
       }
       const staff   = part?.staves.find(s => s.id === layout.staffId)
       const measure = staff?.measures.find(m => m.id === layout.measureId)
