@@ -241,7 +241,7 @@ function noteEventToStaveNote(
       })
       if (n.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
       const noteDisplayAcc = displayAccidentals !== undefined ? displayAccidentals[0] : n.pitch.accidental
-      if (noteDisplayAcc) staveNote.addModifier(new VexAccidental(accToVex(noteDisplayAcc)), 0)
+      if (noteDisplayAcc && clef !== 'percussion') staveNote.addModifier(new VexAccidental(accToVex(noteDisplayAcc)), 0)
       if (n.articulations.length > 0) attachArticulations(staveNote, n.articulations)
       applyColor(staveNote)
       return staveNote
@@ -269,7 +269,7 @@ function noteEventToStaveNote(
       if (c.dots > 0) Dot.buildAndAttach([staveNote], { all: true })
       c.pitches.forEach((pitch, i) => {
         const chordDisplayAcc = displayAccidentals !== undefined ? displayAccidentals[i] : pitch.accidental
-        if (chordDisplayAcc) staveNote.addModifier(new VexAccidental(accToVex(chordDisplayAcc)), i)
+        if (chordDisplayAcc && clef !== 'percussion') staveNote.addModifier(new VexAccidental(accToVex(chordDisplayAcc)), i)
       })
       if (c.articulations.length > 0) attachArticulations(staveNote, c.articulations)
       if (selected && selectedPitchIndex !== undefined) {
