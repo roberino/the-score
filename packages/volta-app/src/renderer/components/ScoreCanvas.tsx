@@ -691,7 +691,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
     score, zoom, inputMode,
     selectedDuration, isDotted, primedAccidental,
     selectedNoteheadType, setNoteheadType,
-    activeVoice, noteInputMode,
+    activeVoice, setActiveVoice, noteInputMode,
     cursorMeasureId, cursorBeatPosition,
     lastEnteredPitch, selectedNoteId, selectedNoteIds, selectedAnchorId,
     dispatch, dispatchBatch, setInputMode,
@@ -2354,6 +2354,43 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
         setContextMenuTab('transpose'); return
       }
 
+      // Arrow keys with bar selection: extend/shrink measure range (←/→) or stave coverage (Shift+↑/↓)
+      if (!mod && inputMode === 'select' && barSelection) {
+        if (e.key === 'ArrowRight') {
+          e.preventDefault()
+          const maxIdx = (score.parts[0]?.staves[0]?.measures.length ?? 1) - 1
+          if (barSelection.endMeasureIndex < maxIdx) {
+            setBarSelection({ ...barSelection, endMeasureIndex: barSelection.endMeasureIndex + 1 })
+          }
+          return
+        }
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault()
+          if (barSelection.endMeasureIndex > barSelection.startMeasureIndex) {
+            setBarSelection({ ...barSelection, endMeasureIndex: barSelection.endMeasureIndex - 1 })
+          }
+          return
+        }
+        if (e.shiftKey && e.key === 'ArrowUp') {
+          e.preventDefault()
+          const partIds = barSelection.partIds ?? score.parts.map(p => p.id)
+          const topIdx  = Math.min(...partIds.map(id => score.parts.findIndex(p => p.id === id)))
+          if (topIdx > 0) {
+            setBarSelection({ ...barSelection, partIds: [score.parts[topIdx - 1].id, ...partIds] })
+          }
+          return
+        }
+        if (e.shiftKey && e.key === 'ArrowDown') {
+          e.preventDefault()
+          const partIds = barSelection.partIds ?? score.parts.map(p => p.id)
+          const botIdx  = Math.max(...partIds.map(id => score.parts.findIndex(p => p.id === id)))
+          if (botIdx < score.parts.length - 1) {
+            setBarSelection({ ...barSelection, partIds: [...partIds, score.parts[botIdx + 1].id] })
+          }
+          return
+        }
+      }
+
       // Arrow keys in select mode: left/right navigate, up/down transpose
       if (!mod && inputMode === 'select' && selectedNoteIds.length > 0) {
         if (e.key === 'ArrowLeft')  { e.preventDefault(); setChordCycleState(null); setSelectedChordPitch(null); navigateSelection('prev'); return }
@@ -3055,7 +3092,136 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
         }
       }
 
-      // Check if click is on a displayed key signature (leftmost preamble area)
+      // Note selection — find closest note across all voices in the clicked measure.
+      // Runs before sig zone checks so notes inside the preamble area are always reachable.
+      {
+        const selPart  = score.parts.find(p => p.id === layout.partId)
+        const selStaff = selPart?.staves.find(s => s.id === layout.staffId)
+        if (selStaff) {
+          const selMIdx = selStaff.measures.findIndex(m => m.id === layout.measureId)
+          if (selMIdx !== -1) {
+            const voices = selStaff.measures[selMIdx].voices
+            let closest: { id: string; dist: number; noteX: number; voiceIndex: number } | null = null
+            for (let vi = 0; vi < voices.length; vi++) {
+              for (const ev of voices[vi].events) {
+                const noteX = notePositionsRef.current.get(ev.id)
+                if (noteX === undefined) continue
+                const dist = Math.abs(canvasX - noteX)
+                if (!closest || dist < closest.dist) closest = { id: ev.id, dist, noteX, voiceIndex: vi }
+              }
+            }
+            if (closest && closest.dist <= 20) {
+              const matchedVoice = voices[closest.voiceIndex]
+              // Position cursor at the beat of the clicked event
+              let clickedBeat = 0
+              for (const ev of matchedVoice.events) {
+                if (ev.id === closest.id) break
+                clickedBeat += eventDurationUnits(ev)
+              }
+              setCursor(layout.measureId, clickedBeat)
+              setActiveVoice(closest.voiceIndex as 0 | 1)
+
+              const rect = canvas.getBoundingClientRect()
+              const menuX = rect.left + closest.noteX
+              const menuY = rect.top + layout.staveTopY + 4 * LINE_SPACING_PX + 12
+              if (event.shiftKey) {
+                // Shift+click: range select — reset chord cycle
+                setChordCycleState(null)
+                setSelectedChordPitch(null)
+                const anchorLoc = selectedAnchorId ? findNoteLocation(selectedAnchorId) : null
+                const clickedLoc = { partId: layout.partId, staffId: layout.staffId }
+                if (anchorLoc && anchorLoc.staffId === clickedLoc.staffId) {
+                  // Range-select: collect all note IDs between anchor and clicked note
+                  const allIds: string[] = []
+                  for (const measure of selStaff.measures) {
+                    for (const voice of measure.voices) {
+                      for (const e of voice.events) allIds.push(e.id)
+                    }
+                  }
+                  const fromIdx = allIds.indexOf(selectedAnchorId!)
+                  const toIdx   = allIds.indexOf(closest.id)
+                  if (fromIdx !== -1 && toIdx !== -1) {
+                    const start = Math.min(fromIdx, toIdx)
+                    const end   = Math.max(fromIdx, toIdx)
+                    setSelectedNotes(allIds.slice(start, end + 1), selectedAnchorId)
+                  } else {
+                    toggleSelectedNote(closest.id)
+                  }
+                } else {
+                  toggleSelectedNote(closest.id)
+                }
+              } else {
+                setSelectedMeasure(null)
+                const ev = matchedVoice.events.find(e => e.id === closest!.id)
+
+                // Chord pitch cycling: first click selects all; subsequent clicks cycle individual pitches
+                if (ev?.type === 'chord') {
+                  if (chordCycleState?.eventId === ev.id) {
+                    // Already cycling — advance to next pitch or wrap back to all-selected
+                    if (chordCycleState.nextIndex >= ev.pitches.length) {
+                      // Wrap: back to all selected
+                      setSelectedNote(ev.id)
+                      setSelectedChordPitch(null)
+                      setChordCycleState({ eventId: ev.id, nextIndex: 0 })
+                    } else {
+                      const pitchIdx = chordCycleState.nextIndex
+                      setSelectedNote(ev.id)
+                      setSelectedChordPitch(pitchIdx)
+                      setChordCycleState({ eventId: ev.id, nextIndex: pitchIdx + 1 })
+                    }
+                  } else {
+                    // First click on this chord: select all pitches, set up cycle
+                    setSelectedNote(ev.id)
+                    setSelectedChordPitch(null)
+                    setChordCycleState({ eventId: ev.id, nextIndex: 0 })
+                  }
+                } else {
+                  // Note or rest: plain selection, reset cycle
+                  setSelectedNote(closest.id)
+                  setChordCycleState(null)
+                }
+
+                if (ev) {
+                  setSelectedDuration(ev.duration)
+                  setIsDotted(ev.dots > 0)
+                  if (soundOnInput && selPart && ev.type !== 'rest') {
+                    const dyn   = resolveDirectiveDynamic(selStaff.measures, selMIdx)
+                    const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? selPart.volume))
+                    const midi  = resolveDirectiveMidiProgram(selStaff.measures, selMIdx, selPart.midiProgram)
+                    const isPizz = midi === 45
+                    const partIdx = score.parts.indexOf(selPart)
+                    const ch = Math.min((selPart.midiChannel ?? (partIdx + 1)) - 1, 15)
+                    const isDrumPart = partIsDrum(selPart)
+                    if (ev.type === 'note') {
+                      if (isDrumPart) {
+                        triggerDrumInputPreview(ev.pitch, (ev as any).midiDrumNote, volDb, audioMode, ch)
+                      } else {
+                        triggerInputPreview(ev.pitch.noteName, ev.pitch.octave, ev.pitch.accidental, volDb, isPizz, selPart.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+                      }
+                    } else if (ev.type === 'chord') {
+                      const top = ev.pitches[ev.pitches.length - 1]
+                      if (isDrumPart) {
+                        triggerDrumInputPreview(top, undefined, volDb, audioMode, ch)
+                      } else {
+                        triggerInputPreview(top.noteName, top.octave, top.accidental, volDb, isPizz, selPart.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
+                      }
+                    }
+                  }
+                }
+              }
+              setPickerState(null)
+              setKeySigPickerState(null)
+              setTimeSigPickerState(null)
+              setClefPickerState(null)
+              setSelectionMenuPos({ x: menuX, y: menuY })
+              return
+            }
+          }
+        }
+      }
+
+      // Check if click is on a displayed key signature (leftmost preamble area).
+      // Suppressed when a selection is already active to prevent accidental dismissal.
       for (const l of layouts) {
         if (
           canvasX >= l.x && canvasX <= l.x + 90 &&
@@ -3074,6 +3240,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
             || (prevKey !== null && prevKey.fifths !== effectiveKey.fifths)
 
           if (!displaysKeySig) continue
+          if (selectedNoteIds.length > 0 || barSelection !== null) continue
           if (isPlaying) return
 
           const rect = canvas.getBoundingClientRect()
@@ -3090,7 +3257,8 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
         }
       }
 
-      // Check if click is on a displayed time signature (left preamble area of stave)
+      // Check if click is on a displayed time signature (left preamble area of stave).
+      // Suppressed when a selection is already active to prevent accidental dismissal.
       for (const l of layouts) {
         if (
           canvasX >= l.x && canvasX <= l.x + 70 &&
@@ -3110,6 +3278,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
             || (l.isLineStart && (l.measureIndex === 0 || !timeSigsEqual(effectiveSig, score.timeSignature)))
 
           if (!displaysTimeSig) continue
+          if (selectedNoteIds.length > 0 || barSelection !== null) continue
           if (isPlaying) return
           if (timeSigJustClosedRef.current) { timeSigJustClosedRef.current = false; return }
 
@@ -3160,131 +3329,9 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
         }
       }
 
-      // Note selection — find closest note in the clicked measure
-      const selPart  = score.parts.find(p => p.id === layout.partId)
-      const selStaff = selPart?.staves.find(s => s.id === layout.staffId)
-      if (selStaff) {
-        const selMIdx = selStaff.measures.findIndex(m => m.id === layout.measureId)
-        if (selMIdx !== -1) {
-          const selVoice = selStaff.measures[selMIdx].voices[0]
-          if (selVoice && selVoice.events.length > 0) {
-            let closest: { id: string; dist: number; noteX: number } | null = null
-            for (const ev of selVoice.events) {
-              const noteX = notePositionsRef.current.get(ev.id)
-              if (noteX === undefined) continue
-              const dist = Math.abs(canvasX - noteX)
-              if (!closest || dist < closest.dist) closest = { id: ev.id, dist, noteX }
-            }
-            if (closest && closest.dist <= 20) {
-              // Position cursor at the beat of the clicked event
-              let clickedBeat = 0
-              for (const ev of selVoice.events) {
-                if (ev.id === closest.id) break
-                clickedBeat += eventDurationUnits(ev)
-              }
-              setCursor(layout.measureId, clickedBeat)
-
-              const rect = canvas.getBoundingClientRect()
-              const menuX = rect.left + closest.noteX
-              const menuY = rect.top + layout.staveTopY + 4 * LINE_SPACING_PX + 12
-              if (event.shiftKey) {
-                // Shift+click: range select — reset chord cycle
-                setChordCycleState(null)
-                setSelectedChordPitch(null)
-                const anchorLoc = selectedAnchorId ? findNoteLocation(selectedAnchorId) : null
-                const clickedLoc = { partId: layout.partId, staffId: layout.staffId }
-                if (anchorLoc && anchorLoc.staffId === clickedLoc.staffId) {
-                  // Range-select: collect all note IDs between anchor and clicked note
-                  const allIds: string[] = []
-                  for (const measure of selStaff.measures) {
-                    for (const voice of measure.voices) {
-                      for (const e of voice.events) allIds.push(e.id)
-                    }
-                  }
-                  const fromIdx = allIds.indexOf(selectedAnchorId!)
-                  const toIdx   = allIds.indexOf(closest.id)
-                  if (fromIdx !== -1 && toIdx !== -1) {
-                    const start = Math.min(fromIdx, toIdx)
-                    const end   = Math.max(fromIdx, toIdx)
-                    setSelectedNotes(allIds.slice(start, end + 1), selectedAnchorId)
-                  } else {
-                    toggleSelectedNote(closest.id)
-                  }
-                } else {
-                  toggleSelectedNote(closest.id)
-                }
-              } else {
-                setSelectedMeasure(null)
-                const ev = selVoice.events.find(e => e.id === closest!.id)
-
-                // Chord pitch cycling: first click selects all; subsequent clicks cycle individual pitches
-                if (ev?.type === 'chord') {
-                  if (chordCycleState?.eventId === ev.id) {
-                    // Already cycling — advance to next pitch or wrap back to all-selected
-                    if (chordCycleState.nextIndex >= ev.pitches.length) {
-                      // Wrap: back to all selected
-                      setSelectedNote(ev.id)
-                      setSelectedChordPitch(null)
-                      setChordCycleState({ eventId: ev.id, nextIndex: 0 })
-                    } else {
-                      const pitchIdx = chordCycleState.nextIndex
-                      setSelectedNote(ev.id)
-                      setSelectedChordPitch(pitchIdx)
-                      setChordCycleState({ eventId: ev.id, nextIndex: pitchIdx + 1 })
-                    }
-                  } else {
-                    // First click on this chord: select all pitches, set up cycle
-                    setSelectedNote(ev.id)
-                    setSelectedChordPitch(null)
-                    setChordCycleState({ eventId: ev.id, nextIndex: 0 })
-                  }
-                } else {
-                  // Note or rest: plain selection, reset cycle
-                  setSelectedNote(closest.id)
-                  setChordCycleState(null)
-                }
-
-                if (ev) {
-                  setSelectedDuration(ev.duration)
-                  setIsDotted(ev.dots > 0)
-                  if (soundOnInput && selPart && ev.type !== 'rest') {
-                    const mIdx  = selMIdx
-                    const dyn   = resolveDirectiveDynamic(selStaff.measures, mIdx)
-                    const volDb = 20 * Math.log10(Math.max(0.001, dyn ?? selPart.volume))
-                    const midi  = resolveDirectiveMidiProgram(selStaff.measures, mIdx, selPart.midiProgram)
-                    const isPizz = midi === 45
-                    const partIdx = score.parts.indexOf(selPart)
-                    const ch = Math.min((selPart.midiChannel ?? (partIdx + 1)) - 1, 15)
-                    const isDrumPart = partIsDrum(selPart)
-                    if (ev.type === 'note') {
-                      if (isDrumPart) {
-                        triggerDrumInputPreview(ev.pitch, (ev as any).midiDrumNote, volDb, audioMode, ch)
-                      } else {
-                        triggerInputPreview(ev.pitch.noteName, ev.pitch.octave, ev.pitch.accidental, volDb, isPizz, selPart.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
-                      }
-                    } else if (ev.type === 'chord') {
-                      const top = ev.pitches[ev.pitches.length - 1]
-                      if (isDrumPart) {
-                        triggerDrumInputPreview(top, undefined, volDb, audioMode, ch)
-                      } else {
-                        triggerInputPreview(top.noteName, top.octave, top.accidental, volDb, isPizz, selPart.transposeSemitones, audioMode, ch, Math.max(0, midi - 1))
-                      }
-                    }
-                  }
-                }
-              }
-              setPickerState(null)
-              setKeySigPickerState(null)
-              setTimeSigPickerState(null)
-              setClefPickerState(null)
-              setSelectionMenuPos({ x: menuX, y: menuY })
-              return
-            }
-          }
-        }
-      }
-
-      // No note hit — empty space within a stave: bar selection
+      // No note or barline hit — empty space within a stave: bar/passage selection.
+      // Anchor+shift model: first click anchors on the clicked stave/measure;
+      // shift+click extends to cover the measure range and stave range between anchor and click.
       setSelectedBarline(null)
       setPickerState(null)
       setChordCycleState(null)
@@ -3293,47 +3340,38 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
       const clickedMeasureIndex = layout.measureIndex
       const clickedPartId = layout.partId
 
-      if (barSelection) {
-        const inRange = clickedMeasureIndex >= barSelection.startMeasureIndex &&
-                        clickedMeasureIndex <= barSelection.endMeasureIndex
-
-        if (inRange && event.shiftKey) {
-          // Phase 2 additive: add this part to a narrowed selection
-          const currentParts = barSelection.partIds ?? score.parts.map(p => p.id)
-          if (!currentParts.includes(clickedPartId)) {
-            setBarSelection({ ...barSelection, partIds: [...currentParts, clickedPartId] })
-          }
-        } else if (inRange && !event.shiftKey) {
-          // Phase 2 narrow: narrow to this part only
-          setBarSelection({ ...barSelection, partIds: [clickedPartId] })
-          setContextMenuTab('volta')
-          setSelectionMenuPos({ x: event.clientX, y: event.clientY })
-        } else if (!inRange && event.shiftKey && clickedMeasureIndex > barSelection.endMeasureIndex) {
-          // Phase 1 extend forward: widen range — clear single-measure selection
-          setSelectedMeasure(null)
-          setBarSelection({
-            startMeasureIndex: barSelection.startMeasureIndex,
-            endMeasureIndex: clickedMeasureIndex,
-            partIds: null,
-          })
-          setContextMenuTab('volta')
-          setSelectionMenuPos({ x: event.clientX, y: event.clientY })
-        } else {
-          // Start a new single-measure selection — open Signatures tab
-          clearSelection()
-          setSelectedMeasure(layout.measureId)
-          setBarSelection({ startMeasureIndex: clickedMeasureIndex, endMeasureIndex: clickedMeasureIndex, partIds: null })
-          setContextMenuTab('time')
-          setSelectionMenuPos({ x: event.clientX, y: event.clientY })
-        }
-      } else {
-        // No existing bar selection: start a new single-measure selection — open Signatures tab
+      if (barSelection && event.shiftKey) {
+        // Extend from anchor
+        const anchorPartId       = barSelection.anchorPartId ?? barSelection.partIds?.[0] ?? score.parts[0]?.id
+        const anchorMeasureIndex = barSelection.anchorMeasureIndex ?? barSelection.startMeasureIndex
+        const anchorIdx  = score.parts.findIndex(p => p.id === anchorPartId)
+        const clickedIdx = score.parts.findIndex(p => p.id === clickedPartId)
+        const topIdx     = Math.min(anchorIdx < 0 ? 0 : anchorIdx, clickedIdx < 0 ? 0 : clickedIdx)
+        const botIdx     = Math.max(anchorIdx < 0 ? 0 : anchorIdx, clickedIdx < 0 ? 0 : clickedIdx)
+        const newPartIds = score.parts.slice(topIdx, botIdx + 1).map(p => p.id)
         clearSelection()
-        setSelectedMeasure(layout.measureId)
-        setBarSelection({ startMeasureIndex: clickedMeasureIndex, endMeasureIndex: clickedMeasureIndex, partIds: null })
-        setContextMenuTab('time')
-        setSelectionMenuPos({ x: event.clientX, y: event.clientY })
+        setSelectedMeasure(null)
+        setBarSelection({
+          startMeasureIndex:  Math.min(anchorMeasureIndex, clickedMeasureIndex),
+          endMeasureIndex:    Math.max(anchorMeasureIndex, clickedMeasureIndex),
+          partIds:            newPartIds,
+          anchorMeasureIndex,
+          anchorPartId,
+        })
+      } else {
+        // Fresh selection — anchor at this click
+        clearSelection()
+        setSelectedMeasure(null)
+        setBarSelection({
+          startMeasureIndex:  clickedMeasureIndex,
+          endMeasureIndex:    clickedMeasureIndex,
+          partIds:            [clickedPartId],
+          anchorMeasureIndex: clickedMeasureIndex,
+          anchorPartId:       clickedPartId,
+        })
       }
+      setContextMenuTab('volta')
+      setSelectionMenuPos({ x: event.clientX, y: event.clientY })
     }
   }
 
@@ -3708,7 +3746,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
         } else if (isMulti) {
           summaryText = `${selectedNoteIds.length} notes`
         } else {
-          summaryText = '1 note'
+          summaryText = activeVoice === 1 ? '1 note · V2' : '1 note'
         }
 
         // Resolve tie state (single note only)
@@ -3793,9 +3831,8 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           { label: 'M6', semitones: 9 }, { label: 'm7', semitones: 10 },
           { label: 'M7', semitones: 11 }, { label: 'P8', semitones: 12 },
         ]
-        const isSingleBar = isBar && barSelection!.startMeasureIndex === barSelection!.endMeasureIndex
-        // Resolve measure context for the Signatures tab (single-bar selections only)
-        const sigMeasureCtx = isSingleBar ? (() => {
+        // Resolve measure context for the Signatures tab (any bar selection)
+        const sigMeasureCtx = isBar ? (() => {
           const mIdx = barSelection!.startMeasureIndex
           for (const part of score.parts) {
             for (const staff of part.staves) {
@@ -3816,7 +3853,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           { key: 'articulations', label: 'Articulations' },
           { key: 'volta',         label: 'Volta' },
           { key: 'transpose',     label: 'Transpose' },
-          ...(isSingleBar ? [
+          ...(isBar ? [
             { key: 'time' as const, label: 'Time' },
             { key: 'key'  as const, label: 'Key'  },
           ] : []),
@@ -4060,24 +4097,56 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
               </div>
             )}
 
-            {/* Time tab — single-measure bar selection only */}
+            {/* Time tab — any bar selection; applies to full measure range */}
             {contextMenuTab === 'time' && sigMeasureCtx && (
               <div style={{ paddingTop: 2 }}>
                 <TimeSignaturePickerContent
                   current={sigTimeSig}
-                  onSelect={sig => dispatch({ type: 'SET_TIME', partId: sigMeasureCtx.partId, staffId: sigMeasureCtx.staffId, measureId: sigMeasureCtx.measureId, time: sig })}
+                  onSelect={sig => {
+                    const { startMeasureIndex, endMeasureIndex, partIds } = barSelection!
+                    const partSet = partIds ? new Set(partIds) : null
+                    const cmds: Parameters<typeof dispatchBatch>[0] = []
+                    for (const part of score.parts) {
+                      if (partSet && !partSet.has(part.id)) continue
+                      for (const staff of part.staves) {
+                        const startM = staff.measures[startMeasureIndex]
+                        if (startM) cmds.push({ type: 'SET_TIME', partId: part.id, staffId: staff.id, measureId: startM.id, time: sig })
+                        for (let i = startMeasureIndex + 1; i <= endMeasureIndex; i++) {
+                          const m = staff.measures[i]
+                          if (m?.timeSignature) cmds.push({ type: 'CLEAR_TIME', partId: part.id, staffId: staff.id, measureId: m.id })
+                        }
+                      }
+                    }
+                    dispatchBatch(cmds)
+                  }}
                   {...(sigMeasureCtx.measure.timeSignature ? { onReset: () => dispatch({ type: 'CLEAR_TIME', partId: sigMeasureCtx.partId, staffId: sigMeasureCtx.staffId, measureId: sigMeasureCtx.measureId }) } : {})}
                 />
               </div>
             )}
 
-            {/* Key tab — single-measure bar selection only */}
+            {/* Key tab — any bar selection; applies to full measure range */}
             {contextMenuTab === 'key' && sigMeasureCtx && (
               <div style={{ paddingTop: 2, display: 'flex', justifyContent: 'center' }}>
                 <div style={{ background: '#2d2d2d', borderRadius: 8, padding: 8 }}>
                 <CircleOfFifthsContent
                   current={sigKeySig}
-                  onSelect={key => dispatch({ type: 'SET_KEY', partId: sigMeasureCtx.partId, staffId: sigMeasureCtx.staffId, measureId: sigMeasureCtx.measureId, key })}
+                  onSelect={key => {
+                    const { startMeasureIndex, endMeasureIndex, partIds } = barSelection!
+                    const partSet = partIds ? new Set(partIds) : null
+                    const cmds: Parameters<typeof dispatchBatch>[0] = []
+                    for (const part of score.parts) {
+                      if (partSet && !partSet.has(part.id)) continue
+                      for (const staff of part.staves) {
+                        const startM = staff.measures[startMeasureIndex]
+                        if (startM) cmds.push({ type: 'SET_KEY', partId: part.id, staffId: staff.id, measureId: startM.id, key })
+                        for (let i = startMeasureIndex + 1; i <= endMeasureIndex; i++) {
+                          const m = staff.measures[i]
+                          if (m?.keySignature) cmds.push({ type: 'CLEAR_KEY', partId: part.id, staffId: staff.id, measureId: m.id })
+                        }
+                      }
+                    }
+                    dispatchBatch(cmds)
+                  }}
                   {...(sigMeasureCtx.measure.keySignature ? { onReset: () => dispatch({ type: 'CLEAR_KEY', partId: sigMeasureCtx.partId, staffId: sigMeasureCtx.staffId, measureId: sigMeasureCtx.measureId }) } : {})}
                 />
                 </div>

@@ -56,6 +56,8 @@ export interface BarSelection {
   startMeasureIndex: number
   endMeasureIndex: number
   partIds: string[] | null  // null = all parts
+  anchorMeasureIndex?: number
+  anchorPartId?: string
 }
 
 export type Clipboard =
