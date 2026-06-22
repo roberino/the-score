@@ -46,6 +46,7 @@ import {
   firstRestBeat,
   moveCursorPosition,
   activeAssignmentAt,
+  pitchToStep,
   type MeasureTimeEntry,
 } from '@shared/musicUtils'
 import { pitchToHz } from '../engine/audioEngine'
@@ -3101,16 +3102,26 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
           const selMIdx = selStaff.measures.findIndex(m => m.id === layout.measureId)
           if (selMIdx !== -1) {
             const voices = selStaff.measures[selMIdx].voices
-            let closest: { id: string; dist: number; noteX: number; voiceIndex: number } | null = null
+            // Use 2D distance so same-beat notes in different voices are disambiguated by y.
+            // noteY is estimated from pitch via pitchToStep (stepToY inverse: y = staveTopY + step * halfStep).
+            const HALF_STEP_PX = LINE_SPACING_PX / 2
+            const estimateNoteY = (ev: typeof voices[0]['events'][0]): number => {
+              const pitch = ev.type === 'note' ? ev.pitch : ev.type === 'chord' ? ev.pitches[0] : null
+              if (!pitch) return layout.staveTopY + 2 * LINE_SPACING_PX // stave midpoint for rests
+              return layout.staveTopY + pitchToStep(pitch, layout.clef as any) * HALF_STEP_PX
+            }
+            let closest: { id: string; xDist: number; score: number; noteX: number; voiceIndex: number } | null = null
             for (let vi = 0; vi < voices.length; vi++) {
               for (const ev of voices[vi].events) {
                 const noteX = notePositionsRef.current.get(ev.id)
                 if (noteX === undefined) continue
-                const dist = Math.abs(canvasX - noteX)
-                if (!closest || dist < closest.dist) closest = { id: ev.id, dist, noteX, voiceIndex: vi }
+                const xDist = Math.abs(canvasX - noteX)
+                const yDist = Math.abs(absCanvasY - estimateNoteY(ev))
+                const score = xDist * 3 + yDist
+                if (!closest || score < closest.score) closest = { id: ev.id, xDist, score, noteX, voiceIndex: vi }
               }
             }
-            if (closest && closest.dist <= 20) {
+            if (closest && closest.xDist <= 20) {
               const matchedVoice = voices[closest.voiceIndex]
               // Position cursor at the beat of the clicked event
               let clickedBeat = 0
