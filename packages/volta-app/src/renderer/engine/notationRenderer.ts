@@ -703,6 +703,7 @@ export interface RenderCursorOptions {
 
 export interface RenderScoreResult {
   notePositions:    Map<string, number>
+  noteYPositions:   Map<string, number>   // noteId → canvas Y of first notehead
   noteStartX:       Map<string, number>   // key: `${partId}:${staffId}:${measureId}`
   layouts:          MeasureLayout[]
   noteToMeasureKey: Map<string, string>   // noteId → `${partId}:${staffId}:${measureId}`
@@ -820,13 +821,14 @@ export function renderScoreMulti(
   precomputedLayouts?: MeasureLayout[],
   // When provided, maps are updated in-place rather than created fresh.
   // Use this for incremental renders to preserve entries for unchanged rows.
-  existingMaps?: { notePositions: Map<string, number>; noteStartX: Map<string, number>; noteToMeasureKey: Map<string, string> },
+  existingMaps?: { notePositions: Map<string, number>; noteYPositions: Map<string, number>; noteStartX: Map<string, number>; noteToMeasureKey: Map<string, string> },
 ): RenderScoreResult {
   const notePositions    = existingMaps?.notePositions    ?? new Map<string, number>()
+  const noteYPositions   = existingMaps?.noteYPositions   ?? new Map<string, number>()
   const noteStartX       = existingMaps?.noteStartX       ?? new Map<string, number>()
   const noteToMeasureKey = existingMaps?.noteToMeasureKey ?? new Map<string, string>()
 
-  if (!score.parts[0] || !slices.length) return { notePositions, noteStartX, layouts: [], noteToMeasureKey }
+  if (!score.parts[0] || !slices.length) return { notePositions, noteYPositions, noteStartX, layouts: [], noteToMeasureKey }
 
   const layouts = precomputedLayouts ?? computeLayout(score, options)
   const totalHeight  = computeTotalHeight(layouts, options)
@@ -847,7 +849,7 @@ export function renderScoreMulti(
     ctx.clear()
 
     const lyricYMap = renderFromLayouts(
-      ctx, score, sliceLayouts, new Set(), notePositions, noteStartX, noteToMeasureKey, selectedChordPitchInfo,
+      ctx, score, sliceLayouts, new Set(), notePositions, noteYPositions, noteStartX, noteToMeasureKey, selectedChordPitchInfo,
     )
     if (slice.yOffset === 0) drawHeadings(ctx, score, options)
 
@@ -856,7 +858,7 @@ export function renderScoreMulti(
     if (nativeCtx) drawAllLyrics(nativeCtx, score, notePositions, sliceLayouts, null, lyricYMap)
   }
 
-  return { notePositions, noteStartX, layouts, noteToMeasureKey }
+  return { notePositions, noteYPositions, noteStartX, layouts, noteToMeasureKey }
 }
 
 /**
@@ -890,6 +892,7 @@ export function drawOverlay(
   sliceLayouts: MeasureLayout[],
   score: Score,
   notePositions: Map<string, number>,
+  noteYPositions: Map<string, number>,
   noteToMeasureKey: Map<string, string>,
   noteStartX: Map<string, number>,
   selectedNoteIds: ReadonlySet<string>,
@@ -912,7 +915,7 @@ export function drawOverlay(
   if (selectedNoteIds.size > 0) {
     ctx.save()
     // Group by (partId, staffId, staveTopY) — each unique staveTopY is one visual row
-    type RowGroup = { minX: number; maxX: number; layout: MeasureLayout }
+    type RowGroup = { minX: number; maxX: number; layout: MeasureLayout; noteIds: string[] }
     const rowGroups = new Map<string, RowGroup>()
     for (const noteId of selectedNoteIds) {
       const noteX = notePositions.get(noteId)
@@ -931,18 +934,27 @@ export function drawOverlay(
       if (existing) {
         existing.minX = Math.min(existing.minX, noteX)
         existing.maxX = Math.max(existing.maxX, noteX)
+        existing.noteIds.push(noteId)
       } else {
-        rowGroups.set(key, { minX: noteX, maxX: noteX, layout })
+        rowGroups.set(key, { minX: noteX, maxX: noteX, layout, noteIds: [noteId] })
       }
     }
     ctx.fillStyle   = 'rgba(59, 157, 221, 0.20)'
     ctx.strokeStyle = 'rgba(59, 157, 221, 0.50)'
     ctx.lineWidth   = 1
-    for (const { minX, maxX, layout } of rowGroups.values()) {
+    for (const { minX, maxX, layout, noteIds } of rowGroups.values()) {
+      // Compute tight vertical bounds from per-notehead y positions so the highlight
+      // visually targets the selected note rather than spanning the full stave height.
+      let minNoteY = Infinity, maxNoteY = -Infinity
+      for (const nid of noteIds) {
+        const ny = noteYPositions.get(nid)
+        if (ny !== undefined) { minNoteY = Math.min(minNoteY, ny); maxNoteY = Math.max(maxNoteY, ny) }
+      }
       const rx = minX - 8
-      const ry = layout.staveTopY - 8
-      const rw = (maxX + 8) - (minX - 8)
-      const rh = STAVE_HEIGHT_PX + 16
+      const ry = minNoteY !== Infinity  ? minNoteY - 10 : layout.staveTopY - 8
+      const rb = maxNoteY !== -Infinity ? maxNoteY + 10 : layout.staveTopY + STAVE_HEIGHT_PX + 8
+      const rw = (maxX + 8) - rx
+      const rh = rb - ry
       ctx.fillRect(rx, ry, rw, rh)
       ctx.strokeRect(rx, ry, rw, rh)
     }
@@ -998,7 +1010,7 @@ export function renderScore(
   const result = renderScoreMulti([slice], score, options, selectedChordPitchInfo, layouts)
   // For single-canvas use, draw overlays directly onto the same canvas
   const sliceLocalLayouts = computeSliceLayouts(layouts, 0, totalHeight)
-  drawOverlay(canvas, sliceLocalLayouts, score, result.notePositions, result.noteToMeasureKey,
+  drawOverlay(canvas, sliceLocalLayouts, score, result.notePositions, result.noteYPositions, result.noteToMeasureKey,
     result.noteStartX, selectedNoteIds, cursor, selectedMeasureId, lyricCursorNoteId, null)
   return result
 }
@@ -1123,6 +1135,7 @@ export function renderFromLayouts(
   layouts: MeasureLayout[],
   selectedNoteIds: ReadonlySet<string>,
   notePositions: Map<string, number>,
+  noteYPositions: Map<string, number>,
   noteStartX: Map<string, number>,
   noteToMeasureKey: Map<string, string>,
   selectedChordPitchInfo: SelectedChordPitchInfo | null = null
@@ -1220,7 +1233,7 @@ export function renderFromLayouts(
       layout.clef, layout.transposeSemitones,
       layout.x, layout.staveY, layout.width,
       layout.measureIndex, layout.isLineStart, layout.showClef,
-      selectedNoteIds, notePositions,
+      selectedNoteIds, notePositions, noteYPositions,
       voltaOpts, selectedChordPitchInfo,
       isSequencer
     )
@@ -1696,6 +1709,7 @@ function renderMeasure(
   showClef: boolean,
   selectedNoteIds: ReadonlySet<string>,
   notePositions: Map<string, number>,
+  noteYPositions: Map<string, number>,
   voltaOpts?: VoltaOpts,
   selectedChordPitchInfo?: SelectedChordPitchInfo | null,
   sequencerMode?: boolean
@@ -1844,8 +1858,8 @@ function renderMeasure(
 
     new Formatter().joinVoices([vv0, vv1]).format([vv0, vv1], noteAreaWidth)
 
-    sns0.forEach((sn, i) => { sn.setStave(stave); notePositions.set(events0[i].id, sn.getAbsoluteX()) })
-    sns1.forEach((sn, i) => { sn.setStave(stave); notePositions.set(events1[i].id, sn.getAbsoluteX()) })
+    sns0.forEach((sn, i) => { sn.setStave(stave); notePositions.set(events0[i].id, sn.getNoteHeadBeginX()); noteYPositions.set(events0[i].id, sn.getYs()[0] ?? y) })
+    sns1.forEach((sn, i) => { sn.setStave(stave); notePositions.set(events1[i].id, sn.getNoteHeadBeginX()); noteYPositions.set(events1[i].id, sn.getYs()[0] ?? y) })
 
     vv0.draw(ctx, stave)
     vv1.draw(ctx, stave)
@@ -1876,7 +1890,8 @@ function renderMeasure(
   new Formatter().joinVoices([vexVoice]).format([vexVoice], noteAreaWidth)
   staveNotes.forEach((sn, i) => {
     sn.setStave(stave)
-    notePositions.set(events[i].id, sn.getAbsoluteX())
+    notePositions.set(events[i].id, sn.getNoteHeadBeginX())
+    noteYPositions.set(events[i].id, sn.getYs()[0] ?? y)
   })
   vexVoice.draw(ctx, stave)
   beams.forEach(b => b.setContext(ctx).draw())

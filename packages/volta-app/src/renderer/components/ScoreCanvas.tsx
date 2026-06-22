@@ -654,6 +654,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
   // Current slice metadata — kept in sync with the canvas elements in canvasAreaRef
   const canvasSlicesRef = useRef<CanvasSlice[]>([])
   const notePositionsRef    = useRef(new Map<string, number>())
+  const noteYPositionsRef   = useRef(new Map<string, number>())
   const noteStartXRef       = useRef(new Map<string, number>())
   const noteToMeasureKeyRef = useRef(new Map<string, string>())
   const layoutsRef          = useRef<MeasureLayout[]>([])
@@ -874,11 +875,12 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
     const result = renderScoreMulti(
       slicesToRender, score, options, chordPitchInfo, layouts,
       useExistingMaps
-        ? { notePositions: notePositionsRef.current, noteStartX: noteStartXRef.current, noteToMeasureKey: noteToMeasureKeyRef.current }
+        ? { notePositions: notePositionsRef.current, noteYPositions: noteYPositionsRef.current, noteStartX: noteStartXRef.current, noteToMeasureKey: noteToMeasureKeyRef.current }
         : undefined,
     )
     if (!useExistingMaps) {
       notePositionsRef.current    = result.notePositions
+      noteYPositionsRef.current   = result.noteYPositions
       noteStartXRef.current       = result.noteStartX
       noteToMeasureKeyRef.current = result.noteToMeasureKey
     }
@@ -962,7 +964,7 @@ export function ScoreCanvas({ onOpenSequencer, active = true }: ScoreCanvasProps
 
       drawOverlay(
         overlay, sliceLocalLayouts, score,
-        notePositionsRef.current, noteToMeasureKeyRef.current, noteStartXRef.current,
+        notePositionsRef.current, noteYPositionsRef.current, noteToMeasureKeyRef.current, noteStartXRef.current,
         inputMode === 'select' ? new Set(selectedNoteIds) : new Set(),
         cursor, selectedMeasureId, lyricCursorNoteId, inputMode === 'select' ? barSelection : null,
       )
